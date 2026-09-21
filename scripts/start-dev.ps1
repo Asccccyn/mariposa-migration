@@ -7,6 +7,9 @@ $py = "$root\.venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv 缺失：先 python -m venv .venv 并 pip install -r requirements.lock" }
 
 $env:PYTHONPATH = "$root\backend"
+# 语义检索：本地 ONNX bge-small-zh（模型已固化 runtime/models；置空回 degraded）
+$env:MARIPOSA_SEMANTIC_PROVIDER = "local_bge_zh"
+$env:FASTEMBED_CACHE_PATH = "$root\runtime\models"
 & $py -m mariposa.devseed | Out-Host
 
 $existing = Get-NetTCPConnection -LocalPort 18780 -State Listen -ErrorAction SilentlyContinue
