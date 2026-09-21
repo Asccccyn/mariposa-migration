@@ -22,6 +22,7 @@ from ..plans import service as plans
 from ..calendar import service as calendar
 from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
+from ..letters import service as letters
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,22 @@ def _register() -> dict[str, Capability]:
     add("time.since", _time_since, _everyone(), False, description="自最后已知联系")
     add("presence.touch", _presence_touch, _everyone(), True,
         description="轻量活动登记（actor 由凭据决定，不可参数自报）")
+    add("letter.write", _letter_write, _owners(), True,
+        description="写信（锁参数经归一化校验）")
+    add("letter.list", _letter_list, _owners(), False,
+        description="信件列表（metadata-only，锁信不返回正文）")
+    add("letter.read", _letter_read, _owners(), False,
+        description="读信正文（锁中返回 LOCKED_RESOURCE；过期锁读时归一）")
+    add("letter.edit", _letter_edit, _owners(), True,
+        description="编辑/锁更新（作者本人，版本乐观锁）")
+    add("memory.deletion.request", _del_request, _owners(), True,
+        description="提交删除申请（reason 必填；daily=10/lifetime=5 与旧系统一致）")
+    add("memory.deletion.withdraw", _del_withdraw, _owners(), True,
+        description="撤回 pending 删除申请")
+    add("memory.deletion.decide", _del_decide, {"jiaming"}, True,
+        description="审批删除申请（仅周家明；approve 才执行 archive/delete）")
+    add("memory.deletion.list", _del_list, _owners(), False,
+        description="删除申请列表")
     return caps
 
 
@@ -333,6 +350,50 @@ def _time_since(principal: Principal, a: dict) -> dict:
 
 def _presence_touch(principal: Principal, a: dict) -> dict:
     return time_ctx.presence_touch(principal.principal_id, principal.kind)
+
+
+def _letter_write(principal: Principal, a: dict) -> dict:
+    return letters.write_letter(principal.principal_id, str(a.get("content", "")),
+                                a.get("letter_date"),
+                                str(a.get("lock_type", "none")), a.get("unlock_date"))
+
+
+def _letter_list(principal: Principal, a: dict) -> dict:
+    return {"letters": letters.list_letters(a.get("author"))}
+
+
+def _letter_read(principal: Principal, a: dict) -> dict:
+    return letters.read_letter(principal.principal_id, str(a.get("letter_id", "")))
+
+
+def _letter_edit(principal: Principal, a: dict) -> dict:
+    return letters.edit_letter(
+        principal.principal_id, str(a.get("letter_id", "")),
+        int(a.get("expected_version", 0)), a.get("content"),
+        a.get("lock_type"), a.get("unlock_date"))
+
+
+def _del_request(principal: Principal, a: dict) -> dict:
+    return letters.deletion_submit(
+        principal.principal_id, str(a.get("resource_id", "")),
+        str(a.get("reason", "")), str(a.get("action", "delete")),
+        str(a.get("resource_kind", "memory")))
+
+
+def _del_withdraw(principal: Principal, a: dict) -> dict:
+    return letters.deletion_withdraw(principal.principal_id,
+                                     str(a.get("resource_id", "")))
+
+
+def _del_decide(principal: Principal, a: dict) -> dict:
+    return letters.deletion_decide(
+        principal.principal_id, str(a.get("request_id", "")),
+        str(a.get("decision", "")), str(a.get("ai_reason", "")),
+        str(a.get("expected_resource_id", "")))
+
+
+def _del_list(principal: Principal, a: dict) -> dict:
+    return {"requests": letters.deletion_list(a.get("status"))}
 
 
 REGISTRY = _register()
