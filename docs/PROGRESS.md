@@ -2,6 +2,14 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-21 · 第 2 轮（Home/Self/Diary/情绪标签/SNAPSHOT_STALE）
+
+- schema v4：home/self/diary 全版本链 + memory_tags(whose CHECK) + bootstrap_snapshots
+- 能力 39→52（contracts 同源重新导出）；日历新增 diary provider
+- Self 隔日规则、情绪主语必填、遗忘桶按情绪仍可查、snapshot 状态指纹失效——均含测试与真实服务验证
+- **测试 79 passed**；服务重启后全能力真实冒烟（含 cc profile 入口校验、SNAPSHOT_STALE 实测）
+- 未动边界不变（旧生产零接触）
+
 ## 2026-09-21 · 连续执行第 1 轮（Phase 0–5a + 工具层 + MCP 协议层）
 
 **Commits**（git log 顺序，均为可追踪增量）：
@@ -13,7 +21,7 @@
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：70 passed（`.venv\Scripts\python -m pytest tests --basetemp=.pytest_tmp -q`）
+**测试**：79 passed（`.venv\Scripts\python -m pytest tests --basetemp=.pytest_tmp -q`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态

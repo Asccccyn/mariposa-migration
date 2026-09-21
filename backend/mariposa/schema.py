@@ -271,6 +271,86 @@ CREATE TABLE deletion_requests(
 CREATE INDEX idx_deletion_resource ON deletion_requests(resource_id);
 CREATE INDEX idx_deletion_status ON deletion_requests(status, local_date);
 """),
+    (4, """
+CREATE TABLE home(
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  current_version_no INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE home_versions(
+  home_id INTEGER NOT NULL REFERENCES home(id),
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  edited_by TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(home_id, version_no)
+);
+
+CREATE TABLE self_entries(
+  id TEXT PRIMARY KEY,
+  aspect TEXT NOT NULL DEFAULT '',
+  current_version_no INTEGER NOT NULL,
+  review_state TEXT NOT NULL DEFAULT 'pending'
+    CHECK(review_state IN ('pending','reviewed','retired')),
+  written_at TEXT NOT NULL,
+  review_available_on TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE self_versions(
+  self_id TEXT NOT NULL REFERENCES self_entries(id),
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  written_by TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(self_id, version_no)
+);
+
+CREATE TABLE diary_entries(
+  id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  covers_from TEXT,
+  covers_to TEXT,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_diary_covers ON diary_entries(covers_from, covers_to);
+
+CREATE TABLE diary_versions(
+  diary_id TEXT NOT NULL REFERENCES diary_entries(id),
+  version_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  edited_by TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(diary_id, version_no)
+);
+
+CREATE TABLE memory_tags(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  namespace TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  whose TEXT NOT NULL CHECK(whose IN ('jiaming','qiaosheng')),
+  confidence TEXT NOT NULL DEFAULT 'human',
+  created_by TEXT NOT NULL,
+  PRIMARY KEY(memory_id, namespace, tag, whose)
+);
+CREATE INDEX idx_memory_tags ON memory_tags(namespace, tag, whose);
+
+CREATE TABLE bootstrap_snapshots(
+  snapshot_id TEXT PRIMARY KEY,
+  state_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

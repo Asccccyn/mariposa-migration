@@ -6,8 +6,8 @@
 
 1. **Web React/Vite 版**（apps/web）：当前为后端直出功能页；按 §2.2 建 Vite 工程替换，业务 handler 不变。移动端优先。
 2. **Diary/Self/Home 实体**（§10.3-10.5）：schema v4 + diary.write/read/search、self.write/review（隔日规则）、home.get/update；日历 provider 注册 diary。
-3. **memory.by_emotion / 标签 whose**（§10.2）：memory_tags 表 + 情绪主语必填存储层。
-4. **bootstrap 分页/SNAPSHOT_STALE**（§12.2）：cursor + snapshot 状态检查（当前完整返回+软预算告警）。
+3. ~~memory.by_emotion / 标签 whose~~ ✅ 第 2 轮完成
+4. ~~bootstrap SNAPSHOT_STALE~~ ✅ 第 2 轮完成（分页 cursor 仍待做）
 5. **workspace.forgetting.scan 定时器占位**：FORGET_SCHEDULE_ENABLED=false 的调度骨架 + 手动触发已有。
 6. **quotes 语义校对受控管线骨架**（§10.1）：双步判定+修正校验，provider 未配置时只挂起不写——reserved 转可测。
 7. **E2E 测试**（真实页面流）：审批/恢复/日历跳转的浏览器级用例（pytest + playwright 或手动脚本）。

@@ -26,6 +26,8 @@ FORMAL_TABLES = [
     "plan_memory_links", "plan_versions", "plans",
     "activity_events",
     "letter_versions", "letters", "deletion_requests",
+    "home_versions", "home", "self_versions", "self_entries",
+    "diary_versions", "diary_entries", "memory_tags", "bootstrap_snapshots",
 ]
 WORKSPACE_TABLES = [
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
