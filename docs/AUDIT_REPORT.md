@@ -2,7 +2,10 @@
 
 > 致：林石见（工程整理/复核）
 > 出具：程知行（GLM，实现方自查审计）· 2026-09-21
-> 审计对象：`D:\mariposa` @ commit `9c9065e` +1 项审计中修复（见 §5.1）
+> **Audit HEAD: `6072d76e33b83a966a4c98a419398d530b8c8951`**
+> `git rev-list --count HEAD`: **18**；`git status --porcelain`: **empty**
+> §5.1 的修复与本文档同在 commit `6072d76` 内（审计取证基线为 `9c9065e`，
+> 即第 17 个 commit；§5.1 修复+报告本身构成第 18 个）。
 > 方法：不引用既有结论，全部证据为审计时**重新执行**所得；含两处如实记录的
 > 审计发现（其一当场修复）。
 
@@ -16,7 +19,7 @@
 | A2 | Web 构建（TS 严格模式） | `npm --prefix apps/web run build` | ✓ built |
 | A3 | 契约与代码一致性 | 重新 `export_contracts.py` 后 `git diff contracts/` | **无差异**（111 能力，文件由 REGISTRY 同源生成） |
 | A5 | 浏览器 E2E | `npm --prefix apps/web run test:e2e` | **2 passed**（完整遗忘闭环 + 日历） |
-| A6 | git 状态 | `git status --porcelain` | 干净；**17 commits**，全部含测试证据 |
+| A6 | git 状态 | `git status --porcelain` | **empty**；rev-list HEAD=**18**（审计取证基线 `9c9065e`=17） |
 
 ## 2. 服务级不变量抽查（真实 HTTP，非仅单测）
 
@@ -81,7 +84,7 @@
 | 后端 131 测试 | 131 passed（审计重跑） | ✅ |
 | E2E 2 项 | 2 passed（审计重跑） | ✅ |
 | 能力 111 | contracts.v1.json 111 条，重导出无 diff | ✅ |
-| git 17 commits | 17（含本报告 + §5.1 修复为第 18/19） | ✅ |
+| git 18 commits（Audit HEAD 6072d76） | rev-list=18，status empty | ✅ |
 | schema formal v1-v8 / workspace v1-v2 | `schema_migrations` 实查一致 | ✅ |
 | §17.3 必需能力 | 除 blocked 项逐条可达（HTTP 与 MCP 同 handler） | ✅ |
 | blocked 清单（CC/OAuth/语义/真实迁移/外部 provider/扎西德勒） | 全部有解锁条件，无一项被冒充 | ✅ |
