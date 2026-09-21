@@ -2,6 +2,27 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-21 · 第 4 轮（第一版范围收尾：能力 55→86）
+
+- memory：update（新版本+重建投影）/pin/protect/anchor/versions.list（flag 排除自动候选实测）
+- relations：link/detach（留历史）/list（显式反向）/trace（continuation_of 链）；
+  检索新增 matched_by=relation 途径
+- 原文后绑定：raw_pending 先写 Hold、provisional_sources 片段（仅周家明）、
+  bind 不改 Hold 内容、同范围他桶 DEDUPE_NEEDS_REVIEW、revoke 留历史
+- reminders：CRUD + 日历 provider + 幂等到期结算（无常驻 scheduler/零外部副作用）
+- maintenance：outbox drain/status（至少一次+幂等标记）、activity.list、
+  reconcile_workspace（崩溃后按终局决议对账，实测修复+幂等）
+- media：两步上传（token/字节专用端点，不进工具参数）、hash 去重落盘、
+  MIME/大小白名单、鉴权下载、路径穿越惰性（404）
+- moments：post/list/comment/react（post 与 group_archive 分 kind）
+- 遗忘批量决议 decide_batch（逐项冻结，单项失败不影响其余）+ 拒绝冷却（30 天，
+  scan 跳过实测）
+- emotion.context.get / listening.status：reserved 契约落库（默认禁用，不伪造）
+- 迁移 apply 演练：fixture 报告落新库 + 置顶/锁参数保留核对 + 大报告拒绝
+- 安全测试：XSS 按数据返回、media 端点鉴权/穿越；并发测试：4 路并发 decide 恰一生效
+- schema v5-v7（9 新表 + source_state 列）；**后端 117 测试全绿**；新能力全部真实冒烟
+- 未动边界不变
+
 ## 2026-09-21 · 第 3 轮（分页/语义校对/provider 核验/React Web/E2E）
 
 - bootstrap.next 分页 cursor（不静默截断；资源变化 SNAPSHOT_STALE 不一半新一半旧）+4 测试
@@ -32,7 +53,7 @@
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：90 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
+**测试**：117 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态

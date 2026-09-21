@@ -99,6 +99,49 @@ async def mcp_maintenance(request: Request):
     return await mcp_adapter.handle(request, "maintenance")
 
 
+# 媒体字节走专用端点：不进 capability JSON 参数（§16.2）
+from fastapi import Response  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+
+from . import config as _config  # noqa: E402
+from .media import service as _media  # noqa: E402
+
+
+@app.put("/api/media/stage/{token}")
+async def media_stage(token: str, request: Request):
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError as e:
+        return JSONResponse(status_code=401,
+                            content={"ok": False, "error": {"code": e.code}})
+    data = await request.body()
+    try:
+        info = _media.stage_bytes(token, data)
+    except MariposaError as e:
+        return JSONResponse(status_code=e.http_status,
+                            content={"ok": False, "error": {"code": e.code,
+                                                            "message": str(e)}})
+    return {"ok": True, "data": {"content_hash": info["content_hash"],
+                                 "size": len(data),
+                                 "note": "字节已暂存内存；调 media.upload.finalize 落盘"}}
+
+
+@app.get("/api/media/object/{content_hash}")
+def media_object(content_hash: str, request: Request):
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError as e:
+        return JSONResponse(status_code=401,
+                            content={"ok": False, "error": {"code": e.code}})
+    try:
+        meta, path = _media.get_media(principal.principal_id, content_hash)
+    except MariposaError as e:
+        return JSONResponse(status_code=e.http_status,
+                            content={"ok": False, "error": {"code": e.code}})
+    return FileResponse(str(path), media_type=meta["mime"],
+                        filename=path.name)
+
+
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 

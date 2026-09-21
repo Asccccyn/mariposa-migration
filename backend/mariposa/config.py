@@ -27,6 +27,8 @@ POLICY_VERSION = "forget_policy_v1"
 FORGET_IDLE_DAYS = int(os.environ.get("MARIPOSA_FORGET_IDLE_DAYS", "30"))
 FORGET_SCHEDULE_ENABLED = False  # 初期无自动扫描；只能手动触发 scan
 FORGET_SCAN_BATCH_SIZE = 20
+FORGET_REJECT_COOLDOWN_DAYS = int(
+    os.environ.get("MARIPOSA_FORGET_REJECT_COOLDOWN_DAYS", "30"))
 
 SEMANTIC_PROVIDER = os.environ.get("MARIPOSA_SEMANTIC_PROVIDER", "")  # 空 = 未配置
 QUOTE_SEMANTIC_AUTO_APPLY = os.environ.get(

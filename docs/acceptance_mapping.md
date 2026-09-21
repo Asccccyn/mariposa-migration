@@ -101,12 +101,30 @@
 | 浏览器级完整遗忘闭环（React 版 /app） | `apps/web/e2e` 2 项 | ✅ |
 | 外部 provider 只读核验 | `docs/provider_contracts.md` | ✅ 核验（接入待凭据） |
 
+## 6d. 第 4 轮新增（能力 55→86）
+
+| 场景 | 测试 | 状态 |
+|---|---|---|
+| flag 排除自动候选；update 新版本+重索引；版本列表无正文 | `TestMemoryExtras` 3 项 | ✅ |
+| 关联：方向/反向/trace 链；relation 检索途径；custom 标签规则；detach 留历史 | `TestRelations` 4 项 | ✅ |
+| raw_pending→bind（不改 Hold）→revoke 留历史；同范围他桶 DEDUPE_NEEDS_REVIEW | `TestRawBinding` 3 项 | ✅ |
+| 提醒 CRUD+日历+幂等结算；outbox drain/status；审计查询 | `TestRemindersAndCalendar`/`TestMaintenance` | ✅ |
+| media 两步上传/hash 去重/白名单/尺寸校验 | `TestMedia` 3 项 + HTTP 鉴权 | ✅ |
+| moments post/comment/react | `TestMoments` | ✅ |
+| 批量决议逐项冻结+单项失败隔离；拒绝冷却 scan 跳过 | `TestBatchAndCooldown` | ✅ |
+| emotion/listening reserved 契约（默认禁用不伪造） | `TestReservedContracts` | ✅ |
+| XSS 按数据返回；media 穿越/鉴权；跨主体幂等隔离 | `TestSecurity` 5 项 | ✅ |
+| 4 路并发 decide 恰一生效；崩溃对账修复+幂等 | `TestConcurrency` 2 项 | ✅ |
+| 迁移 apply 演练（落库+置顶/锁保留+大报告拒绝） | `TestMigrationApplyDrill` 2 项 | ✅ |
+
 ## 7. 未实现（如实清单，非失败）
 
 - Web React/Vite 版（当前为后端直出的功能页，真实 API 驱动）
-- 媒体/表情/朋友圈/提醒/自动唤醒/一起听歌：not_started / reserved
+- 表情包（sticker）搜索/发送：not_started（媒体管道已就绪）
+- 自动唤醒 wakeup.*：not_started（AUTO_WAKEUP_ENABLED=false；提醒结算已可手动/可接 scheduler）
 - 情绪系统算法：reserved（`memory.by_emotion` 未实现；情绪标签 whose 字段未启用）
-- 语义 embedding provider：blocked（未配置；关键词/日期/标签路径完整可用）
+- 语义 embedding provider：blocked（未配置；关键词/日期/标签/关联路径完整可用）
+- 新能力（moments/reminders/media/relations 等）的 Web UI 页签：下一轮（API/MCP 均已可达）
 - Chat/CC 会话流：blocked（依赖 CC 前置）
 - Siren/Superposition/扎西德勒 provider：blocked（未做只读契约核验）
 

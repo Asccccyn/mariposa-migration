@@ -35,8 +35,9 @@ def _hash(payload: dict) -> str:
     return memory.canonical_hash(payload)
 
 
-def write_letter(principal_id: str, content: str, letter_date: str | None = None,
+def write_letter(principal, content: str, letter_date: str | None = None,
                  lock_type: str = "none", unlock_date: str | None = None) -> dict:
+    principal_id = getattr(principal, "principal_id", principal)
     if not content or not str(content).strip():
         raise Forbidden("letter content required")
     lock_type, unlock_date = normalize_lock(lock_type, unlock_date)

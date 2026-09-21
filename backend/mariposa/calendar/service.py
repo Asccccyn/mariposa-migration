@@ -98,8 +98,24 @@ def diary_provider(conn) -> Callable[[str, str], list[dict]]:
     return list_range
 
 
+def reminder_provider(conn) -> Callable[[str, str], list[dict]]:
+    def list_range(start_date: str, end_date: str) -> list[dict]:
+        from ..reminders import service as reminders
+        items = []
+        for r in reminders.list_reminders(["scheduled", "fired"]):
+            day = r["remind_at"][:10]
+            if start_date <= day <= end_date:
+                items.append(_item(
+                    f"reminder:{r['id']}", "reminder", r["id"], day, day,
+                    r["title"], r["note"] or "", "reminder_note",
+                    r["status"], 1,
+                ))
+        return items
+    return list_range
+
+
 PROVIDERS = {"memory": memory_provider, "plan": plan_provider,
-             "diary": diary_provider}
+             "diary": diary_provider, "reminder": reminder_provider}
 
 
 def range_items(start_date: str, end_date: str,

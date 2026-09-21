@@ -25,6 +25,12 @@ from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
 from ..letters import service as letters
 from ..content import service as content
+from ..memory import extras, relations
+from ..raw import binding
+from ..maintenance import service as maintenance
+from ..media import service as media
+from ..moments import service as moments
+from ..reminders import service as reminders
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,62 @@ def _register() -> dict[str, Capability]:
         description="执行她的话语义校对（provider 未配置一律挂起不写）")
     add("workspace.quotes.reviews.list", _quote_reviews_list, _owners(), False,
         description="校对工作项列表")
+    add("memory.update", _memory_update, _owners(), True,
+        description="修改桶正文（新版本，不就地覆盖；遗忘桶先恢复）")
+    add("memory.pin", lambda pr, a: extras.set_flag(
+        pr.principal_id, str(a.get("memory_id", "")), "pin",
+        bool(a.get("value", True))), _owners(), True,
+        description="置顶/取消（排除自动候选）")
+    add("memory.protect", lambda pr, a: extras.set_flag(
+        pr.principal_id, str(a.get("memory_id", "")), "protect",
+        bool(a.get("value", True))), _owners(), True, description="保护/取消")
+    add("memory.anchor", lambda pr, a: extras.set_flag(
+        pr.principal_id, str(a.get("memory_id", "")), "anchor",
+        bool(a.get("value", True))), _owners(), True, description="锚定/取消")
+    add("memory.versions.list", _versions_list, _owners(), False,
+        description="版本列表（不含正文；正文走 versions.read）")
+    add("memory.relations.link", _rel_link, _owners(), True,
+        description="建立关联（单向存储，显式反向查询）")
+    add("memory.relations.detach", _rel_detach, _owners(), True,
+        description="断开关联（留历史）")
+    add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
+    add("memory.relations.trace", _rel_trace, _owners(), False,
+        description="沿 continuation_of 追事件链")
+    add("raw.provisional.report", _prov_report, {"jiaming"}, True,
+        description="周家明报告现场复述片段（非已验证原文）")
+    add("raw.binding.bind", _raw_bind, _owners(), True,
+        description="原文范围绑定到桶（不改 Hold 内容；重复范围 DEDUPE_NEEDS_REVIEW）")
+    add("raw.binding.revoke", _raw_bind_revoke, _owners(), True,
+        description="撤销绑定（留历史，桶回 raw_pending）")
+    add("raw.binding.refs", _raw_refs, _owners(), False, description="桶的原文绑定列表")
+    add("maintenance.outbox.drain", _outbox_drain, _owners(), True,
+        description="消费 outbox（至少一次+幂等标记）")
+    add("maintenance.outbox.status", _outbox_status, _owners(), False,
+        description="outbox 待处理统计")
+    add("maintenance.activity.list", _activity_list, _owners(), False,
+        description="审计查询（管理接口，不参与召回）")
+    add("maintenance.reminders.fire_due", _fire_due,
+        {"worker", "qiaosheng", "jiaming"}, True,
+        description="到期提醒结算（幂等；无常驻 scheduler，无外部副作用）")
+    add("media.upload.prepare", _media_prepare, _owners(), False,
+        description="申请上传 token（字节走专用 HTTP 端点，不进工具参数）")
+    add("media.upload.finalize", _media_finalize, _owners(), True, True,
+        description="完成上传（hash 去重）")
+    add("media.list", _media_list, _owners(), False, description="媒体对象列表")
+    add("media.get", _media_get_meta, _owners(), False, description="媒体元数据")
+    add("moments.post", _moments_post, _owners(), True, description="发朋友圈（post）")
+    add("moments.list", _moments_list, _owners(), False, description="朋友圈列表")
+    add("moments.comment", _moments_comment, _owners(), True, description="评论")
+    add("moments.react", _moments_react, _owners(), True, description="回应")
+    add("reminder.create", _reminder_create, _owners(), True, description="创建提醒")
+    add("reminder.list", _reminder_list, _owners(), False, description="提醒列表")
+    add("reminder.cancel", _reminder_cancel, _owners(), True, description="取消提醒")
+    add("workspace.proposals.decide_batch", _decide_batch, _owners(), True, True,
+        description="批量决议（逐项冻结 ID/hash；拒绝写冷却）")
+    add("emotion.context.get", _emotion_reserved, _owners(), False,
+        description="情绪补充召回（reserved，默认禁用）")
+    add("listening.status", _listening_reserved, _owners(), False,
+        description="一起听歌（reserved，未选供应商）")
     return caps
 
 
@@ -506,6 +568,153 @@ def _quote_review_run(principal: Principal, a: dict) -> dict:
 
 def _quote_reviews_list(principal: Principal, a: dict) -> dict:
     return {"items": semantic_review.reviews_list(a.get("states"))}
+
+
+def _memory_update(principal: Principal, a: dict) -> dict:
+    return extras.update_text(
+        principal.principal_id, str(a.get("memory_id", "")),
+        int(a.get("expected_version", 0)), a.get("text"), a.get("why_remember"),
+        a.get("memory_date"), a.get("date_confidence"))
+
+
+def _versions_list(principal: Principal, a: dict) -> dict:
+    return {"versions": extras.versions_list(str(a.get("memory_id", "")))}
+
+
+def _rel_link(principal: Principal, a: dict) -> dict:
+    return relations.link(principal.principal_id,
+                          str(a.get("from_memory", "")), str(a.get("to_memory", "")),
+                          str(a.get("relation_type", "")),
+                          a.get("custom_label"), a.get("reverse_label"))
+
+
+def _rel_detach(principal: Principal, a: dict) -> dict:
+    return relations.detach(principal.principal_id,
+                            str(a.get("from_memory", "")), str(a.get("to_memory", "")),
+                            str(a.get("relation_type", "")))
+
+
+def _rel_list(principal: Principal, a: dict) -> dict:
+    return {"relations": relations.list_for(str(a.get("memory_id", "")),
+                                            str(a.get("direction", "both")))}
+
+
+def _rel_trace(principal: Principal, a: dict) -> dict:
+    return relations.trace(str(a.get("memory_id", "")),
+                           int(a.get("max_depth", 5)))
+
+
+def _prov_report(principal: Principal, a: dict) -> dict:
+    return binding.report_fragment(principal.principal_id,
+                                   str(a.get("fragment", "")), a.get("memory_id"))
+
+
+def _raw_bind(principal: Principal, a: dict) -> dict:
+    return binding.bind(
+        principal.principal_id, str(a.get("memory_id", "")),
+        str(a.get("conversation_id", "")), str(a.get("message_from", "")),
+        str(a.get("message_to", "")), str(a.get("confidence", "high")))
+
+
+def _raw_bind_revoke(principal: Principal, a: dict) -> dict:
+    return binding.revoke(principal.principal_id, str(a.get("memory_id", "")),
+                          str(a.get("conversation_id", "")))
+
+
+def _raw_refs(principal: Principal, a: dict) -> dict:
+    return {"refs": binding.refs_of(str(a.get("memory_id", "")))}
+
+
+def _outbox_drain(principal: Principal, a: dict) -> dict:
+    return maintenance.outbox_drain(int(a.get("limit", 100)))
+
+
+def _outbox_status(principal: Principal, a: dict) -> dict:
+    return maintenance.outbox_status()
+
+
+def _activity_list(principal: Principal, a: dict) -> dict:
+    return {"events": maintenance.activity_list(int(a.get("limit", 50)),
+                                                a.get("event_type"))}
+
+
+def _fire_due(principal: Principal, a: dict) -> dict:
+    return maintenance.reminders_fire_due(a.get("now"))
+
+
+def _media_prepare(principal: Principal, a: dict) -> dict:
+    return media.upload_prepare(principal.principal_id,
+                                str(a.get("mime", "")), int(a.get("size", 0)))
+
+
+def _media_finalize(principal: Principal, a: dict) -> dict:
+    import base64
+    data = base64.b64decode(str(a.get("data_b64", "")))
+    return media.upload_finalize(principal.principal_id,
+                                 str(a.get("upload_token", "")), data)
+
+
+def _media_list(principal: Principal, a: dict) -> dict:
+    return {"objects": media.list_media(int(a.get("limit", 50)))}
+
+
+def _media_get_meta(principal: Principal, a: dict) -> dict:
+    meta, _ = media.get_media(principal.principal_id,
+                              str(a.get("content_hash", "")))
+    return meta
+
+
+def _moments_post(principal: Principal, a: dict) -> dict:
+    return moments.post(principal.principal_id, str(a.get("content", "")),
+                        a.get("media_hash"))
+
+
+def _moments_list(principal: Principal, a: dict) -> dict:
+    return {"moments": moments.list_moments(str(a.get("kind", "post")),
+                                             int(a.get("limit", 50)))}
+
+
+def _moments_comment(principal: Principal, a: dict) -> dict:
+    return moments.comment(principal.principal_id, str(a.get("moment_id", "")),
+                           str(a.get("content", "")))
+
+
+def _moments_react(principal: Principal, a: dict) -> dict:
+    return moments.react(principal.principal_id, str(a.get("moment_id", "")),
+                         str(a.get("reaction", "")))
+
+
+def _reminder_create(principal: Principal, a: dict) -> dict:
+    return reminders.create(principal.principal_id, str(a.get("title", "")),
+                            str(a.get("remind_at", "")), a.get("note"),
+                            a.get("timezone"))
+
+
+def _reminder_list(principal: Principal, a: dict) -> dict:
+    return {"reminders": reminders.list_reminders(a.get("states"))}
+
+
+def _reminder_cancel(principal: Principal, a: dict) -> dict:
+    return reminders.cancel(principal.principal_id, str(a.get("reminder_id", "")))
+
+
+def _decide_batch(principal: Principal, a: dict) -> dict:
+    items = a.get("items") or []
+    if not isinstance(items, list):
+        raise Forbidden("items must be a list")
+    return workspace.decide_batch(principal, items)
+
+
+def _emotion_reserved(principal: Principal, a: dict) -> dict:
+    return {"enabled": False, "status": "reserved",
+            "note": "EMOTION_RETRIEVAL_ENABLED 默认 false；启用也只调整补充召回，"
+                    "不篡改基础时间/原文/三天桶/计划",
+            "config_key": "EMOTION_RETRIEVAL_ENABLED", "configured": False}
+
+
+def _listening_reserved(principal: Principal, a: dict) -> dict:
+    return {"status": "reserved", "provider": None,
+            "note": "一起听歌未选供应商；不承诺第三方曲库；capability 标 reserved"}
 
 
 REGISTRY = _register()
