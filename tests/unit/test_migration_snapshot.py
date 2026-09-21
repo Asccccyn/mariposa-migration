@@ -77,9 +77,10 @@ class TestSnapshotAndRealDryRun:
         assert st["with_meaning"] == 1
         assert st["unknown_type"] == 0 and st["bad_frontmatter"] == 0
         assert not [e for e in out["entries"] if e["target"] == "UNMAPPED"]
-        # 正文与锁信正文不进报告
+        # 正文与锁信正文不进报告（断言完整正文串，避开 note 文案）
         text = report.read_text(encoding="utf-8")
-        assert "锁信正文" not in text and "正文甲" not in text
+        assert "锁信正文（合成）" not in text and "正文甲" not in text
+        assert "旧正文" not in text and "我想成为" not in text
         # dont_surface 等旧字段进 legacy extension 清单（§5.3 不猜语义）
         assert "dont_surface" in out["legacy_extension_keys"]
         letter = next(e for e in out["entries"] if e["target"] == "letters")
