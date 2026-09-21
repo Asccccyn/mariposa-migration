@@ -15,31 +15,34 @@
   header h1 { font-size:16px; margin:0 12px 0 0; color:var(--accent); letter-spacing:.5px; }
   header .who { display:flex; gap:6px; align-items:center; }
   select, input, button, textarea { background:#111318; color:var(--fg);
-    border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; }
+    border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; max-width:100%; }
   button { cursor:pointer; }
   button.primary { background:var(--accent); color:#10231f; border-color:transparent; font-weight:600; }
   button.danger { background:transparent; color:var(--err); border-color:var(--err); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   #status { color:var(--dim); font-size:12px; }
-  main { display:grid; grid-template-columns: 1fr 1fr; gap:14px; padding:14px 16px;
-         max-width:1200px; margin:0 auto; }
-  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-            padding:12px 14px; min-width:0; }
-  section h2 { font-size:13px; margin:0 0 10px; color:var(--dim);
-               text-transform:uppercase; letter-spacing:1px; }
-  .item { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; }
+  nav { display:flex; gap:4px; padding:8px 16px 0; flex-wrap:wrap; }
+  nav button { border:none; background:transparent; color:var(--dim); padding:6px 12px;
+               border-radius:8px 8px 0 0; }
+  nav button.active { background:var(--panel); color:var(--accent); }
+  main { padding:12px 16px; max-width:1200px; margin:0 auto; }
+  section.page { display:none; background:var(--panel); border:1px solid var(--line);
+            border-radius:0 10px 10px 10px; padding:14px; }
+  section.page.active { display:block; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns:1fr; } }
+  .item { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; min-width:0; }
   .item .meta { color:var(--dim); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; }
   .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
          border:1px solid var(--line); color:var(--dim); }
   .tag.full { color:var(--ok); border-color:var(--ok); }
-  .tag.forgotten { color:var(--warn); border-color:var(--warn); }
+  .tag.forgotten_summary { color:var(--warn); border-color:var(--warn); }
   .tag.state-draft { color:var(--dim); }
   .tag.state-submitted { color:var(--accent); border-color:var(--accent); }
   .tag.state-approved_and_applied { color:var(--ok); border-color:var(--ok); }
   .tag.state-rejected { color:var(--err); border-color:var(--err); }
-  pre.hash { font-size:11px; color:var(--dim); white-space:pre-wrap; word-break:break-all;
-             margin:6px 0; }
+  .tag.state-pending { color:var(--warn); border-color:var(--warn); }
+  pre.hash { font-size:11px; color:var(--dim); white-space:pre-wrap; word-break:break-all; margin:6px 0; }
   textarea { width:100%; min-height:54px; resize:vertical; }
   .row { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   .empty { color:var(--dim); font-style:italic; }
@@ -47,6 +50,13 @@
   .mem-detail { border-top:1px dashed var(--line); margin-top:8px; padding-top:8px;
                 white-space:pre-wrap; }
   code { background:#111318; padding:1px 5px; border-radius:4px; font-size:12px; }
+  table.cal { border-collapse:collapse; width:100%; table-layout:fixed; }
+  table.cal th, table.cal td { border:1px solid var(--line); text-align:center;
+    padding:4px; font-size:12px; height:44px; vertical-align:top; cursor:pointer; }
+  table.cal td.has { background:#22303a; color:var(--accent); font-weight:600; }
+  table.cal td.selected { outline:2px solid var(--accent); }
+  table.cal td.other { color:#4a4f57; }
+  .day-items { margin-top:12px; }
 </style>
 </head>
 <body>
@@ -58,34 +68,100 @@
       <option value="jiaming">周家明（jiaming）</option>
       <option value="worker">工具人（worker）</option>
     </select>
-    <input id="token" placeholder="token" size="28" />
+    <input id="token" placeholder="token" size="26" />
     <button id="saveToken">连接</button>
   </div>
-  <button id="scanBtn">扫描遗忘候选</button>
-  <button id="newHoldBtn">写一条测试记忆</button>
   <span id="status"></span>
 </header>
 
+<nav>
+  <button data-page="memSec" class="active">记忆 / 检索</button>
+  <button data-page="wsSec">工作区 / 审批</button>
+  <button data-page="calSec">日历</button>
+  <button data-page="planSec">计划</button>
+  <button data-page="quoteSec">她的话</button>
+  <button data-page="delSec">删除申请</button>
+</nav>
+
 <main>
-  <section id="memSec">
-    <h2>记忆 / 检索</h2>
+  <!-- 记忆 -->
+  <section class="page active" id="memSec">
     <div class="row">
       <input id="q" placeholder="关键词，例如：蓝瓷小钥匙" style="flex:1" />
       <button id="searchBtn" class="primary">搜索</button>
+      <button id="scanBtn">扫描遗忘候选</button>
+      <button id="newHoldBtn">写测试记忆</button>
     </div>
     <div id="memResults"></div>
   </section>
 
-  <section id="wsSec">
-    <h2>工作区 / 审批</h2>
+  <!-- 工作区 -->
+  <section class="page" id="wsSec">
     <div id="wsList"></div>
+  </section>
+
+  <!-- 日历 -->
+  <section class="page" id="calSec">
+    <div class="row">
+      <button id="calPrev">←</button>
+      <strong id="calTitle" style="min-width:110px;text-align:center"></strong>
+      <button id="calNext">→</button>
+      <span style="flex:1"></span>
+      <label><input type="checkbox" id="calMem" checked> 记忆</label>
+      <label><input type="checkbox" id="calPlan" checked> 计划</label>
+    </div>
+    <div id="calGrid"></div>
+    <div class="day-items" id="calDay"></div>
+  </section>
+
+  <!-- 计划 -->
+  <section class="page" id="planSec">
+    <div class="row">
+      <input id="planTitle" placeholder="新计划标题" style="flex:1" />
+      <select id="planState">
+        <option>planned</option><option>active</option><option>waiting</option>
+        <option>blocked</option><option>done</option><option>cancelled</option>
+      </select>
+      <input id="planDue" type="date" />
+      <button id="planAdd" class="primary">创建</button>
+    </div>
+    <div id="planList"></div>
+  </section>
+
+  <!-- 她的话 -->
+  <section class="page" id="quoteSec">
+    <div class="row">
+      <input id="quoteText" placeholder="她说的一句话（周家明身份可保留）" style="flex:1" />
+      <button id="quoteAdd" class="primary">保留</button>
+    </div>
+    <div class="row">
+      <input id="quoteQ" placeholder="搜她的话（独立检索）" style="flex:1" />
+      <button id="quoteSearch">搜索</button>
+    </div>
+    <div id="quoteList"></div>
+  </section>
+
+  <!-- 删除申请 -->
+  <section class="page" id="delSec">
+    <div class="row">
+      <input id="delTarget" placeholder="memory_id 或 letter_id" style="flex:1" />
+      <input id="delReason" placeholder="理由（必填）" style="flex:1" />
+      <select id="delAction">
+        <option value="archive">归档</option>
+        <option value="delete">删除</option>
+      </select>
+      <button id="delSubmit" class="danger">提交申请</button>
+    </div>
+    <p class="empty">规则与旧系统一致：理由必填；每日 10 条上限；同一资源 5 次上限；仅周家明审批。审批通过前内容不变。</p>
+    <div id="delList"></div>
   </section>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { token: localStorage.getItem('mariposa_token') || '',
-                who: localStorage.getItem('mariposa_who') || 'qiaosheng' };
+                who: localStorage.getItem('mariposa_who') || 'qiaosheng',
+                calY: null, calM: null, calSel: null };
 $('who').value = state.who;
 $('token').value = state.token;
 
@@ -104,21 +180,39 @@ async function api(capability, arguments_, idem) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body.error && body.error.code) + ': ' +
-    (body.error && body.error.message || res.status));
+    ((body.error && (body.error.message || body.error.detail)) || res.status));
   return body.data;
 }
 
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- 导航 ----------
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('section.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $(btn.dataset.page).classList.add('active');
+    if (btn.dataset.page === 'calSec') renderCalendar();
+    if (btn.dataset.page === 'planSec') loadPlans();
+    if (btn.dataset.page === 'quoteSec') loadQuotes();
+    if (btn.dataset.page === 'delSec') loadDeletions();
+  };
+});
+
+// ---------- 记忆 ----------
 $('saveToken').onclick = () => {
   state.token = $('token').value.trim();
   state.who = $('who').value;
   localStorage.setItem('mariposa_token', state.token);
   localStorage.setItem('mariposa_who', state.who);
-  refreshAll();
+  searchMemories(''); loadWorkspace();
 };
-
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
-
 $('scanBtn').onclick = async () => {
   try {
     const d = await api('workspace.forgetting.scan', {});
@@ -126,7 +220,6 @@ $('scanBtn').onclick = async () => {
     loadWorkspace();
   } catch (e) { setStatus(e.message, true); }
 };
-
 $('newHoldBtn').onclick = async () => {
   const text = prompt('记忆正文（合成测试数据）', '');
   if (!text) return;
@@ -153,21 +246,36 @@ async function searchMemories(q) {
       div.className = 'item';
       div.innerHTML =
         `<div class="meta"><span>${esc(mem.memory_id)}</span>` +
-        `<span class="tag ${mem.representation}">${mem.representation === 'forgotten_summary' ? '遗忘摘要' : 'full'}</span>` +
+        `<span class="tag ${esc(mem.representation)}">${mem.representation === 'forgotten_summary' ? '遗忘摘要' : 'full'}</span>` +
         `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span></div>` +
         `<div class="mem-detail">${esc(mem.text)}</div>` +
-        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span></div>`;
+        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span>` +
+        `<button data-restore="${esc(mem.memory_id)}" data-ver="${mem.version}" data-rep="${esc(mem.representation)}">恢复旧正文</button></div>`;
       box.appendChild(div);
     }
     if (d.degraded) setStatus('语义检索未配置：' + d.degraded);
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+$('memResults').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-restore]');
+  if (!btn || btn.dataset.rep === 'full') return;
+  try {
+    const d = await api('memory.restore', {
+      memory_id: btn.dataset.restore,
+      expected_current_version: parseInt(btn.dataset.ver),
+    });
+    setStatus('已恢复到 v' + d.new_version);
+    searchMemories($('q').value);
+  } catch (err) { setStatus(err.message, true); }
+});
+
+// ---------- 工作区 ----------
 async function loadWorkspace() {
   const box = $('wsList');
   try {
     const d = await api('workspace.proposals.list', {});
-    if (!d.items.length) { box.innerHTML = '<div class="empty">暂无工作项</div>'; return; }
+    if (!d.items.length) { box.innerHTML = '<div class="empty">暂无工作项（点「扫描遗忘候选」生成）</div>'; return; }
     box.innerHTML = '';
     for (const it of d.items) {
       const div = document.createElement('div');
@@ -176,15 +284,13 @@ async function loadWorkspace() {
                     it.base_memory_version !== null &&
                     it.current_memory_version !== it.base_memory_version;
       div.innerHTML =
-        `<div class="meta"><span>${esc(it.proposal_id)}</span>` +
-        `<span>r${it.revision}</span><span>${esc(it.created_by)}</span>` +
+        `<div class="meta"><span>${esc(it.proposal_id)}</span><span>r${it.revision}</span>` +
+        `<span>${esc(it.created_by)}</span>` +
         `<span class="tag state-${esc(it.state)}">${esc(it.state)}</span>` +
-        (stale && it.state === 'submitted' ? '<span class="tag">STALE</span>' : '') +
-        `</div>` +
-        `<div>目标：<code>${esc(it.target_memory_id)}</code> ` +
-        `base v${it.base_memory_version ?? '?'} / 当前 v${it.current_memory_version ?? '?'}</div>` +
+        (stale && it.state === 'submitted' ? '<span class="tag">STALE</span>' : '') + `</div>` +
+        `<div>目标：<code>${esc(it.target_memory_id)}</code> base v${it.base_memory_version ?? '?'} / 当前 v${it.current_memory_version ?? '?'}</div>` +
         (it.state === 'draft'
-          ? `<textarea id="sum-${esc(it.proposal_id)}" placeholder="审批后将作为唯一检索依据的摘要">${esc(it.compressed_summary || '')}</textarea>` +
+          ? `<textarea id="sum-${esc(it.proposal_id)}" placeholder="审批后作为唯一检索依据的摘要">${esc(it.compressed_summary || '')}</textarea>` +
             `<textarea id="rsn-${esc(it.proposal_id)}" placeholder="理由">${esc(it.reason || '')}</textarea>` +
             `<div class="row"><button data-act="revise" data-id="${esc(it.proposal_id)}">保存修订</button>` +
             `<button class="primary" data-act="submit" data-id="${esc(it.proposal_id)}" data-rev="${it.revision}">提交</button></div>`
@@ -193,7 +299,8 @@ async function loadWorkspace() {
             `<pre class="hash">hash ${esc(it.proposal_hash)}</pre>` +
             `<div class="row"><button class="primary" data-act="approve" data-id="${esc(it.proposal_id)}" ` +
             `data-rev="${it.revision}" data-hash="${esc(it.proposal_hash)}" data-base="${it.base_memory_version}">批准</button>` +
-            `<button class="danger" data-act="reject" data-id="${esc(it.proposal_id)}">拒绝</button></div>`
+            `<button class="danger" data-act="reject" data-id="${esc(it.proposal_id)}" data-rev="${it.revision}" ` +
+            `data-hash="${esc(it.proposal_hash)}" data-base="${it.base_memory_version}">拒绝</button></div>`
           : `<div class="mem-detail">${esc(it.compressed_summary || '')}</div>`);
       box.appendChild(div);
     }
@@ -226,7 +333,7 @@ $('wsList').addEventListener('click', async (e) => {
         decision: 'approve',
       }, 'decide-' + id + '-' + btn.dataset.rev);
       setStatus('已批准并应用：新版本 v' + (d.new_version ?? '?'));
-      loadWorkspace(); searchMemories($('q').value);
+      loadWorkspace();
     } else if (btn.dataset.act === 'reject') {
       await api('memory.forgetting.decide', {
         proposal_id: id, proposal_revision: parseInt(btn.dataset.rev),
@@ -240,10 +347,215 @@ $('wsList').addEventListener('click', async (e) => {
   } catch (err) { setStatus(err.message, true); loadWorkspace(); }
 });
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g,
-    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// ---------- 日历 ----------
+async function renderCalendar() {
+  const now = new Date();
+  if (state.calY === null) { state.calY = now.getFullYear(); state.calM = now.getMonth(); }
+  $('calTitle').textContent = `${state.calY}-${String(state.calM + 1).padStart(2, '0')}`;
+  const types = [];
+  if ($('calMem').checked) types.push('memory');
+  if ($('calPlan').checked) types.push('plan');
+  const first = new Date(state.calY, state.calM, 1);
+  const days = new Date(state.calY, state.calM + 1, 0).getDate();
+  const startWeekday = (first.getDay() + 6) % 7;  // 周一为首
+  const d = await api('calendar.month', { year: state.calY, month: state.calM + 1, types });
+  const byDate = {};
+  for (const item of d.items || []) {
+    (byDate[item.date_start] = byDate[item.date_start] || []).push(item);
+  }
+  let html = '<table class="cal"><tr>' +
+    ['一','二','三','四','五','六','日'].map(x => `<th>${x}</th>`).join('') + '</tr><tr>';
+  for (let i = 0; i < startWeekday; i++) html += '<td class="other"></td>';
+  for (let day = 1; day <= days; day++) {
+    const key = `${state.calY}-${String(state.calM + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const has = byDate[key] && byDate[key].length;
+    html += `<td data-date="${key}" class="${has ? 'has ' : ''}${state.calSel === key ? 'selected' : ''}">${day}${has ? `<div style="font-size:10px">${byDate[key].length}</div>` : ''}</td>`;
+    if ((startWeekday + day) % 7 === 0) html += '</tr><tr>';
+  }
+  html += '</tr></table>';
+  $('calGrid').innerHTML = html;
+  document.querySelectorAll('td[data-date]').forEach(td => {
+    td.onclick = () => showCalDay(td.dataset.date);
+  });
+  if (state.calSel) showCalDay(state.calSel);
 }
+
+function showCalDay(dateKey) {
+  state.calSel = dateKey;
+  const items = document.querySelectorAll(`td[data-date="${dateKey}"]`);
+  document.querySelectorAll('td[data-date]').forEach(t => t.classList.remove('selected'));
+  items.forEach(t => t.classList.add('selected'));
+  api('calendar.day', { date: dateKey }).then(d => {
+    const box = $('calDay');
+    if (!d.items.length) { box.innerHTML = `<div class="empty">${esc(dateKey)}：无条目</div>`; return; }
+    box.innerHTML = `<h3 style="font-size:13px;color:var(--dim)">${esc(dateKey)}</h3>`;
+    for (const it of d.items) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML =
+        `<div class="meta"><span class="tag ${esc(it.kind)}">${esc(it.kind)}</span>` +
+        `<span>${esc(it.status)}</span><span>v${it.resource_version}</span></div>` +
+        `<div class="mem-detail"><strong>${esc(it.title)}</strong></div>` +
+        (it.kind === 'memory' ? `<div class="meta" style="margin-top:4px">preview_kind: <code>${esc(it.preview_kind)}</code>${it.preview_kind === 'forgotten_summary' ? '（遗忘桶：仅摘要）' : ''}</div>` : '');
+      box.appendChild(div);
+    }
+  }).catch(e => { $('calDay').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
+}
+$('calPrev').onclick = () => { state.calM--; if (state.calM < 0) { state.calM = 11; state.calY--; } renderCalendar(); };
+$('calNext').onclick = () => { state.calM++; if (state.calM > 11) { state.calM = 0; state.calY++; } renderCalendar(); };
+$('calMem').onchange = renderCalendar;
+$('calPlan').onchange = renderCalendar;
+
+// ---------- 计划 ----------
+$('planAdd').onclick = async () => {
+  try {
+    const args = { title: $('planTitle').value, state: $('planState').value };
+    if ($('planDue').value) args.due_at = $('planDue').value;
+    const d = await api('plan.create', args);
+    setStatus('计划已创建 ' + d.plan_id);
+    $('planTitle').value = '';
+    loadPlans();
+  } catch (e) { setStatus(e.message, true); }
+};
+
+async function loadPlans() {
+  const box = $('planList');
+  try {
+    const d = await api('plan.list', {});
+    if (!d.plans.length) { box.innerHTML = '<div class="empty">暂无计划</div>'; return; }
+    box.innerHTML = '';
+    for (const p of d.plans) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      const stateTag = ['active','waiting','blocked'].includes(p.state) ? 'state-submitted'
+        : p.state === 'done' ? 'state-approved_and_applied'
+        : p.state === 'cancelled' ? 'state-rejected' : 'state-draft';
+      div.innerHTML =
+        `<div class="meta"><span class="tag ${stateTag}">${esc(p.state)}</span>` +
+        `<span>v${p.version}</span><span>${esc(p.starts_at || p.date_start || '')} ${p.due_at ? '→ ' + esc(p.due_at.slice(0, 10)) : ''}</span></div>` +
+        `<div class="mem-detail"><strong>${esc(p.title)}</strong>${p.content ? '<br>' + esc(p.content) : ''}</div>` +
+        `<div class="row">` +
+        [...['active','waiting','blocked','done','cancelled'].filter(s => s !== p.state)]
+          .map(s => `<button data-plan="${esc(p.plan_id)}" data-ver="${p.version}" data-s="${s}">${s}</button>`).join('') +
+        `</div>`;
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+$('planList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-plan]');
+  if (!btn) return;
+  try {
+    const d = await api('plan.update', {
+      plan_id: btn.dataset.plan, expected_version: parseInt(btn.dataset.ver),
+      state: btn.dataset.s,
+    });
+    setStatus('计划已更新 v' + d.version);
+    loadPlans();
+  } catch (err) { setStatus(err.message, true); loadPlans(); }
+});
+
+// ---------- 她的话 ----------
+$('quoteAdd').onclick = async () => {
+  try {
+    const d = await api('memory.quotes.keep', { text: $('quoteText').value });
+    setStatus('已保留 ' + d.quote_id);
+    $('quoteText').value = '';
+    loadQuotes();
+  } catch (e) { setStatus(e.message, true); }
+};
+$('quoteSearch').onclick = async () => {
+  try {
+    const d = await api('memory.quotes.search', { query: $('quoteQ').value });
+    const box = $('quoteList');
+    box.innerHTML = d.hits.length ? '' : '<div class="empty">无命中</div>';
+    for (const h of d.hits) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="meta"><span>source=<code>quotes</code></span><span>matched_by=<code>${esc(h.matched_by)}</code></span><span>${esc(h.said_at || '')}</span></div>` +
+        `<div class="mem-detail">${esc(h.text)}</div>`;
+      box.appendChild(div);
+    }
+  } catch (e) { setStatus(e.message, true); }
+};
+async function loadQuotes() {
+  const box = $('quoteList');
+  try {
+    const d = await api('memory.quotes.list', {});
+    if (!d.quotes.length) { box.innerHTML = '<div class="empty">暂无（周家明身份可保留）</div>'; return; }
+    box.innerHTML = '';
+    for (const q of d.quotes) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="meta"><span>${esc(q.id)}</span><span>kept_by=${esc(q.kept_by)}</span>` +
+        `<span class="tag ${q.semantic_status === 'material_conflict' ? 'state-rejected' : ''}">${esc(q.semantic_status)}</span></div>` +
+        `<div class="mem-detail">${esc(q.text)}</div>` +
+        `<div class="row"><button class="danger" data-quote="${esc(q.id)}">撤下</button></div>`;
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+$('quoteList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-quote]');
+  if (!btn) return;
+  try {
+    await api('memory.quotes.withdraw', { quote_id: btn.dataset.quote });
+    setStatus('已撤下（不物理删除）');
+    loadQuotes();
+  } catch (err) { setStatus(err.message, true); }
+});
+
+// ---------- 删除申请 ----------
+$('delSubmit').onclick = async () => {
+  try {
+    const d = await api('memory.deletion.request', {
+      resource_id: $('delTarget').value, reason: $('delReason').value,
+      action: $('delAction').value,
+    });
+    setStatus('申请已提交：' + d.request_id + '（pending，内容未变）');
+    loadDeletions();
+  } catch (e) { setStatus(e.message, true); }
+};
+async function loadDeletions() {
+  const box = $('delList');
+  try {
+    const d = await api('memory.deletion.list', {});
+    if (!d.requests.length) { box.innerHTML = '<div class="empty">暂无申请</div>'; return; }
+    box.innerHTML = '';
+    for (const r of d.requests.slice(0, 30)) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="meta"><span>${esc(r.id)}</span>` +
+        `<span class="tag state-${esc(r.status)}">${esc(r.status)}</span>` +
+        `<span>${esc(r.resource_kind)}:${esc(r.resource_id)}</span><span>${esc(r.action)}</span>` +
+        `<span>${esc(r.local_date)}</span></div>` +
+        `<div class="mem-detail">理由：${esc(r.human_reason)}${r.ai_reason ? '<br>批注：' + esc(r.ai_reason) : ''}</div>` +
+        (r.status === 'pending'
+          ? `<div class="row"><button class="primary" data-decide="${esc(r.id)}" data-d="approve">批准</button>` +
+            `<button class="danger" data-decide="${esc(r.id)}" data-d="reject">拒绝</button>` +
+            `<button data-withdraw="${esc(r.resource_id)}">撤回</button></div>` : '');
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+$('delList').addEventListener('click', async (e) => {
+  const decide = e.target.closest('button[data-decide]');
+  const withdraw = e.target.closest('button[data-withdraw]');
+  try {
+    if (decide) {
+      const d = await api('memory.deletion.decide', {
+        request_id: decide.dataset.decide, decision: decide.dataset.d,
+        expected_resource_id: '',
+      }, 'del-decide-' + decide.dataset.decide);
+      setStatus('已' + (d.decision === 'approve' ? '批准并执行' : '拒绝'));
+      loadDeletions();
+    } else if (withdraw) {
+      await api('memory.deletion.withdraw', { resource_id: withdraw.dataset.withdraw });
+      setStatus('已撤回');
+      loadDeletions();
+    }
+  } catch (err) { setStatus(err.message, true); loadDeletions(); }
+});
 
 function refreshAll() { searchMemories(''); loadWorkspace(); }
 if (state.token) refreshAll();

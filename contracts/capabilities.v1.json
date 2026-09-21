@@ -1,0 +1,440 @@
+{
+  "contract_version": "1.0",
+  "generated_from": "backend/mariposa/capabilities/registry.py",
+  "capabilities": [
+    {
+      "canonical_name": "bootstrap.get",
+      "transport_name": "mariposa_bootstrap_get",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "两入口开窗（entry_source 校验 profile；worker 拒绝）"
+    },
+    {
+      "canonical_name": "calendar.day",
+      "transport_name": "mariposa_calendar_day",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "单日聚合视图"
+    },
+    {
+      "canonical_name": "calendar.month",
+      "transport_name": "mariposa_calendar_month",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "月视图聚合"
+    },
+    {
+      "canonical_name": "calendar.range",
+      "transport_name": "mariposa_calendar_range",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "日期区间聚合（端点含）"
+    },
+    {
+      "canonical_name": "handoff.latest",
+      "transport_name": "mariposa_handoff_latest",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "最新便签（过期标注 expired）"
+    },
+    {
+      "canonical_name": "handoff.write",
+      "transport_name": "mariposa_handoff_write",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "周家明写给另一入口的交接便签（72h 过期不删除）"
+    },
+    {
+      "canonical_name": "letter.edit",
+      "transport_name": "mariposa_letter_edit",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "编辑/锁更新（作者本人，版本乐观锁）"
+    },
+    {
+      "canonical_name": "letter.list",
+      "transport_name": "mariposa_letter_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "信件列表（metadata-only，锁信不返回正文）"
+    },
+    {
+      "canonical_name": "letter.read",
+      "transport_name": "mariposa_letter_read",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "读信正文（锁中返回 LOCKED_RESOURCE；过期锁读时归一）"
+    },
+    {
+      "canonical_name": "letter.write",
+      "transport_name": "mariposa_letter_write",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "写信（锁参数经归一化校验）"
+    },
+    {
+      "canonical_name": "memory.deletion.decide",
+      "transport_name": "mariposa_memory_deletion_decide",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "审批删除申请（仅周家明；approve 才执行 archive/delete）"
+    },
+    {
+      "canonical_name": "memory.deletion.list",
+      "transport_name": "mariposa_memory_deletion_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "删除申请列表"
+    },
+    {
+      "canonical_name": "memory.deletion.request",
+      "transport_name": "mariposa_memory_deletion_request",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "提交删除申请（reason 必填；daily=10/lifetime=5 与旧系统一致）"
+    },
+    {
+      "canonical_name": "memory.deletion.withdraw",
+      "transport_name": "mariposa_memory_deletion_withdraw",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "撤回 pending 删除申请"
+    },
+    {
+      "canonical_name": "memory.forgetting.decide",
+      "transport_name": "mariposa_memory_forgetting_decide",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": true,
+      "description": "审批遗忘提案（worker 拒绝）"
+    },
+    {
+      "canonical_name": "memory.get",
+      "transport_name": "mariposa_memory_get",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "读取当前表示（遗忘桶只返回摘要）"
+    },
+    {
+      "canonical_name": "memory.hold",
+      "transport_name": "mariposa_memory_hold",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "写入一条正式记忆（full 表示，version 1）"
+    },
+    {
+      "canonical_name": "memory.quotes.keep",
+      "transport_name": "mariposa_memory_quotes_keep",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "周家明选取保留她的话（允许复述）"
+    },
+    {
+      "canonical_name": "memory.quotes.list",
+      "transport_name": "mariposa_memory_quotes_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "列出她的话（独立资源）"
+    },
+    {
+      "canonical_name": "memory.quotes.search",
+      "transport_name": "mariposa_memory_quotes_search",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "独立 quotes 检索；不得反向算作记忆命中"
+    },
+    {
+      "canonical_name": "memory.quotes.withdraw",
+      "transport_name": "mariposa_memory_quotes_withdraw",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "撤下一条（撤下后校对不得重新浮现）"
+    },
+    {
+      "canonical_name": "memory.restore",
+      "transport_name": "mariposa_memory_restore",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "恢复到最近压缩前版本（或指定历史 full 版本）"
+    },
+    {
+      "canonical_name": "memory.search",
+      "transport_name": "mariposa_memory_search",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "关键词检索有效投影"
+    },
+    {
+      "canonical_name": "memory.versions.read",
+      "transport_name": "mariposa_memory_versions_read",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "明确展开历史版本，不自动 restore"
+    },
+    {
+      "canonical_name": "plan.create",
+      "transport_name": "mariposa_plan_create",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "创建计划（唯一真源，记忆经链接引用）"
+    },
+    {
+      "canonical_name": "plan.list",
+      "transport_name": "mariposa_plan_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "列出计划"
+    },
+    {
+      "canonical_name": "plan.update",
+      "transport_name": "mariposa_plan_update",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "修改计划（expected_version 乐观锁）"
+    },
+    {
+      "canonical_name": "presence.touch",
+      "transport_name": "mariposa_presence_touch",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "轻量活动登记（actor 由凭据决定，不可参数自报）"
+    },
+    {
+      "canonical_name": "raw.conversations.list",
+      "transport_name": "mariposa_raw_conversations_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "已收录会话列表"
+    },
+    {
+      "canonical_name": "raw.import",
+      "transport_name": "mariposa_raw_import",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": true,
+      "idempotent": true,
+      "description": "导入原文（同源同消息 ID 幂等，不覆盖已存在消息）"
+    },
+    {
+      "canonical_name": "raw.messages.list",
+      "transport_name": "mariposa_raw_messages_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "最新 N 条真实消息（默认 30 条，按消息计）"
+    },
+    {
+      "canonical_name": "raw.search",
+      "transport_name": "mariposa_raw_search",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "独立原文查询，命中标 source=raw"
+    },
+    {
+      "canonical_name": "time.context",
+      "transport_name": "mariposa_time_context",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "三条时间线分开的活动证据"
+    },
+    {
+      "canonical_name": "time.now",
+      "transport_name": "mariposa_time_now",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "真实 now + 共同时区"
+    },
+    {
+      "canonical_name": "time.since",
+      "transport_name": "mariposa_time_since",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "自最后已知联系"
+    },
+    {
+      "canonical_name": "workspace.forgetting.scan",
+      "transport_name": "mariposa_workspace_forgetting_scan",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "扫描遗忘候选并落工作区草稿；不改正式桶"
+    },
+    {
+      "canonical_name": "workspace.proposals.list",
+      "transport_name": "mariposa_workspace_proposals_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "列出工作区提案"
+    },
+    {
+      "canonical_name": "workspace.proposals.revise",
+      "transport_name": "mariposa_workspace_proposals_revise",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "修订未提交草稿"
+    },
+    {
+      "canonical_name": "workspace.proposals.submit",
+      "transport_name": "mariposa_workspace_proposals_submit",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": true,
+      "idempotent": true,
+      "description": "提交提案：冻结版本并登记正式 envelope"
+    }
+  ]
+}
