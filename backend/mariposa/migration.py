@@ -41,7 +41,10 @@ def inventory(source: str | None, out: str | None = None) -> dict:
         d["bytes"] += stat
         # 只读头部元数据行判断锁（不读正文；锁信正文不进任何输出）
         try:
-            head = f.read_text(encoding="utf-8", errors="replace")[:2000]
+            # 只读 frontmatter（第二个 --- 之前），不触及正文（§14.3）
+            raw_head = f.read_text(encoding="utf-8", errors="replace")
+            end = raw_head.find("\n---", 3)
+            head = raw_head[:end] if end > 0 else raw_head[:512]
             if "lock_type: timed" in head or "lock_type: locked" in head:
                 letters_locked += 1
         except OSError:
