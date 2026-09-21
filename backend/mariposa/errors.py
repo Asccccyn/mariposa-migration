@@ -59,3 +59,8 @@ class LockedResource(MariposaError):
 class ProviderUnavailable(MariposaError):
     code = "PROVIDER_UNAVAILABLE"
     http_status = 503
+
+
+class SnapshotStale(MariposaError):
+    code = "SNAPSHOT_STALE"
+    http_status = 409

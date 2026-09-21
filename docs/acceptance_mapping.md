@@ -76,13 +76,24 @@
 | backup 一致性 + verify-only；篡改检出 | `TestStorage` 2 项 | ✅ |
 | 真实快照 apply/cutover | ⛔ blocked: 未获准（按 §20 边界） |
 
+## 6b. Home/Self/Diary/情绪标签/Snapshot（第 2 轮新增）
+
+| 场景 | 测试 | 状态 |
+|---|---|---|
+| Home 唯一正本版本化、乐观锁、历史留底 | `test_content.py::TestHome` | ✅ |
+| Self 仅周家明写；pending=隔日回看；同日拒/隔日可；retired 不浮现历史可查 | `TestSelf` 2 项 | ✅ |
+| Diary 独立检索 source=diary 不反向算记忆命中；covers 区间进日历；仅作者可隐藏 | `TestDiary` 2 项 | ✅ |
+| 情绪标签 whose 必填；双方同情绪两项 | `test_whose_required` | ✅ |
+| 遗忘桶按情绪仍可查（结构化入口不因压缩消失） | `test_forgotten_bucket_still_findable_by_tag` | ✅ |
+| bootstrap SNAPSHOT_STALE（资源变化/未知 snapshot） | `TestBootstrapSnapshot` 2 项 + 真实服务验证 | ✅ |
+| bootstrap 入口与 profile 不匹配拒绝（claude_chat 绑定调 cc profile） | 真实服务验证 FORBIDDEN | ✅ |
+
 ## 7. 未实现（如实清单，非失败）
 
 - Web React/Vite 版（当前为后端直出的功能页，真实 API 驱动）
 - 媒体/表情/朋友圈/提醒/自动唤醒/一起听歌：not_started / reserved
 - 情绪系统算法：reserved（`memory.by_emotion` 未实现；情绪标签 whose 字段未启用）
 - 语义 embedding provider：blocked（未配置；关键词/日期/标签路径完整可用）
-- Diary/Self/Home 实体：not_started（schema 未建）
 - Chat/CC 会话流：blocked（依赖 CC 前置）
 - Siren/Superposition/扎西德勒 provider：blocked（未做只读契约核验）
 

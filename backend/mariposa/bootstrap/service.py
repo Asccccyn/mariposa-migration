@@ -11,7 +11,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from .. import config, db
-from ..errors import Forbidden
+from ..errors import Forbidden, SnapshotStale
 from ..memory import service as memory
 from ..plans import service as plans
 from ..raw import service as raw
@@ -27,7 +27,20 @@ _ENTRY_ALLOWED = {
 }
 
 
-def get(principal_id: str, entry_source: str, profile: str) -> dict:
+def _state_hash(conn) -> str:
+    """开窗依据资源的状态指纹：任一变化使旧 snapshot 失效（§12.2）。"""
+    import hashlib
+    parts = []
+    for table, time_col in (("memories", "updated_at"), ("plans", "updated_at"),
+                            ("raw_messages", "occurred_at")):
+        row = conn.execute(
+            f"SELECT COUNT(*) AS c, MAX({time_col}) AS m FROM {table}").fetchone()
+        parts.append(f"{table}:{row['c']}:{row['m']}")
+    return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
+
+
+def get(principal_id: str, entry_source: str, profile: str,
+        loaded_snapshot_id: str | None = None) -> dict:
     if principal_id != "jiaming":
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
     if profile not in _ENTRY_ALLOWED:
@@ -36,6 +49,19 @@ def get(principal_id: str, entry_source: str, profile: str) -> dict:
         raise Forbidden(
             "entry_source does not match bootstrap profile",
             entry_source=entry_source, profile=profile)
+
+    with db.formal() as conn:
+        current_state = _state_hash(conn)
+        if loaded_snapshot_id:
+            snap = conn.execute(
+                "SELECT state_hash FROM bootstrap_snapshots WHERE snapshot_id=?",
+                (loaded_snapshot_id,)).fetchone()
+            if snap is None:
+                raise SnapshotStale("snapshot unknown; re-fetch bootstrap")
+            if snap["state_hash"] != current_state:
+                raise SnapshotStale(
+                    "underlying resources changed since snapshot; re-fetch",
+                    snapshot_id=loaded_snapshot_id)
 
     tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
     from datetime import datetime, timezone
@@ -48,11 +74,11 @@ def get(principal_id: str, entry_source: str, profile: str) -> dict:
             " AND memory_date IN (?,?,?) ORDER BY memory_date DESC",
             tuple(three_days)).fetchall()
         memory_items = [memory.get(conn, r["memory_id"]) for r in mem_rows]
-
     plan_items = plans.bootstrap_plans(today, PLAN_UPCOMING_DAYS)
 
     result: dict = {
         "snapshot_id": f"snap_{uuid.uuid4().hex[:12]}",
+        "state_hash": current_state,
         "profile": profile,
         "time": {"local_date": today.isoformat(), "timezone": config.RELATIONSHIP_TIMEZONE},
         "memory_days": {
@@ -81,6 +107,11 @@ def get(principal_id: str, entry_source: str, profile: str) -> dict:
                 "raw": f"only {len(raw_msgs)} messages available; not padded"}
 
     _estimate_budget(result)
+    with db.formal() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO bootstrap_snapshots(snapshot_id, state_hash,"
+            " created_at) VALUES(?,?,datetime('now'))",
+            (result["snapshot_id"], current_state))
     return result
 
 

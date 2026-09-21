@@ -23,6 +23,7 @@ from ..calendar import service as calendar
 from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
 from ..letters import service as letters
+from ..content import service as content
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,30 @@ def _register() -> dict[str, Capability]:
         description="审批删除申请（仅周家明；approve 才执行 archive/delete）")
     add("memory.deletion.list", _del_list, _owners(), False,
         description="删除申请列表")
+    add("home.get", _home_get, _owners(), False, description="共同 Home 正本")
+    add("home.update", _home_update, _owners(), True,
+        description="修改 Home（唯一正本，版本乐观锁）")
+    add("self.write", _self_write, {"jiaming"}, True,
+        description="周家明写 Self（立即正式，pending=隔日待回看）")
+    add("self.list", _self_list, _owners(), False,
+        description="Self 列表（retired 不主动浮现）")
+    add("self.review", _self_review, {"jiaming"}, True,
+        description="隔日回看 Self（另一共同当地日起）")
+    add("self.revise", _self_revise, {"jiaming"}, True,
+        description="修订 Self（隔日，版本留底）")
+    add("self.retire", _self_retire, {"jiaming"}, True,
+        description="退役 Self（不物理删，历史可查）")
+    add("diary.write", _diary_write, _owners(), True,
+        description="写日记（本人作品，全文保留）")
+    add("diary.list", _diary_list, _owners(), False, description="日记列表")
+    add("diary.search", _diary_search, _owners(), False,
+        description="日记独立检索（source=diary）")
+    add("diary.hide", _diary_hide, _owners(), True,
+        description="隐藏/显示日记（仅作者）")
+    add("memory.tags.add", _tags_add, _owners(), True,
+        description="加标签（情绪标签 whose 必填）")
+    add("memory.by_emotion", _by_emotion, _owners(), False,
+        description="按情绪查（结构化入口，遗忘桶仍可查）")
     return caps
 
 
@@ -333,7 +358,8 @@ def _cal_month(principal: Principal, a: dict) -> dict:
 
 def _bootstrap(principal: Principal, a: dict) -> dict:
     return bootstrap.get(principal.principal_id, principal.entry_source,
-                         str(a.get("profile", "")))
+                         str(a.get("profile", "")),
+                         a.get("loaded_snapshot_id"))
 
 
 def _time_now(principal: Principal, a: dict) -> dict:
@@ -394,6 +420,70 @@ def _del_decide(principal: Principal, a: dict) -> dict:
 
 def _del_list(principal: Principal, a: dict) -> dict:
     return {"requests": letters.deletion_list(a.get("status"))}
+
+
+def _home_get(principal: Principal, a: dict) -> dict:
+    with db.formal() as conn:
+        return content.home_get(conn)
+
+
+def _home_update(principal: Principal, a: dict) -> dict:
+    return content.home_update(principal.principal_id, str(a.get("content", "")),
+                               int(a.get("expected_version", 0)))
+
+
+def _self_write(principal: Principal, a: dict) -> dict:
+    return content.self_write(principal.principal_id, str(a.get("content", "")),
+                              str(a.get("aspect", "")))
+
+
+def _self_list(principal: Principal, a: dict) -> dict:
+    return {"entries": content.self_list(bool(a.get("include_retired", False)))}
+
+
+def _self_review(principal: Principal, a: dict) -> dict:
+    return content.self_review(principal.principal_id, str(a.get("self_id", "")))
+
+
+def _self_revise(principal: Principal, a: dict) -> dict:
+    return content.self_revise(principal.principal_id, str(a.get("self_id", "")),
+                               str(a.get("content", "")),
+                               int(a.get("expected_version", 0)))
+
+
+def _self_retire(principal: Principal, a: dict) -> dict:
+    return content.self_retire(principal.principal_id, str(a.get("self_id", "")))
+
+
+def _diary_write(principal: Principal, a: dict) -> dict:
+    return content.diary_write(principal.principal_id, str(a.get("title", "")),
+                               str(a.get("content", "")),
+                               a.get("covers_from"), a.get("covers_to"))
+
+
+def _diary_list(principal: Principal, a: dict) -> dict:
+    return {"entries": content.diary_list(bool(a.get("include_hidden", False)),
+                                          a.get("author"))}
+
+
+def _diary_search(principal: Principal, a: dict) -> dict:
+    return content.diary_search(str(a.get("query", "")), int(a.get("limit", 20)))
+
+
+def _diary_hide(principal: Principal, a: dict) -> dict:
+    return content.diary_hide(principal.principal_id, str(a.get("diary_id", "")),
+                              bool(a.get("hide", True)))
+
+
+def _tags_add(principal: Principal, a: dict) -> dict:
+    tags = a.get("tags") or []
+    if not isinstance(tags, list):
+        raise Forbidden("tags must be a list")
+    return content.tags_add(principal.principal_id, str(a.get("memory_id", "")), tags)
+
+
+def _by_emotion(principal: Principal, a: dict) -> dict:
+    return content.by_emotion(str(a.get("tag", "")), str(a.get("whose", "")))
 
 
 REGISTRY = _register()

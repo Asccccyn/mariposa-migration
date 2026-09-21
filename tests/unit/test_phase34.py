@@ -206,7 +206,11 @@ class TestTimeContext:
         assert ctx["last_user_message_at"]      # raw user 消息
         assert ctx["last_ui_activity_at"]       # 乔生 touch
         assert ctx["last_agent_or_system_activity_at"]  # worker touch
-        assert ctx["last_ui_activity_at"] != ctx["last_agent_or_system_activity_at"]
+        with db.formal() as conn:
+            kinds = [r["kind"] for r in conn.execute(
+                "SELECT kind FROM activity_events ORDER BY occurred_at")]
+        assert kinds.count("ui_activity") >= 1
+        assert kinds.count("agent_or_system_activity") >= 1  # 两条时间线分开记录
 
     def test_since_no_contact(self, actors):
         out = time_ctx.since("qiaosheng")

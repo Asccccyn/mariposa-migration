@@ -46,6 +46,50 @@
       "description": "日期区间聚合（端点含）"
     },
     {
+      "canonical_name": "diary.hide",
+      "transport_name": "mariposa_diary_hide",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "隐藏/显示日记（仅作者）"
+    },
+    {
+      "canonical_name": "diary.list",
+      "transport_name": "mariposa_diary_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "日记列表"
+    },
+    {
+      "canonical_name": "diary.search",
+      "transport_name": "mariposa_diary_search",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "日记独立检索（source=diary）"
+    },
+    {
+      "canonical_name": "diary.write",
+      "transport_name": "mariposa_diary_write",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "写日记（本人作品，全文保留）"
+    },
+    {
       "canonical_name": "handoff.latest",
       "transport_name": "mariposa_handoff_latest",
       "allowed_principals": [
@@ -65,6 +109,28 @@
       "write": true,
       "idempotent": false,
       "description": "周家明写给另一入口的交接便签（72h 过期不删除）"
+    },
+    {
+      "canonical_name": "home.get",
+      "transport_name": "mariposa_home_get",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "共同 Home 正本"
+    },
+    {
+      "canonical_name": "home.update",
+      "transport_name": "mariposa_home_update",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "修改 Home（唯一正本，版本乐观锁）"
     },
     {
       "canonical_name": "letter.edit",
@@ -109,6 +175,17 @@
       "write": true,
       "idempotent": false,
       "description": "写信（锁参数经归一化校验）"
+    },
+    {
+      "canonical_name": "memory.by_emotion",
+      "transport_name": "mariposa_memory_by_emotion",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按情绪查（结构化入口，遗忘桶仍可查）"
     },
     {
       "canonical_name": "memory.deletion.decide",
@@ -252,6 +329,17 @@
       "description": "关键词检索有效投影"
     },
     {
+      "canonical_name": "memory.tags.add",
+      "transport_name": "mariposa_memory_tags_add",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "加标签（情绪标签 whose 必填）"
+    },
+    {
       "canonical_name": "memory.versions.read",
       "transport_name": "mariposa_memory_versions_read",
       "allowed_principals": [
@@ -351,6 +439,57 @@
       "write": false,
       "idempotent": false,
       "description": "独立原文查询，命中标 source=raw"
+    },
+    {
+      "canonical_name": "self.list",
+      "transport_name": "mariposa_self_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "Self 列表（retired 不主动浮现）"
+    },
+    {
+      "canonical_name": "self.retire",
+      "transport_name": "mariposa_self_retire",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "退役 Self（不物理删，历史可查）"
+    },
+    {
+      "canonical_name": "self.review",
+      "transport_name": "mariposa_self_review",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "隔日回看 Self（另一共同当地日起）"
+    },
+    {
+      "canonical_name": "self.revise",
+      "transport_name": "mariposa_self_revise",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "修订 Self（隔日，版本留底）"
+    },
+    {
+      "canonical_name": "self.write",
+      "transport_name": "mariposa_self_write",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "周家明写 Self（立即正式，pending=隔日待回看）"
     },
     {
       "canonical_name": "time.context",

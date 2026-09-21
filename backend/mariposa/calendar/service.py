@@ -11,6 +11,7 @@ from .. import db
 from ..errors import Forbidden
 from ..memory import service as memory
 from ..plans import service as plans
+from ..content import service as content
 
 
 def _item(item_id: str, kind: str, resource_id: str, date_start: str, date_end: str,
@@ -81,7 +82,24 @@ def _within(a_start, a_end, b_start, b_end) -> bool:
     return a_start <= b_end and (a_end or a_start) >= b_start
 
 
-PROVIDERS = {"memory": memory_provider, "plan": plan_provider}
+def diary_provider(conn) -> Callable[[str, str], list[dict]]:
+    def list_range(start_date: str, end_date: str) -> list[dict]:
+        items = []
+        for d in content.diary_list():
+            if d["covers_from"] and d["covers_to"] and                     d["covers_from"] <= end_date and d["covers_to"] >= start_date:
+                preview = (d["content"][:40] + "…") if len(d["content"]) > 40                     else d["content"]
+                items.append(_item(
+                    f"diary:{d['diary_id']}", "diary", d["diary_id"],
+                    d["covers_from"], d["covers_to"],
+                    d["title"] or "日记", preview, "diary_content",
+                    "hidden" if d["hidden"] else "visible", d["version"],
+                ))
+        return items
+    return list_range
+
+
+PROVIDERS = {"memory": memory_provider, "plan": plan_provider,
+             "diary": diary_provider}
 
 
 def range_items(start_date: str, end_date: str,
