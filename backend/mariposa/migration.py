@@ -26,6 +26,138 @@ def _iter_bucket_files(source: Path):
     return sorted(source.rglob("*.md"))
 
 
+def snapshot(source: str, dest: str | None = None) -> dict:
+    """生产 -> staging 副本：程序逐字节复制 + hash 清单（§20.2）。
+
+    只读 source；正文不进日志/输出/模型（锁信同：只复制字节）。
+    """
+    import shutil
+    src = Path(source)
+    dst = Path(dest) if dest else config.RUNTIME_DIR / "migration_staging"
+    if not src.exists():
+        return {"ok": False, "error": f"source not found: {src}"}
+    if dst.exists() and any(dst.iterdir()):
+        return {"ok": False, "error": f"dest not empty: {dst}（先清空或换目录）"}
+    dst.mkdir(parents=True, exist_ok=True)
+    copied, manifest = 0, []
+    for f in _iter_bucket_files(src):
+        rel = f.relative_to(src)
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(f, target)  # 逐字节；不解析不输出
+        manifest.append({"path": str(rel).replace("\\", "/"),
+                         "bytes": f.stat().st_size,
+                         "sha256": hashlib.sha256(f.read_bytes()).hexdigest()})
+        copied += 1
+    (dst / "_manifest.json").write_text(
+        json.dumps({"source": str(src), "files": manifest}, ensure_ascii=False),
+        encoding="utf-8")
+    return {"ok": True, "copied": copied, "dest": str(dst),
+            "note": "副本已就绪；正文未解析未输出；源只读"}
+
+
+# 旧 frontmatter 键 -> 迁移目标/字段 白名单（§20.2 数据清单）
+_TYPE_TARGET = {"dynamic": "memories", "feel": "memories", "permanent": "memories",
+                "plan": "plans", "letter": "letters", "i": "self_entries",
+                "self": "self_entries", "diary": "diary_entries"}
+_KNOWN_KEYS = {"type", "date", "created", "importance", "pinned", "protected",
+               "why_remembered", "meaning", "tags", "domains", "valence",
+               "arousal", "author", "lock_type", "unlock_date", "locked_by",
+               "relations", "title", "content_hash", "deleted_at",
+               "tombstoned_at", "erasure_mode", "erased_at", "tombstone",
+               "deleted", "physical_erasure", "plan_status", "status"}
+
+
+def dry_run_real(fixtures: str, out: str | None = None) -> dict:
+    """对真实副本做逐项元数据映射（正文不进报告；锁信只保留锁参数）。
+
+    核对维度（§20.3）：旧 ID、日期、类型目标、锁 metadata、删除终态、
+    pinned/importance、meaning 层数、未知字段（legacy extension 清单）。
+    """
+    fdir = Path(fixtures)
+    files = _iter_bucket_files(fdir)
+    stats: dict = {"total": 0, "by_target": {}, "no_date": 0, "bad_frontmatter": 0,
+                   "unknown_type": 0, "locked_letters": 0, "deletion_terminal": 0,
+                   "pinned": 0, "with_meaning": 0, "with_relations": 0,
+                   "archived_buckets": 0}
+    entries, unknown_keys = [], {}
+    for f in files:
+        stats["total"] += 1
+        rel = str(f.relative_to(fdir)).replace("\\", "/")
+        name = f.name
+        legacy_id = name.rsplit("_", 1)[-1].replace(".md", "") if "_" in name else name
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            meta, body = parse_frontmatter(text)
+        except OSError:
+            stats["bad_frontmatter"] += 1
+            continue
+        btype = str(meta.get("type") or meta.get("bucket_type") or "").strip().lower()
+        # 旧系统归档目录把 type 改写为 archived：按归档桶迁移（visibility=archived，
+        # 不进新检索，§20.3）；archive 目录内的其他类型同样按目录证据判归档
+        is_archived_dir = rel.startswith("archive/")
+        if btype == "archived":
+            btype, archived_flag = "dynamic", True
+        else:
+            archived_flag = is_archived_dir
+        target = _TYPE_TARGET.get(btype)
+        if target is None:
+            if btype:
+                stats["unknown_type"] += 1
+            else:
+                stats["bad_frontmatter"] += 1
+            entries.append({"path": rel, "target": "UNMAPPED", "type": btype})
+            continue
+        stats["by_target"][target] = stats["by_target"].get(target, 0) + 1
+        date = str(meta.get("date") or "")[:10] or name[:10]
+        if not date[:4].isdigit():
+            stats["no_date"] += 1
+        entry: dict = {"path": rel, "legacy_id": legacy_id, "type": btype,
+                       "target": target,
+                       "migrate_as_archived": archived_flag,
+                       "memory_date": date if date[:4].isdigit() else None,
+                       "payload_sha256": hashlib.sha256(
+                           body.strip().encode("utf-8")).hexdigest(),
+                       "content_bytes": len(body.encode("utf-8"))}
+        if archived_flag:
+            stats["archived_buckets"] += 1
+        if str(meta.get("pinned", "")).lower() in ("true", "1"):
+            entry["pinned"] = True
+            stats["pinned"] += 1
+        if meta.get("importance") is not None:
+            entry["importance_raw"] = str(meta.get("importance"))
+        if isinstance(meta.get("meaning"), list):
+            entry["meaning_layers"] = len(meta["meaning"])
+            stats["with_meaning"] += 1
+        if meta.get("relations"):
+            entry["has_relations"] = True
+            stats["with_relations"] += 1
+        terminal = [k for k in ("deleted_at", "tombstoned_at", "erased_at",
+                                "tombstone", "deleted", "physical_erasure")
+                    if str(meta.get(k, "")).strip() not in ("", "false", "None")]
+        if terminal:
+            entry["deletion_terminal_fields"] = terminal
+            stats["deletion_terminal"] += 1
+        if target == "letters":
+            lock = {"lock_type": str(meta.get("lock_type", "none")),
+                    "unlock_date": meta.get("unlock_date"),
+                    "locked_by": meta.get("locked_by")}
+            entry["letter_lock"] = lock
+            if lock["lock_type"] in ("timed", "locked"):
+                stats["locked_letters"] += 1
+        for k in meta:
+            if k not in _KNOWN_KEYS:
+                unknown_keys[k] = unknown_keys.get(k, 0) + 1
+        entries.append(entry)
+    report = {"ok": True, "kind": "dry_run_real_copy", "source_dir": str(fdir),
+              "stats": stats, "entries": entries,
+              "legacy_extension_keys": sorted(unknown_keys),
+              "note": "正文与锁信正文均未进入报告（hash/字节代替）；"
+                      "apply 到正式库需另行授权"}
+    _emit(report, out)
+    return report
+
+
 def inventory(source: str | None, out: str | None = None) -> dict:
     src = Path(source) if source else Path(LEGACY_BUCKETS_DEFAULT[0])
     if not src.exists():
@@ -197,6 +329,13 @@ def main(argv: list[str] | None = None) -> int:
     p_dry = sub.add_parser("dry-run")
     p_dry.add_argument("--fixtures", required=True)
     p_dry.add_argument("--out")
+    p_snap = sub.add_parser("snapshot")
+    p_snap.add_argument("--source", required=True)
+    p_snap.add_argument("--dest")
+    p_snap.add_argument("--out")
+    p_rr = sub.add_parser("dry-run-real")
+    p_rr.add_argument("--fixtures", required=True)
+    p_rr.add_argument("--out")
     p_ver = sub.add_parser("verify")
     p_ver.add_argument("--report", required=True)
     p_app = sub.add_parser("apply")
@@ -206,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
         r = inventory(args.source, args.out)
     elif args.cmd == "dry-run":
         r = dry_run(args.fixtures, args.out)
+    elif args.cmd == "snapshot":
+        r = snapshot(args.source, args.dest)
+    elif args.cmd == "dry-run-real":
+        r = dry_run_real(args.fixtures, args.out)
     elif args.cmd == "verify":
         r = verify(args.report)
     else:
