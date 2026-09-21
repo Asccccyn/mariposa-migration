@@ -10,7 +10,7 @@
 - 旧“测试桶豁免直删”通道不迁移：mariposa 不暴露无审批物理删除
 
 mariposa 映射：decide approve + action=delete 才物理删除（有审批+限额+审计）；
-archive -> visibility/archived。
+archive -> memory.visibility=archived / letters.archived=1（对齐旧 bucket_mgr.archive）。
 """
 from __future__ import annotations
 
@@ -95,19 +95,26 @@ def lock_state(conn, letter_row) -> dict:
             "unlock_date": letter_row["unlock_date"], "expired": expired}
 
 
-def list_letters(author: str | None = None) -> list[dict]:
-    """metadata-only 列表：排序 letter_date/created 倒序；锁信不返回正文。"""
+def list_letters(author: str | None = None,
+                 include_archived: bool = False) -> list[dict]:
+    """metadata-only 列表：排序 letter_date/created 倒序；锁信不返回正文。
+
+    旧系统语义（bucket_mgr.list_all(include_archive=False)）：默认不含归档信。
+    """
     with db.formal() as conn:
         rows = conn.execute(
             "SELECT * FROM letters ORDER BY COALESCE(letter_date, created_at) DESC"
         ).fetchall()
         out = []
         for r in rows:
+            if r["archived"] and not include_archived:
+                continue
             if author and r["author"] != author:
                 continue
             out.append({
                 "letter_id": r["id"], "author": r["author"],
                 "letter_date": r["letter_date"], "version": r["current_version_no"],
+                "archived": bool(r["archived"]),
                 "lock": lock_state(conn, r),
             })
         return out
@@ -127,7 +134,9 @@ def read_letter(principal_id: str, letter_id: str) -> dict:
             "SELECT * FROM letter_versions WHERE letter_id=? AND version_no=?",
             (letter_id, row["current_version_no"])).fetchone()
         return {"letter_id": letter_id, "author": row["author"],
-                "letter_date": row["letter_date"], "version": row["current_version_no"],
+                "letter_date": row["letter_date"],
+                "version": row["current_version_no"],
+                "archived": bool(row["archived"]),
                 "content": v["content"], "lock": state}
 
 
@@ -327,9 +336,9 @@ def _execute(conn, row, actor: str) -> None:
                          (_now().isoformat(), rid))
             projection.remove(conn, rid)  # 归档即无默认投影
         else:
-            conn.execute("UPDATE letters SET updated_at=? WHERE id=?",
+            # 对齐旧 bucket_mgr.archive：真实归档状态，列表默认不可见，正文保留
+            conn.execute("UPDATE letters SET archived=1, updated_at=? WHERE id=?",
                          (_now().isoformat(), rid))
-            # letters 无独立 visibility 字段：归档语义记入 audit（第一版简化，见 docs）
         return
     # delete：物理删除（有审批+限额+审计门槛；继承旧 HumanDeleteExecutor 语义）
     if kind == "memory":

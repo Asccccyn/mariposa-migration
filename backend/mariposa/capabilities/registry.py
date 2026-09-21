@@ -481,7 +481,9 @@ def _bootstrap(principal: Principal, a: dict) -> dict:
 
 def _bootstrap_next(principal: Principal, a: dict) -> dict:
     return bootstrap.next_page(principal.principal_id, principal.entry_source,
-                               str(a.get("snapshot_id", "")), a.get("cursor") or {})
+                               str(a.get("snapshot_id", "")),
+                               a.get("cursor") or {},
+                               str(a.get("section", "raw")))
 
 
 def _time_now(principal: Principal, a: dict) -> dict:
