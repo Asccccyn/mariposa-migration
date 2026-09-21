@@ -211,8 +211,7 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                 "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
                 " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
         nxt = None
-        if rows and total > len(items):
-            # 粗略剩余估计：窗口总数 - 本页起点之前的项不可知，用下一 cursor 表达
+        if len(items) >= BOOT_SECTION_LIMIT:  # 不足一页 = 到底
             last = rows[-1]
             nxt = {"memory_before_date": last["memory_date"],
                    "memory_last_id": last["memory_id"]}
