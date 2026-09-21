@@ -16,9 +16,15 @@ from mariposa.identity import service as identity  # noqa: E402
 TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}
 
 FORMAL_TABLES = [
+    # 子表在前，父表在后
     "audit_events", "events_outbox", "idempotency_records", "proposal_resolutions",
     "proposal_envelopes", "search_fts", "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",
+    "raw_messages", "raw_conversations",
+    "quote_versions", "quotes",
+    "handoffs",
+    "plan_memory_links", "plan_versions", "plans",
+    "activity_events",
 ]
 WORKSPACE_TABLES = [
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
@@ -28,11 +34,15 @@ WORKSPACE_TABLES = [
 def reset_all() -> None:
     schema.migrate()
     with db.formal() as c:
+        c.execute("PRAGMA foreign_keys=OFF")
         for t in FORMAL_TABLES:
             c.execute(f"DELETE FROM {t}")
+        c.execute("PRAGMA foreign_keys=ON")
     with db.workspace() as c:
+        c.execute("PRAGMA foreign_keys=OFF")
         for t in WORKSPACE_TABLES:
             c.execute(f"DELETE FROM {t}")
+        c.execute("PRAGMA foreign_keys=ON")
     identity.seed(TOKENS)
 
 

@@ -16,6 +16,12 @@ from ..identity import service as identity
 from ..memory import service as memory
 from ..retrieval import search as retrieval_search
 from ..workspace import service as workspace
+from ..raw import service as raw
+from ..quotes import service as quotes
+from ..plans import service as plans
+from ..calendar import service as calendar
+from ..time_context import service as time_ctx
+from ..bootstrap import service as bootstrap
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,42 @@ def _register() -> dict[str, Capability]:
         description="列出工作区提案")
     add("memory.forgetting.decide", _decide, _owners(), True, True,
         description="审批遗忘提案（worker 拒绝）")
+    add("raw.import", _raw_import, {"worker", "qiaosheng", "jiaming"}, True, True,
+        description="导入原文（同源同消息 ID 幂等，不覆盖已存在消息）")
+    add("raw.messages.list", _raw_list, _owners(), False,
+        description="最新 N 条真实消息（默认 30 条，按消息计）")
+    add("raw.search", _raw_search, _owners(), False,
+        description="独立原文查询，命中标 source=raw")
+    add("raw.conversations.list", _raw_convs, _owners(), False,
+        description="已收录会话列表")
+    add("memory.quotes.keep", _quote_keep, {"jiaming"}, True,
+        description="周家明选取保留她的话（允许复述）")
+    add("memory.quotes.list", _quote_list, _owners(), False,
+        description="列出她的话（独立资源）")
+    add("memory.quotes.search", _quote_search, _owners(), False,
+        description="独立 quotes 检索；不得反向算作记忆命中")
+    add("memory.quotes.withdraw", _quote_withdraw, {"qiaosheng", "jiaming"}, True,
+        description="撤下一条（撤下后校对不得重新浮现）")
+    add("handoff.write", _handoff_write, {"jiaming"}, True,
+        description="周家明写给另一入口的交接便签（72h 过期不删除）")
+    add("handoff.latest", _handoff_latest, _owners(), False,
+        description="最新便签（过期标注 expired）")
+    add("plan.create", _plan_create, _owners(), True,
+        description="创建计划（唯一真源，记忆经链接引用）")
+    add("plan.update", _plan_update, _owners(), True,
+        description="修改计划（expected_version 乐观锁）")
+    add("plan.list", _plan_list, _owners(), False, description="列出计划")
+    add("calendar.day", _cal_day, _owners(), False, description="单日聚合视图")
+    add("calendar.range", _cal_range, _owners(), False, description="日期区间聚合（端点含）")
+    add("calendar.month", _cal_month, _owners(), False, description="月视图聚合")
+    add("bootstrap.get", _bootstrap, {"jiaming"}, False,
+        description="两入口开窗（entry_source 校验 profile；worker 拒绝）")
+    add("time.now", _time_now, _everyone(), False, description="真实 now + 共同时区")
+    add("time.context", _time_ctx, _everyone(), False,
+        description="三条时间线分开的活动证据")
+    add("time.since", _time_since, _everyone(), False, description="自最后已知联系")
+    add("presence.touch", _presence_touch, _everyone(), True,
+        description="轻量活动登记（actor 由凭据决定，不可参数自报）")
     return caps
 
 
@@ -186,6 +228,111 @@ def _decide(principal: Principal, a: dict) -> dict:
 def _list_items(principal: Principal, a: dict) -> dict:
     states = a.get("states")
     return {"items": workspace.list_items(states)}
+
+
+def _raw_import(principal: Principal, a: dict) -> dict:
+    return raw.import_payload(principal.principal_id, a)
+
+
+def _raw_list(principal: Principal, a: dict) -> dict:
+    return {"messages": raw.list_recent(int(a.get("limit", raw.BOOT_RAW_MESSAGES)),
+                                         a.get("before")),
+            "counts_messages_not_turns": True}
+
+
+def _raw_search(principal: Principal, a: dict) -> dict:
+    return raw.search(str(a.get("query", "")), int(a.get("limit", 20)))
+
+
+def _raw_convs(principal: Principal, a: dict) -> dict:
+    return {"conversations": raw.conversations_list(int(a.get("limit", 50)))}
+
+
+def _quote_keep(principal: Principal, a: dict) -> dict:
+    return quotes.keep(principal.principal_id, str(a.get("text", "")),
+                       a.get("said_at"), a.get("said_at_confidence", "unknown"),
+                       a.get("raw_ref"))
+
+
+def _quote_list(principal: Principal, a: dict) -> dict:
+    return {"quotes": quotes.list_quotes(bool(a.get("include_withdrawn", False)),
+                                         int(a.get("limit", 100)))}
+
+
+def _quote_search(principal: Principal, a: dict) -> dict:
+    return quotes.search(str(a.get("query", "")), int(a.get("limit", 20)))
+
+
+def _quote_withdraw(principal: Principal, a: dict) -> dict:
+    return quotes.withdraw(principal.principal_id, str(a.get("quote_id", "")))
+
+
+def _handoff_write(principal: Principal, a: dict) -> dict:
+    return time_ctx.handoff_write(principal.principal_id, principal.entry_source,
+                                  str(a.get("content", "")))
+
+
+def _handoff_latest(principal: Principal, a: dict) -> dict:
+    return time_ctx.handoff_latest()
+
+
+def _plan_create(principal: Principal, a: dict) -> dict:
+    return plans.create(
+        principal.principal_id,
+        title=str(a.get("title", "")), content=a.get("content"),
+        state=str(a.get("state", "planned")),
+        starts_at=a.get("starts_at"), due_at=a.get("due_at"),
+        date_start=a.get("date_start"), date_end=a.get("date_end"),
+        timezone_name=a.get("timezone"), all_day=bool(a.get("all_day", False)),
+        weight=a.get("weight"), link_memory_ids=a.get("link_memory_ids"),
+    )
+
+
+def _plan_update(principal: Principal, a: dict) -> dict:
+    return plans.update(
+        principal.principal_id, str(a.get("plan_id", "")),
+        int(a.get("expected_version", 0)), **{
+            k: a[k] for k in
+            ("title", "content", "state", "starts_at", "due_at", "date_start",
+             "date_end", "weight") if k in a})
+
+
+def _plan_list(principal: Principal, a: dict) -> dict:
+    return {"plans": plans.list_plans(a.get("states"))}
+
+
+def _cal_day(principal: Principal, a: dict) -> dict:
+    return calendar.day(str(a.get("date", "")), a.get("types"))
+
+
+def _cal_range(principal: Principal, a: dict) -> dict:
+    return calendar.range_items(str(a.get("start_date", "")),
+                                str(a.get("end_date", "")), a.get("types"))
+
+
+def _cal_month(principal: Principal, a: dict) -> dict:
+    return calendar.month(int(a.get("year", 0)), int(a.get("month", 0)), a.get("types"))
+
+
+def _bootstrap(principal: Principal, a: dict) -> dict:
+    return bootstrap.get(principal.principal_id, principal.entry_source,
+                         str(a.get("profile", "")))
+
+
+def _time_now(principal: Principal, a: dict) -> dict:
+    return time_ctx.now()
+
+
+def _time_ctx(principal: Principal, a: dict) -> dict:
+    return time_ctx.context(principal.principal_id)
+
+
+def _time_since(principal: Principal, a: dict) -> dict:
+    return time_ctx.since(principal.principal_id)
+
+
+def _presence_touch(principal: Principal, a: dict) -> dict:
+    return time_ctx.presence_touch(principal.principal_id, principal.kind)
 
 
 REGISTRY = _register()

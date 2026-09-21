@@ -127,6 +127,110 @@ CREATE TABLE events_outbox(
   processed INTEGER NOT NULL DEFAULT 0
 );
 """),
+    (2, """
+CREATE TABLE raw_conversations(
+  id TEXT PRIMARY KEY,
+  source_channel TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  coverage TEXT NOT NULL DEFAULT 'partial',
+  created_at TEXT NOT NULL,
+  UNIQUE(source_channel, external_id)
+);
+
+CREATE TABLE raw_messages(
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES raw_conversations(id),
+  source_message_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')),
+  speaker_id TEXT,
+  body TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  provenance TEXT NOT NULL DEFAULT 'import',
+  UNIQUE(conversation_id, source_message_id)
+);
+CREATE INDEX idx_raw_messages_time ON raw_messages(occurred_at, sequence);
+
+CREATE TABLE quotes(
+  id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  said_at TEXT,
+  said_at_confidence TEXT NOT NULL DEFAULT 'unknown'
+    CHECK(said_at_confidence IN ('exact','inferred','unknown')),
+  kept_by TEXT NOT NULL,
+  withdrawn INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE quote_versions(
+  quote_id TEXT NOT NULL REFERENCES quotes(id),
+  version_no INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  semantic_status TEXT NOT NULL DEFAULT 'no_source'
+    CHECK(semantic_status IN ('equivalent','material_conflict','uncertain','no_source')),
+  raw_ref TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(quote_id, version_no)
+);
+
+CREATE TABLE handoffs(
+  id TEXT PRIMARY KEY,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  entry_source TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE TABLE plans(
+  id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK(state IN
+    ('planned','active','waiting','blocked','done','cancelled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_plans_state ON plans(state);
+
+CREATE TABLE plan_versions(
+  plan_id TEXT NOT NULL REFERENCES plans(id),
+  version_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT,
+  state TEXT NOT NULL,
+  starts_at TEXT,
+  due_at TEXT,
+  date_start TEXT,
+  date_end TEXT,
+  timezone TEXT,
+  all_day INTEGER NOT NULL DEFAULT 0,
+  weight TEXT,
+  payload_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(plan_id, version_no)
+);
+
+CREATE TABLE plan_memory_links(
+  plan_id TEXT NOT NULL REFERENCES plans(id),
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  PRIMARY KEY(plan_id, memory_id)
+);
+
+CREATE TABLE activity_events(
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN
+    ('user_message','ui_activity','agent_or_system_activity')),
+  principal TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  detail TEXT
+);
+CREATE INDEX idx_activity_kind_time ON activity_events(kind, occurred_at);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
