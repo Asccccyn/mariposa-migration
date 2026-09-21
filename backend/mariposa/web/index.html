@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mariposa</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --fg:#e8e6e1; --dim:#9aa0a8;
+          --accent:#7ab8ad; --warn:#d9a05b; --err:#c96a6a; --ok:#8fbf8f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+           padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 12px 0 0; color:var(--accent); letter-spacing:.5px; }
+  header .who { display:flex; gap:6px; align-items:center; }
+  select, input, button, textarea { background:#111318; color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#10231f; border-color:transparent; font-weight:600; }
+  button.danger { background:transparent; color:var(--err); border-color:var(--err); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #status { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:14px; padding:14px 16px;
+         max-width:1200px; margin:0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:12px 14px; min-width:0; }
+  section h2 { font-size:13px; margin:0 0 10px; color:var(--dim);
+               text-transform:uppercase; letter-spacing:1px; }
+  .item { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; }
+  .item .meta { color:var(--dim); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+         border:1px solid var(--line); color:var(--dim); }
+  .tag.full { color:var(--ok); border-color:var(--ok); }
+  .tag.forgotten { color:var(--warn); border-color:var(--warn); }
+  .tag.state-draft { color:var(--dim); }
+  .tag.state-submitted { color:var(--accent); border-color:var(--accent); }
+  .tag.state-approved_and_applied { color:var(--ok); border-color:var(--ok); }
+  .tag.state-rejected { color:var(--err); border-color:var(--err); }
+  pre.hash { font-size:11px; color:var(--dim); white-space:pre-wrap; word-break:break-all;
+             margin:6px 0; }
+  textarea { width:100%; min-height:54px; resize:vertical; }
+  .row { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .empty { color:var(--dim); font-style:italic; }
+  .err { color:var(--err); font-size:12px; margin-top:6px; white-space:pre-wrap; }
+  .mem-detail { border-top:1px dashed var(--line); margin-top:8px; padding-top:8px;
+                white-space:pre-wrap; }
+  code { background:#111318; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>mariposa</h1>
+  <div class="who">
+    <select id="who">
+      <option value="qiaosheng">江乔生（qiaosheng）</option>
+      <option value="jiaming">周家明（jiaming）</option>
+      <option value="worker">工具人（worker）</option>
+    </select>
+    <input id="token" placeholder="token" size="28" />
+    <button id="saveToken">连接</button>
+  </div>
+  <button id="scanBtn">扫描遗忘候选</button>
+  <button id="newHoldBtn">写一条测试记忆</button>
+  <span id="status"></span>
+</header>
+
+<main>
+  <section id="memSec">
+    <h2>记忆 / 检索</h2>
+    <div class="row">
+      <input id="q" placeholder="关键词，例如：蓝瓷小钥匙" style="flex:1" />
+      <button id="searchBtn" class="primary">搜索</button>
+    </div>
+    <div id="memResults"></div>
+  </section>
+
+  <section id="wsSec">
+    <h2>工作区 / 审批</h2>
+    <div id="wsList"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { token: localStorage.getItem('mariposa_token') || '',
+                who: localStorage.getItem('mariposa_who') || 'qiaosheng' };
+$('who').value = state.who;
+$('token').value = state.token;
+
+function setStatus(t, isErr) {
+  $('status').textContent = t;
+  $('status').style.color = isErr ? 'var(--err)' : 'var(--dim)';
+}
+
+async function api(capability, arguments_, idem) {
+  const headers = { 'Authorization': 'Bearer ' + state.token,
+                    'Content-Type': 'application/json' };
+  if (idem) headers['Idempotency-Key'] = idem;
+  const res = await fetch('/api/capability/' + capability, {
+    method: 'POST', headers,
+    body: JSON.stringify({ arguments: arguments_ || {} }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((body.error && body.error.code) + ': ' +
+    (body.error && body.error.message || res.status));
+  return body.data;
+}
+
+$('saveToken').onclick = () => {
+  state.token = $('token').value.trim();
+  state.who = $('who').value;
+  localStorage.setItem('mariposa_token', state.token);
+  localStorage.setItem('mariposa_who', state.who);
+  refreshAll();
+};
+
+$('searchBtn').onclick = () => searchMemories($('q').value);
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
+
+$('scanBtn').onclick = async () => {
+  try {
+    const d = await api('workspace.forgetting.scan', {});
+    setStatus(`扫描完成：新建草稿 ${d.created.length}，跳过 ${d.skipped.length}`);
+    loadWorkspace();
+  } catch (e) { setStatus(e.message, true); }
+};
+
+$('newHoldBtn').onclick = async () => {
+  const text = prompt('记忆正文（合成测试数据）', '');
+  if (!text) return;
+  try {
+    const d = await api('memory.hold', {
+      text, why_remember: '测试用途',
+      memory_date: new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10),
+      date_confidence: 'exact',
+    });
+    setStatus('已写入 ' + d.memory_id + ' v' + d.version);
+    searchMemories('');
+  } catch (e) { setStatus(e.message, true); }
+};
+
+async function searchMemories(q) {
+  const box = $('memResults');
+  try {
+    const d = await api('memory.search', { query: q || '' });
+    if (!d.hits.length) { box.innerHTML = '<div class="empty">无命中</div>'; return; }
+    box.innerHTML = '';
+    for (const h of d.hits) {
+      const mem = await api('memory.get', { memory_id: h.memory_id });
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML =
+        `<div class="meta"><span>${esc(mem.memory_id)}</span>` +
+        `<span class="tag ${mem.representation}">${mem.representation === 'forgotten_summary' ? '遗忘摘要' : 'full'}</span>` +
+        `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span></div>` +
+        `<div class="mem-detail">${esc(mem.text)}</div>` +
+        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span></div>`;
+      box.appendChild(div);
+    }
+    if (d.degraded) setStatus('语义检索未配置：' + d.degraded);
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function loadWorkspace() {
+  const box = $('wsList');
+  try {
+    const d = await api('workspace.proposals.list', {});
+    if (!d.items.length) { box.innerHTML = '<div class="empty">暂无工作项</div>'; return; }
+    box.innerHTML = '';
+    for (const it of d.items) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      const stale = it.current_memory_version !== null &&
+                    it.base_memory_version !== null &&
+                    it.current_memory_version !== it.base_memory_version;
+      div.innerHTML =
+        `<div class="meta"><span>${esc(it.proposal_id)}</span>` +
+        `<span>r${it.revision}</span><span>${esc(it.created_by)}</span>` +
+        `<span class="tag state-${esc(it.state)}">${esc(it.state)}</span>` +
+        (stale && it.state === 'submitted' ? '<span class="tag">STALE</span>' : '') +
+        `</div>` +
+        `<div>目标：<code>${esc(it.target_memory_id)}</code> ` +
+        `base v${it.base_memory_version ?? '?'} / 当前 v${it.current_memory_version ?? '?'}</div>` +
+        (it.state === 'draft'
+          ? `<textarea id="sum-${esc(it.proposal_id)}" placeholder="审批后将作为唯一检索依据的摘要">${esc(it.compressed_summary || '')}</textarea>` +
+            `<textarea id="rsn-${esc(it.proposal_id)}" placeholder="理由">${esc(it.reason || '')}</textarea>` +
+            `<div class="row"><button data-act="revise" data-id="${esc(it.proposal_id)}">保存修订</button>` +
+            `<button class="primary" data-act="submit" data-id="${esc(it.proposal_id)}" data-rev="${it.revision}">提交</button></div>`
+          : it.state === 'submitted'
+          ? `<div class="mem-detail">${esc(it.compressed_summary || '(无摘要)')}</div>` +
+            `<pre class="hash">hash ${esc(it.proposal_hash)}</pre>` +
+            `<div class="row"><button class="primary" data-act="approve" data-id="${esc(it.proposal_id)}" ` +
+            `data-rev="${it.revision}" data-hash="${esc(it.proposal_hash)}" data-base="${it.base_memory_version}">批准</button>` +
+            `<button class="danger" data-act="reject" data-id="${esc(it.proposal_id)}">拒绝</button></div>`
+          : `<div class="mem-detail">${esc(it.compressed_summary || '')}</div>`);
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+$('wsList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  try {
+    if (btn.dataset.act === 'revise') {
+      const d = await api('workspace.proposals.revise', {
+        proposal_id: id,
+        compressed_summary: document.getElementById('sum-' + id).value,
+        reason: document.getElementById('rsn-' + id).value,
+      });
+      setStatus('修订到 r' + d.revision);
+      loadWorkspace();
+    } else if (btn.dataset.act === 'submit') {
+      const d = await api('workspace.proposals.submit',
+        { proposal_id: id, revision: parseInt(btn.dataset.rev) }, 'submit-' + id + '-' + btn.dataset.rev);
+      setStatus('已提交，hash 冻结');
+      loadWorkspace();
+    } else if (btn.dataset.act === 'approve') {
+      const d = await api('memory.forgetting.decide', {
+        proposal_id: id, proposal_revision: parseInt(btn.dataset.rev),
+        proposal_hash: btn.dataset.hash,
+        expected_memory_version: parseInt(btn.dataset.base),
+        decision: 'approve',
+      }, 'decide-' + id + '-' + btn.dataset.rev);
+      setStatus('已批准并应用：新版本 v' + (d.new_version ?? '?'));
+      loadWorkspace(); searchMemories($('q').value);
+    } else if (btn.dataset.act === 'reject') {
+      await api('memory.forgetting.decide', {
+        proposal_id: id, proposal_revision: parseInt(btn.dataset.rev),
+        proposal_hash: btn.dataset.hash,
+        expected_memory_version: parseInt(btn.dataset.base),
+        decision: 'reject',
+      }, 'reject-' + id + '-' + btn.dataset.rev);
+      setStatus('已拒绝');
+      loadWorkspace();
+    }
+  } catch (err) { setStatus(err.message, true); loadWorkspace(); }
+});
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function refreshAll() { searchMemories(''); loadWorkspace(); }
+if (state.token) refreshAll();
+</script>
+</body>
+</html>

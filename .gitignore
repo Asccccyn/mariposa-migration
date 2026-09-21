@@ -1,0 +1,11 @@
+# 运行数据与本地凭据不入 git
+runtime/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+node_modules/
