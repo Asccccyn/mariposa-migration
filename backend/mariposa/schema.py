@@ -348,6 +348,7 @@ CREATE INDEX idx_memory_tags ON memory_tags(namespace, tag, whose);
 CREATE TABLE bootstrap_snapshots(
   snapshot_id TEXT PRIMARY KEY,
   state_hash TEXT NOT NULL,
+  profile TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 """),
