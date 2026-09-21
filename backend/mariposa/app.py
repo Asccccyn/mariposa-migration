@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, schema
+from .capabilities import mcp_adapter
 from .capabilities import registry
 from .errors import MariposaError
 from .identity import service as identity
@@ -84,6 +85,18 @@ async def _json_body(request: Request) -> dict:
 async def db_error(request: Request, exc: sqlite3.Error):
     return JSONResponse(status_code=500, content={
         "ok": False, "error": {"code": "INTERNAL", "message": "database error"}})
+
+
+# MCP：/mcp（周家明业务 profile）与 /mcp/maintenance（工具人 profile）。
+# 路径只是分流约定；每条请求按 token binding 决定实际权限（§17.1）。
+@app.post("/mcp")
+async def mcp_business(request: Request):
+    return await mcp_adapter.handle(request, "business")
+
+
+@app.post("/mcp/maintenance")
+async def mcp_maintenance(request: Request):
+    return await mcp_adapter.handle(request, "maintenance")
 
 
 if WEB_DIR.exists():
