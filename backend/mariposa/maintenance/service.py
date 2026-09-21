@@ -65,10 +65,20 @@ def reminders_fire_due(now: str | None = None) -> dict:
         rows = conn.execute(
             "SELECT id, title FROM reminders WHERE status='scheduled'"
             " AND remind_at<=?", (now,)).fetchall()
-        for r in rows:
-            conn.execute(
-                "UPDATE reminders SET status='fired', updated_at=? WHERE id=?"
-                " AND status='scheduled'", (now, r["id"]))
+        from .. import audit as _audit
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for r in rows:
+                conn.execute(
+                    "UPDATE reminders SET status='fired', updated_at=? WHERE id=?"
+                    " AND status='scheduled'", (now, r["id"]))
+                _audit.record(conn, "reminder.due", "system",
+                              resource_id=r["id"],
+                              payload={"title": r["title"]})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"fired": [dict(r) for r in rows]}
 
 
@@ -99,3 +109,24 @@ def reconcile_workspace() -> dict:
                     (target, _now(), pid))
                 fixed += 1
     return {"checked": len(res_map), "fixed": fixed}
+
+
+def jobs_status() -> dict:
+    """维护任务状态总览：outbox 待处理、租约、导入任务。"""
+    with db.formal() as conn:
+        pending = conn.execute(
+            "SELECT COUNT(*) AS c FROM events_outbox WHERE processed=0"
+        ).fetchone()["c"]
+        imports = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM import_jobs GROUP BY status"
+        ).fetchall()
+    with db.workspace() as wconn:
+        leases = wconn.execute(
+            "SELECT COUNT(*) AS c FROM workspace_task_leases WHERE released=0"
+            " AND expires_at>?", (_now(),)).fetchone()["c"]
+        open_items = wconn.execute(
+            "SELECT COUNT(*) AS c FROM work_items WHERE state IN"
+            " ('draft','submitted','deferred')").fetchone()["c"]
+    return {"outbox_pending": pending, "active_leases": leases,
+            "open_work_items": open_items,
+            "import_jobs": {r["status"]: r["c"] for r in imports}}

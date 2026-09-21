@@ -41,6 +41,15 @@ async function resetForgottenToFull() {
           expected_current_version: got.data.version } } });
     }
   }
+  // pin 住全部历史候选桶，保证本轮新桶是唯一 scan 候选（batch=20）
+  const all = await (await ctx.post("/api/capability/memory.list",
+    { data: { arguments: { limit: 100 } } })).json();
+  for (const m of all.data?.items ?? []) {
+    if (!m.pinned) {
+      await ctx.post("/api/capability/memory.pin",
+        { data: { arguments: { memory_id: m.memory_id, value: true } } });
+    }
+  }
   await ctx.dispose();
 }
 

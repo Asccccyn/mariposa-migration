@@ -154,3 +154,61 @@ def conversations_list(limit: int = 50) -> list[dict]:
             "SELECT * FROM raw_conversations ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def import_prepare(principal_id: str, source_channel: str, external_id: str,
+                   message_count: int) -> dict:
+    """两阶段导入第一步：登记 import_job（解析器版本化）。"""
+    import uuid as _u
+    from .. import audit as _audit
+    jid = f"ij_{_u.uuid4().hex[:10]}"
+    now = _now()
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT INTO import_jobs(id, source_channel, external_id,"
+                " status, message_count, created_at, updated_at)"
+                " VALUES(?,?,?,'prepared',?,?,?)",
+                (jid, source_channel, external_id, int(message_count), now, now))
+            _audit.record(conn, "raw.import.prepared", principal_id,
+                          resource_id=jid,
+                          payload={"external_id": external_id})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"job_id": jid, "status": "prepared"}
+
+
+def import_status(job_id: str) -> dict:
+    with db.formal() as conn:
+        row = conn.execute("SELECT * FROM import_jobs WHERE id=?",
+                           (job_id,)).fetchone()
+    if row is None:
+        from ..errors import NotFound as _NF
+        raise _NF("import job not found", job_id=job_id)
+    return dict(row)
+
+
+def import_complete(job_id: str, payload: dict, principal_id: str) -> dict:
+    """两阶段第二步：执行导入并把 job 标记 completed（或 failed）。"""
+    out = import_payload(principal_id, payload)
+    with db.formal() as conn:
+        conn.execute(
+            "UPDATE import_jobs SET status='completed', updated_at=? WHERE id=?",
+            (_now(), job_id))
+    return out
+
+
+def read_message(message_id: str) -> dict:
+    """明确的单条原文读取（独立能力，标 source=raw）。"""
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT rm.*, rc.source_channel FROM raw_messages rm"
+            " JOIN raw_conversations rc ON rc.id = rm.conversation_id"
+            " WHERE rm.id=?", (message_id,)).fetchone()
+    if row is None:
+        from ..errors import NotFound as _NF
+        raise _NF("raw message not found", message_id=message_id)
+    return {**dict(row), "source": "raw"}

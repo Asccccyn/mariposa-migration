@@ -462,9 +462,51 @@ CREATE TABLE moment_reactions(
   PRIMARY KEY(moment_id, principal)
 );
 """),
+    (8, """
+CREATE TABLE memory_meanings(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  layer_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  written_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, layer_no)
+);
+
+CREATE TABLE stickers(
+  content_hash TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  storage_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE import_jobs(
+  id TEXT PRIMARY KEY,
+  source_channel TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'prepared'
+    CHECK(status IN ('prepared','completed','failed')),
+  message_count INTEGER NOT NULL DEFAULT 0,
+  parser_version TEXT NOT NULL DEFAULT 'raw_json_v1',
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
+    (2, """
+CREATE TABLE IF NOT EXISTS workspace_task_leases(
+  lease_id TEXT PRIMARY KEY,
+  task_key TEXT NOT NULL,
+  claimed_by TEXT NOT NULL,
+  claimed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  released INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_task_leases ON workspace_task_leases(task_key, released);
+"""),
     (1, """
 CREATE TABLE work_items(
   item_id TEXT PRIMARY KEY,

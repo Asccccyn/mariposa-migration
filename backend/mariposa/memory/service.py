@@ -36,9 +36,24 @@ def hold(
     memory_date: str | None = None,
     date_confidence: str = "unknown",
     entry_source: str | None = None,
+    raw_refs: list[dict] | None = None,
 ) -> dict:
     if not text or not text.strip():
         raise Forbidden("hold text required")
+    # §9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有记录，不新建
+    import hashlib as _hl
+    if raw_refs:
+        with db.formal() as conn:
+            for ref in raw_refs:
+                src_hash = _hl.sha256(
+                    f"{ref.get('conversation_id')}:{ref.get('message_from')}"
+                    f":{ref.get('message_to')}".encode()).hexdigest()
+                dup = conn.execute(
+                    "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
+                    " AND bind_confidence<>'revoked'", (src_hash,)).fetchone()
+                if dup:
+                    return {"memory_id": dup["memory_id"],
+                            "deduplicated": True}
     memory_id = f"mem_{uuid.uuid4().hex[:12]}"
     payload = {
         "representation": "full",
@@ -67,6 +82,21 @@ def hold(
                 conn, memory_id, 1, "full",
                 projection.build_full(text, why_remember),
             )
+            if raw_refs:
+                for ref in raw_refs:
+                    src_hash = _hl.sha256(
+                        f"{ref.get('conversation_id')}:{ref.get('message_from')}"
+                        f":{ref.get('message_to')}".encode()).hexdigest()
+                    conn.execute(
+                        "INSERT OR REPLACE INTO memory_raw_refs(memory_id,"
+                        " conversation_id, message_from, message_to, source_hash,"
+                        " bind_confidence, created_at) VALUES(?,?,?,?,?,'exact',?)",
+                        (memory_id, ref.get("conversation_id"),
+                         ref.get("message_from"), ref.get("message_to"),
+                         src_hash, now))
+                conn.execute(
+                    "UPDATE memories SET source_state='bound' WHERE memory_id=?",
+                    (memory_id,))
             audit.record(
                 conn, "memory.created", principal.principal_id,
                 resource_id=memory_id, resource_version=1,
@@ -198,6 +228,10 @@ def apply_forget_approval(
         (proposal_id, decided_by, decided_binding, new_version, now),
     )
     audit.record(
+        conn, "workspace.proposal.resolved", decided_by,
+        resource_id=proposal_id,
+        payload={"decision": "approved", "memory": memory_id})
+    audit.record(
         conn, "memory.forgotten", decided_by,
         resource_id=memory_id, resource_version=new_version,
         initiated_by=envelope["submitted_by"],
@@ -222,6 +256,9 @@ def reject_or_withdraw(
         " applied_memory_version, decided_at) VALUES(?,?,?, ?,NULL,?)",
         (proposal_id, decision, decided_by, decided_binding, _now()),
     )
+    audit.record(
+        conn, "workspace.proposal.resolved", decided_by,
+        resource_id=proposal_id, payload={"decision": decision})
     audit.record(
         conn, f"workspace.proposal.{decision}", decided_by,
         resource_id=proposal_id,

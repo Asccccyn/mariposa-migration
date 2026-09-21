@@ -31,9 +31,11 @@ FORMAL_TABLES = [
     "memory_relations", "memory_raw_refs", "provisional_sources",
     "reminders", "media_objects", "moment_reactions", "moment_comments",
     "moment_versions", "moments", "rejection_suppression",
+    "memory_meanings", "stickers", "import_jobs",
 ]
 WORKSPACE_TABLES = [
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
+    "workspace_task_leases",
 ]
 
 
