@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { call, getWho } from "./api";
+import { call, getToken, getWho } from "./api";
 import { Empty, Err, fmtRep, Item, Meta, Tag } from "./ui";
 
 type Hit = { memory_id: string; matched_by: string; representation?: string };
@@ -602,6 +602,84 @@ export function Content({ note }: { note: (s: string, err?: boolean) => void }) 
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+type MediaObj = { content_hash: string; mime: string; size: number;
+                  owned_by: string; created_at: string };
+
+export function MediaLib({ note }: { note: (s: string, e?: boolean) => void }) {
+  const { data, error, reload } = useAsync<{ objects: MediaObj[] }>(
+    () => call("media.list", {}), []);
+  const [file, setFile] = useState<File | null>(null);
+
+  const upload = async () => {
+    if (!file) return;
+    try {
+      const prep = await call<{ upload_token: string; stage_url: string }>(
+        "media.upload.prepare", { mime: file.type || "image/png", size: file.size });
+      const stageRes = await fetch(prep.stage_url, {
+        method: "PUT", headers: { "Authorization": `Bearer ${getToken()}` },
+        body: await file.arrayBuffer(),
+      });
+      if (!stageRes.ok) throw new Error(`stage ${stageRes.status}`);
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (const b of buf) bin += String.fromCharCode(b);
+      const out = await call<{ content_hash: string; deduplicated: boolean }>(
+        "media.upload.finalize",
+        { upload_token: prep.upload_token, data_b64: btoa(bin) });
+      note(out.deduplicated ? "已存在（hash 去重）" : `已上传 ${out.content_hash.slice(0, 12)}…`);
+      setFile(null); reload();
+    } catch (e) { note(String(e), true); }
+  };
+
+  return (
+    <div>
+      <div className="row">
+        <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        <button className="primary" onClick={upload}>上传（两步+hash 去重）</button>
+      </div>
+      {error ? <Err e={error} /> : null}
+      {data?.objects.length ? data.objects.map((m) => (
+        <Item key={m.content_hash}>
+          <Meta>
+            <code>{m.content_hash.slice(0, 16)}…</code>
+            <span>{m.mime}</span><span>{m.size}B</span>
+            <span>{m.owned_by}</span><span>{m.created_at.slice(0, 10)}</span>
+          </Meta>
+          <img src={`/api/media/object/${m.content_hash}`} alt="" style={{ maxWidth: 120, marginTop: 6 }} />
+        </Item>
+      )) : <Empty>暂无媒体对象</Empty>}
+    </div>
+  );
+}
+
+type Settings = Record<string, unknown>;
+
+export function SettingsPage() {
+  const { data, error } = useAsync<Settings>(
+    () => call("maintenance.settings.get", {}), []);
+  if (error) return <Err e={error} />;
+  if (!data) return <Empty>加载中…</Empty>;
+  const section = (title: string, obj: unknown) => (
+    <Item key={title}>
+      <Meta><strong>{title}</strong></Meta>
+      <pre className="hash">{JSON.stringify(obj, null, 2)}</pre>
+    </Item>
+  );
+  return (
+    <div>
+      {Object.entries(data).filter(([, v]) => typeof v === "object" && v !== null)
+        .map(([k, v]) => section(k, v))}
+      {Object.entries(data).filter(([, v]) => typeof v !== "object")
+        .map(([k, v]) => (
+          <Item key={k}>
+            <Meta><span>{k}</span><strong>{String(v)}</strong></Meta>
+          </Item>
+        ))}
+      <Empty>只读快照；修改经部署参数（policy version 变更入审计）。</Empty>
     </div>
   );
 }

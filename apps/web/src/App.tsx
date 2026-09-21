@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { getWho, getToken, saveAuth } from "./api";
-import { Calendar, Content, Deletions, Memories, Plans, Quotes, Workspace }
+import { Calendar, Content, Deletions, MediaLib, Memories, Plans, Quotes, SettingsPage, Workspace }
   from "./pages";
 
 const TABS = [
@@ -11,6 +11,8 @@ const TABS = [
   { id: "quote", label: "她的话" },
   { id: "del", label: "删除申请" },
   { id: "content", label: "Home / Self / 日记" },
+  { id: "media", label: "媒体库" },
+  { id: "settings", label: "设置" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -59,6 +61,8 @@ export default function App() {
         {tab === "quote" ? <Quotes note={note} /> : null}
         {tab === "del" ? <Deletions note={note} /> : null}
         {tab === "content" ? <Content note={note} /> : null}
+        {tab === "media" ? <MediaLib note={note} /> : null}
+        {tab === "settings" ? <SettingsPage /> : null}
       </main>
     </>
   );

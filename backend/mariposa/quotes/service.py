@@ -96,3 +96,27 @@ def withdraw(principal_id: str, quote_id: str) -> dict:
             conn.execute("ROLLBACK")
             raise
     return {"quote_id": quote_id, "withdrawn": True}
+
+
+def get_quote(quote_id: str) -> dict:
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT q.id, q.current_version_no, q.said_at, q.said_at_confidence,"
+            " q.kept_by, q.withdrawn, v.text, v.semantic_status, v.raw_ref"
+            " FROM quotes q JOIN quote_versions v ON v.quote_id = q.id"
+            " AND v.version_no = q.current_version_no WHERE q.id=?",
+            (quote_id,)).fetchone()
+    if row is None:
+        raise NotFound("quote not found", quote_id=quote_id)
+    return dict(row)
+
+
+def by_memory(memory_id: str) -> list[dict]:
+    with db.formal() as conn:
+        rows = conn.execute(
+            "SELECT q.id, q.current_version_no, v.text FROM quotes q"
+            " JOIN quote_versions v ON v.quote_id = q.id"
+            " AND v.version_no = q.current_version_no"
+            " WHERE q.withdrawn=0 AND v.raw_ref LIKE ?",
+            (f"%{memory_id}%",)).fetchall()
+    return [dict(r) for r in rows]

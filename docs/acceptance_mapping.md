@@ -117,14 +117,31 @@
 | 4 路并发 decide 恰一生效；崩溃对账修复+幂等 | `TestConcurrency` 2 项 | ✅ |
 | 迁移 apply 演练（落库+置顶/锁保留+大报告拒绝） | `TestMigrationApplyDrill` 2 项 | ✅ |
 
+## 6e. 第 5 轮新增（§17.3 必需能力补全 + 勘误）
+
+| 场景 | 测试 | 状态 |
+|---|---|---|
+| memory.list/by_date/by_tag（namespace/whose 过滤） | `TestListing` | ✅ |
+| meaning 追加纳入投影可搜；替换归档留底不再可搜；遗忘桶 meaning 不可搜；仅周家明 | `TestMeanings` 3 项 | ✅ |
+| **管理员重建索引后遗忘桶旧词不可搜（§8.5 末条）** | `TestRebuildIndex` | ✅ |
+| 任务租约：冲突/仅认领人释放/重领；inspect 授权材料 | `TestTaskLeases` 2 项 | ✅ |
+| hold(raw_refs) 同源重复返回已有记录不新建 | `TestHoldDedupe` | ✅ |
+| quotes.get/by_memory；diary.read/revise（版本+作者校验） | `TestQuotesDiaryExtras` | ✅ |
+| sticker add/list/search（引用已上传媒体，hash 校验） | `TestStickersAndTwoPhaseImport` | ✅ |
+| 两阶段导入 prepare/status/complete + raw.read | 同上 | ✅ |
+| 事件补齐：emotion.changed / reminder.due / proposal.resolved | `TestEventsBackfill` 2 项 | ✅ |
+| Web 媒体库（两步上传）与设置页（只读快照） | E2E 回归保持 2 绿 | ✅ |
+
+> 勘误：第 4 轮曾报告"可做项已清零"，经逐节重查不实；上表为补齐项。
+
 ## 7. 未实现（如实清单，非失败）
 
 - Web React/Vite 版（当前为后端直出的功能页，真实 API 驱动）
-- 表情包（sticker）搜索/发送：not_started（媒体管道已就绪）
+- 表情发送进聊天流：blocked（依赖 chat/CC）
 - 自动唤醒 wakeup.*：not_started（AUTO_WAKEUP_ENABLED=false；提醒结算已可手动/可接 scheduler）
 - 情绪系统算法：reserved（`memory.by_emotion` 未实现；情绪标签 whose 字段未启用）
 - 语义 embedding provider：blocked（未配置；关键词/日期/标签/关联路径完整可用）
-- 新能力（moments/reminders/media/relations 等）的 Web UI 页签：下一轮（API/MCP 均已可达）
+- Web UI：朋友圈/提醒/任务租约/她的话校对工作区等新能力页签（核心六页签+内容三页签+媒体库+设置已就绪）
 - Chat/CC 会话流：blocked（依赖 CC 前置）
 - Siren/Superposition/扎西德勒 provider：blocked（未做只读契约核验）
 

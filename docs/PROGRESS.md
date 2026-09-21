@@ -2,6 +2,27 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-21 · 第 5 轮（§17.3 必需能力补全 + 勘误）
+
+**勘误**：第 4 轮报告"工程文档可做项已清零"为**过度宣称**。逐节重查 §17.3
+最低能力覆盖表后发现一批遗漏（本栏如实记录并全部补齐）：
+memory.list/by_date/by_tag、meanings.append/replace（§10.5 必需而非可选）、
+quotes.get/by_memory、diary.read/revise、workspace.tasks.claim 系列与 task_leases、
+hold 带 raw_refs 的同源去重（§9.3 前半）、**重建索引命令与 §8.5 最后一条
+标志性测试**、calendar.providers/presence.status/jobs.status、必须事件
+（emotion.changed/reminder.due/proposal.resolved）、sticker、两阶段导入、
+raw.read、Web 设置页与媒体库页。
+
+- schema v8：memory_meanings（层号<1000 有效，>=1000 归档留底）、
+  workspace v2 task_leases、stickers、import_jobs
+- meaning：只周家明写；追加纳入 full 投影（可搜）；替换旧层归档留底且不再可搜；
+  遗忘桶 meaning 不进默认检索（§10.5 实测）
+- 重建索引：按当前版本全量重建；**重建后遗忘桶旧词不可搜**（标志性测试钉住）
+- 任务租约：claim 冲突 LEASE_HELD/仅认领人 release/过期重领；inspect 只给授权材料
+- hold(raw_refs)：同消息范围已绑定 -> 返回已有记录不新建（deduplicated=true）
+- Web：新增媒体库（两步上传+预览）与设置页（只读配置快照）；E2E 2 项保持绿
+- **后端 131 测试 + E2E 2 项全绿**；能力 110（契约同源导出）
+
 ## 2026-09-21 · 第 4 轮（第一版范围收尾：能力 55→86）
 
 - memory：update（新版本+重建投影）/pin/protect/anchor/versions.list（flag 排除自动候选实测）
@@ -53,7 +74,7 @@
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：117 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
+**测试**：131 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态

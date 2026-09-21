@@ -308,11 +308,15 @@ def tags_add(principal_id: str, memory_id: str, tags: list[dict]) -> dict:
                 if whose not in ("jiaming", "qiaosheng"):
                     raise Forbidden("emotion tag requires whose=jiaming|qiaosheng",
                                     tag=t)
-                conn.execute(
+                cur2 = conn.execute(
                     "INSERT OR IGNORE INTO memory_tags(memory_id, namespace, tag,"
                     " whose, confidence, created_by) VALUES(?,?,?,?, 'human', ?)",
                     (memory_id, t.get("namespace", "emotion"), str(t.get("tag", "")),
                      whose, principal_id))
+                if cur2.rowcount and t.get("namespace", "emotion") == "emotion":
+                    audit.record(conn, "memory.emotion.changed", principal_id,
+                                 resource_id=memory_id,
+                                 payload={"tag": t.get("tag"), "whose": whose})
                 added += 1
             conn.execute("COMMIT")
         except Exception:
@@ -336,3 +340,64 @@ def by_emotion(tag: str, whose: str) -> dict:
             "hits": [{"memory_id": r["memory_id"],
                       "representation": r["compression_state"],
                       "matched_by": "tag"} for r in rows]}
+
+
+def diary_read(diary_id: str) -> dict:
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT d.id, d.author, d.hidden, d.current_version_no, v.title,"
+            " v.content, d.covers_from, d.covers_to FROM diary_entries d"
+            " JOIN diary_versions v ON v.diary_id = d.id"
+            " AND v.version_no = d.current_version_no WHERE d.id=?",
+            (diary_id,)).fetchone()
+    if row is None:
+        raise NotFound("diary not found", diary_id=diary_id)
+    return dict(row)
+
+
+def diary_revise(principal_id: str, diary_id: str, expected_version: int,
+                 title: str | None = None, content: str | None = None) -> dict:
+    """日记修订：新版本留底；全文逐字保留，不摘要替换（§10.5）。"""
+    from .. import audit as _audit
+    with db.formal() as conn:
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?",
+                           (diary_id,)).fetchone()
+        if row is None:
+            raise NotFound("diary not found", diary_id=diary_id)
+        if row["author"] != principal_id:
+            raise Forbidden("only the author may revise a diary entry")
+        if row["current_version_no"] != expected_version:
+            raise Forbidden("diary version conflict", code="VERSION_CONFLICT",
+                            expected=expected_version,
+                            current=row["current_version_no"])
+        v = conn.execute(
+            "SELECT * FROM diary_versions WHERE diary_id=? AND version_no=?",
+            (diary_id, expected_version)).fetchone()
+        new_title = title if title is not None else v["title"]
+        new_content = content if content is not None else v["content"]
+        new_version = expected_version + 1
+        now = _now().isoformat()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT INTO diary_versions(diary_id, version_no, title,"
+                " content, edited_by, payload_hash, created_at)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (diary_id, new_version, new_title, new_content, principal_id,
+                 _hash({"t": new_title, "c": new_content, "v": new_version}), now))
+            conn.execute(
+                "UPDATE diary_entries SET current_version_no=?, updated_at=?"
+                " WHERE id=?", (new_version, now, diary_id))
+            _audit.record(conn, "diary.revised", principal_id,
+                          resource_id=diary_id, resource_version=new_version)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"diary_id": diary_id, "version": new_version}
+
+
+def calendar_providers() -> list[dict]:
+    from ..calendar import service as calendar
+    return [{"name": k, "description": f"{k} calendar item provider"}
+            for k in calendar.PROVIDERS]
