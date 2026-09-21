@@ -18,6 +18,7 @@ from ..retrieval import search as retrieval_search
 from ..workspace import service as workspace
 from ..raw import service as raw
 from ..quotes import service as quotes
+from ..quotes import semantic_review
 from ..plans import service as plans
 from ..calendar import service as calendar
 from ..time_context import service as time_ctx
@@ -146,6 +147,11 @@ def _register() -> dict[str, Capability]:
         description="加标签（情绪标签 whose 必填）")
     add("memory.by_emotion", _by_emotion, _owners(), False,
         description="按情绪查（结构化入口，遗忘桶仍可查）")
+    add("workspace.quotes.review.run", _quote_review_run,
+        {"worker", "jiaming", "qiaosheng"}, True,
+        description="执行她的话语义校对（provider 未配置一律挂起不写）")
+    add("workspace.quotes.reviews.list", _quote_reviews_list, _owners(), False,
+        description="校对工作项列表")
     return caps
 
 
@@ -491,6 +497,15 @@ def _tags_add(principal: Principal, a: dict) -> dict:
 
 def _by_emotion(principal: Principal, a: dict) -> dict:
     return content.by_emotion(str(a.get("tag", "")), str(a.get("whose", "")))
+
+
+def _quote_review_run(principal: Principal, a: dict) -> dict:
+    return semantic_review.run_review(str(a.get("quote_id", "")),
+                                      a.get("raw_text"))
+
+
+def _quote_reviews_list(principal: Principal, a: dict) -> dict:
+    return {"items": semantic_review.reviews_list(a.get("states"))}
 
 
 REGISTRY = _register()

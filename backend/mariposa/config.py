@@ -29,6 +29,8 @@ FORGET_SCHEDULE_ENABLED = False  # 初期无自动扫描；只能手动触发 sc
 FORGET_SCAN_BATCH_SIZE = 20
 
 SEMANTIC_PROVIDER = os.environ.get("MARIPOSA_SEMANTIC_PROVIDER", "")  # 空 = 未配置
+QUOTE_SEMANTIC_AUTO_APPLY = os.environ.get(
+    "MARIPOSA_QUOTE_SEMANTIC_AUTO_APPLY", "true").lower() in ("1", "true", "yes")
 
 CONTRACT_VERSION = "1.0"
 
