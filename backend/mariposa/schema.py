@@ -231,6 +231,46 @@ CREATE TABLE activity_events(
 );
 CREATE INDEX idx_activity_kind_time ON activity_events(kind, occurred_at);
 """),
+    (3, """
+CREATE TABLE letters(
+  id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  letter_date TEXT,
+  lock_type TEXT NOT NULL DEFAULT 'none' CHECK(lock_type IN ('none','timed','locked')),
+  unlock_date TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE letter_versions(
+  letter_id TEXT NOT NULL REFERENCES letters(id),
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  edited_by TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(letter_id, version_no)
+);
+
+CREATE TABLE deletion_requests(
+  id TEXT PRIMARY KEY,
+  resource_id TEXT NOT NULL,
+  resource_kind TEXT NOT NULL CHECK(resource_kind IN ('memory','letter')),
+  action TEXT NOT NULL CHECK(action IN ('archive','delete')),
+  human_reason TEXT NOT NULL,
+  ai_reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK(status IN
+    ('pending','approved','rejected','withdrawn','superseded')),
+  submitted_by TEXT NOT NULL,
+  submitted_at TEXT NOT NULL,
+  local_date TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by TEXT
+);
+CREATE INDEX idx_deletion_resource ON deletion_requests(resource_id);
+CREATE INDEX idx_deletion_status ON deletion_requests(status, local_date);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

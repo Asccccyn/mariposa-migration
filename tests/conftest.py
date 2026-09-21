@@ -25,6 +25,7 @@ FORMAL_TABLES = [
     "handoffs",
     "plan_memory_links", "plan_versions", "plans",
     "activity_events",
+    "letter_versions", "letters", "deletion_requests",
 ]
 WORKSPACE_TABLES = [
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
