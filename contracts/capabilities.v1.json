@@ -13,6 +13,16 @@
       "description": "两入口开窗（entry_source 校验 profile；worker 拒绝）"
     },
     {
+      "canonical_name": "bootstrap.next",
+      "transport_name": "mariposa_bootstrap_next",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "续取开窗分页（snapshot 变化返回 SNAPSHOT_STALE）"
+    },
+    {
       "canonical_name": "calendar.day",
       "transport_name": "mariposa_calendar_day",
       "allowed_principals": [
@@ -574,6 +584,29 @@
       "write": true,
       "idempotent": true,
       "description": "提交提案：冻结版本并登记正式 envelope"
+    },
+    {
+      "canonical_name": "workspace.quotes.review.run",
+      "transport_name": "mariposa_workspace_quotes_review_run",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng",
+        "worker"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "执行她的话语义校对（provider 未配置一律挂起不写）"
+    },
+    {
+      "canonical_name": "workspace.quotes.reviews.list",
+      "transport_name": "mariposa_workspace_quotes_reviews_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "校对工作项列表"
     }
   ]
 }

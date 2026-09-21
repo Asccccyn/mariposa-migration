@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { call, getWho } from "./api";
 import { Empty, Err, fmtRep, Item, Meta, Tag } from "./ui";
 
@@ -27,11 +27,14 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
   const [hits, setHits] = useState<Hit[]>([]);
   const [detail, setDetail] = useState<Record<string, Mem>>({});
   const [error, setError] = useState<unknown>();
+  const reqSeq = useRef(0);
 
   const search = useCallback(async (query: string) => {
+    const seq = ++reqSeq.current;
     try {
       const d = await call<{ hits: Hit[]; degraded?: string }>("memory.search",
         { query });
+      if (seq !== reqSeq.current) return; // 过期响应丢弃（最新请求胜出）
       setHits(d.hits);
       setError(undefined);
       if (d.degraded) note(`语义检索未配置：${d.degraded}`);
@@ -40,8 +43,8 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
         next[h.memory_id] = await call<Mem>("memory.get",
           { memory_id: h.memory_id });
       }
-      setDetail(next);
-    } catch (e) { setError(e); }
+      if (seq === reqSeq.current) setDetail(next);
+    } catch (e) { if (seq === reqSeq.current) setError(e); }
   }, [note]);
 
   useEffect(() => { search(""); }, [search]);
@@ -72,7 +75,9 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
     <div>
       <div className="row">
         <input value={q} onChange={(e) => setQ(e.target.value)}
-               onKeyDown={(e) => e.key === "Enter" && search(q)}
+               onKeyDown={(e) => {
+                 if (e.key === "Enter") search(e.currentTarget.value);
+               }}
                placeholder="关键词，例如：蓝瓷小钥匙" style={{ flex: 1 }} />
         <button className="primary" onClick={() => search(q)}>搜索</button>
         <button onClick={() => call("workspace.forgetting.scan", {})
