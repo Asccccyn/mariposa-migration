@@ -88,6 +88,19 @@
 | bootstrap SNAPSHOT_STALE（资源变化/未知 snapshot） | `TestBootstrapSnapshot` 2 项 + 真实服务验证 | ✅ |
 | bootstrap 入口与 profile 不匹配拒绝（claude_chat 绑定调 cc profile） | 真实服务验证 FORBIDDEN | ✅ |
 
+## 6c. 第 3 轮新增（分页/校对管线/React Web/E2E）
+
+| 场景 | 测试 | 状态 |
+|---|---|---|
+| bootstrap 分页：75 条三页全量可达不重叠不截断 | `test_bootstrap_paging.py` 4 项 | ✅ |
+| 续取时资源变化 SNAPSHOT_STALE | `test_page2_stale_when_resources_change` | ✅ |
+| 语义校对：无 provider 挂起零写动作 | `test_no_provider_suspends_without_write` | ✅ |
+| 撤下 quote 校对不复活 | `test_withdrawn_never_revived` | ✅ |
+| 双步一致 material_conflict 狭窄修正（旧版本留底+审计） | `test_material_conflict_applied` | ✅ |
+| 双步不一致 uncertain 挂起；auto_apply=false 转人工 | 2 项 | ✅ |
+| 浏览器级完整遗忘闭环（React 版 /app） | `apps/web/e2e` 2 项 | ✅ |
+| 外部 provider 只读核验 | `docs/provider_contracts.md` | ✅ 核验（接入待凭据） |
+
 ## 7. 未实现（如实清单，非失败）
 
 - Web React/Vite 版（当前为后端直出的功能页，真实 API 驱动）

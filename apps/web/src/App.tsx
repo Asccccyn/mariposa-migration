@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { getWho, getToken, saveAuth } from "./api";
 import { Calendar, Content, Deletions, Memories, Plans, Quotes, Workspace }
   from "./pages";
@@ -20,7 +20,9 @@ export default function App() {
   const [who, setWho] = useState(getWho());
   const [token, setToken] = useState(getToken());
   const [status, setStatus] = useState<{ text: string; err?: boolean } | null>(null);
-  const note = (text: string, err?: boolean) => setStatus({ text, err });
+  // 固定引用：否则子组件 useCallback/useEffect 依赖失效，造成无限请求循环
+  const note = useCallback(
+    (text: string, err?: boolean) => setStatus({ text, err }), []);
 
   return (
     <>

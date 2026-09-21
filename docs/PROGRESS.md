@@ -2,6 +2,17 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-21 · 第 3 轮（分页/语义校对/provider 核验/React Web/E2E）
+
+- bootstrap.next 分页 cursor（不静默截断；资源变化 SNAPSHOT_STALE 不一半新一半旧）+4 测试
+- quotes 语义校对受控管线：双步判定、无 provider 挂起不写、撤下不复活、狭窄修正留底 +7 测试
+- provider 只读契约核验（docs/provider_contracts.md）：Superposition 8321 实测 v1.3.0；
+  Siren 8790 实测 v1.1.1（其语音 provider 为 dev 回退，如实记录）；扎西德勒 8787 未运行 blocked
+- React/Vite 版 apps/web（TS 严格模式）：七页签真实 API；后端 /app 同源 serve；
+  修复 note 引用导致的无限请求循环（真 bug，E2E 发现）
+- Playwright E2E 2 项通过：浏览器级完整遗忘闭环（写桶→扫描→提案→审批→摘要切换→恢复→旧词重现）+ 日历
+- **后端 94 测试全绿 + E2E 2 项**；期间发现并修复 React 前端无限请求循环与分页竞态
+
 ## 2026-09-21 · 第 2 轮（Home/Self/Diary/情绪标签/SNAPSHOT_STALE）
 
 - schema v4：home/self/diary 全版本链 + memory_tags(whose CHECK) + bootstrap_snapshots
@@ -21,7 +32,7 @@
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：79 passed（`.venv\Scripts\python -m pytest tests --basetemp=.pytest_tmp -q`）
+**测试**：94 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态
