@@ -11,7 +11,7 @@
 - React/Vite 版 apps/web（TS 严格模式）：七页签真实 API；后端 /app 同源 serve；
   修复 note 引用导致的无限请求循环（真 bug，E2E 发现）
 - Playwright E2E 2 项通过：浏览器级完整遗忘闭环（写桶→扫描→提案→审批→摘要切换→恢复→旧词重现）+ 日历
-- **后端 94 测试全绿 + E2E 2 项**；期间发现并修复 React 前端无限请求循环与分页竞态
+- **后端 90 测试全绿 + E2E 2 项**；期间发现并修复 React 前端无限请求循环与分页竞态
 
 ## 2026-09-21 · 第 2 轮（Home/Self/Diary/情绪标签/SNAPSHOT_STALE）
 
@@ -32,7 +32,7 @@
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：94 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
+**测试**：90 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态
