@@ -40,7 +40,8 @@ def _state_hash(conn) -> str:
 
 
 def get(principal_id: str, entry_source: str, profile: str,
-        loaded_snapshot_id: str | None = None) -> dict:
+        loaded_snapshot_id: str | None = None,
+        cursor: dict | None = None) -> dict:
     if principal_id != "jiaming":
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
     if profile not in _ENTRY_ALLOWED:
@@ -96,23 +97,69 @@ def get(principal_id: str, entry_source: str, profile: str,
     }
 
     if profile == "claude_chat":
-        raw_msgs = raw.list_recent(raw.BOOT_RAW_MESSAGES)
+        raw_msgs = raw.list_recent(raw.BOOT_RAW_MESSAGES,
+                                   before=(cursor or {}).get("raw_before"))
         result["raw"] = {
             "count": len(raw_msgs), "requested": raw.BOOT_RAW_MESSAGES,
             "counts_messages_not_turns": True,
             "messages": raw_msgs,
         }
+        # 分页 cursor：还有更早消息时给 next（§12.2 不静默截断）
+        with db.formal() as conn:
+            total = conn.execute("SELECT COUNT(*) AS c FROM raw_messages").fetchone()["c"]
+        if raw_msgs and total > raw.BOOT_RAW_MESSAGES:
+            oldest = min(m["occurred_at"] for m in raw_msgs)
+            remaining = total - len(raw_msgs)
+            result["cursor"] = {
+                "next": {"raw_before": oldest},
+                "remaining_raw": remaining,
+                "note": "用 bootstrap.next 续取；不静默截断约定资料",
+            }
+        else:
+            result["cursor"] = {"next": None}
         if len(raw_msgs) < raw.BOOT_RAW_MESSAGES:
             result["coverage"] = {
                 "raw": f"only {len(raw_msgs)} messages available; not padded"}
+    else:
+        result["cursor"] = {"next": None}
 
     _estimate_budget(result)
     with db.formal() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO bootstrap_snapshots(snapshot_id, state_hash,"
-            " created_at) VALUES(?,?,datetime('now'))",
-            (result["snapshot_id"], current_state))
+            " profile, created_at) VALUES(?,?,?,datetime('now'))",
+            (result["snapshot_id"], current_state, profile))
     return result
+
+
+def next_page(principal_id: str, entry_source: str, snapshot_id: str,
+              cursor: dict) -> dict:
+    """续取开窗分页；snapshot 状态变化即 SNAPSHOT_STALE，不一半新一半旧。"""
+    if principal_id != "jiaming":
+        raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
+    if not cursor or not cursor.get("raw_before"):
+        raise Forbidden("cursor.raw_before required")
+    with db.formal() as conn:
+        snap = conn.execute(
+            "SELECT * FROM bootstrap_snapshots WHERE snapshot_id=?",
+            (snapshot_id,)).fetchone()
+        if snap is None:
+            raise SnapshotStale("snapshot unknown; re-fetch bootstrap")
+        if snap["state_hash"] != _state_hash(conn):
+            raise SnapshotStale("underlying resources changed; re-fetch bootstrap",
+                                snapshot_id=snapshot_id)
+        if snap["profile"] == "cc":
+            raise Forbidden("cc profile has no raw section to paginate")
+    msgs = raw.list_recent(raw.BOOT_RAW_MESSAGES, before=cursor["raw_before"])
+    out: dict = {"snapshot_id": snapshot_id, "raw": {
+        "count": len(msgs), "messages": msgs,
+        "counts_messages_not_turns": True}}
+    if len(msgs) < raw.BOOT_RAW_MESSAGES:
+        out["cursor"] = {"next": None}  # 不足一页 = 到底
+    else:
+        oldest = min(m["occurred_at"] for m in msgs)
+        out["cursor"] = {"next": {"raw_before": oldest}}
+    return out
 
 
 def _estimate_budget(result: dict) -> None:

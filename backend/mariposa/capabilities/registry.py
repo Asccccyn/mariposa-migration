@@ -98,6 +98,8 @@ def _register() -> dict[str, Capability]:
     add("calendar.month", _cal_month, _owners(), False, description="月视图聚合")
     add("bootstrap.get", _bootstrap, {"jiaming"}, False,
         description="两入口开窗（entry_source 校验 profile；worker 拒绝）")
+    add("bootstrap.next", _bootstrap_next, {"jiaming"}, False,
+        description="续取开窗分页（snapshot 变化返回 SNAPSHOT_STALE）")
     add("time.now", _time_now, _everyone(), False, description="真实 now + 共同时区")
     add("time.context", _time_ctx, _everyone(), False,
         description="三条时间线分开的活动证据")
@@ -359,7 +361,12 @@ def _cal_month(principal: Principal, a: dict) -> dict:
 def _bootstrap(principal: Principal, a: dict) -> dict:
     return bootstrap.get(principal.principal_id, principal.entry_source,
                          str(a.get("profile", "")),
-                         a.get("loaded_snapshot_id"))
+                         a.get("loaded_snapshot_id"), a.get("cursor"))
+
+
+def _bootstrap_next(principal: Principal, a: dict) -> dict:
+    return bootstrap.next_page(principal.principal_id, principal.entry_source,
+                               str(a.get("snapshot_id", "")), a.get("cursor") or {})
 
 
 def _time_now(principal: Principal, a: dict) -> dict:
