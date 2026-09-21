@@ -2,6 +2,15 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-22 · 复审关卡（林石见 6 项）——全部交付
+
+详见 docs/REVIEW_GATE.md。要点：审计 HEAD 唯一化（6072d76）；验收汇总
+72 PASS/3 BLOCKED/2 NOT_IMPL/unmapped=0（02 原件缺，按 01 文档构建并声明）；
+真实语义 provider（本地 ONNX bge-small-zh-v1.5）+ 复核方三用例全过；
+letter archive 对齐旧 bucket_mgr.archive（schema v9）；bootstrap 三段真分页；
+真实 Ombre 副本 dry-run（484/484 映射零偏差，生产零写入）。
+**测试 142 + E2E 2 全绿。**
+
 ## 2026-09-21 · 第 5 轮（§17.3 必需能力补全 + 勘误）
 
 **勘误**：第 4 轮报告"工程文档可做项已清零"为**过度宣称**。逐节重查 §17.3
@@ -74,7 +83,7 @@ raw.read、Web 设置页与媒体库页。
 6. MCP JSON-RPC 适配层 + 8 测试（63 绿）
 7. migration/storage 工程命令 + 7 测试（70 绿）+ 真实 inventory 证据
 
-**测试**：131 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
+**测试**：142 passed + E2E 2 项（pytest / `npm --prefix apps/web run test:e2e`）
 **真实服务**：127.0.0.1:18780 运行中；全能力真实冒烟通过（见 acceptance_mapping §8）
 
 ### 各 Phase 状态
