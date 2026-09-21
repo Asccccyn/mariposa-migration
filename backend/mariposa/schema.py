@@ -493,6 +493,9 @@ CREATE TABLE import_jobs(
   updated_at TEXT NOT NULL
 );
 """),
+    (9, """
+ALTER TABLE letters ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
