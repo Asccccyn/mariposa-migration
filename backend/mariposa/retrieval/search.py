@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .. import config
 from ..memory import relations as relations_mod
-from . import projection
+from . import projection, semantic
 
 
 def search(conn, query: str, limit: int = 20,
@@ -52,9 +52,22 @@ def search(conn, query: str, limit: int = 20,
                 "projection_kind": state["compression_state"],
                 "memory_version": state["current_version_no"],
             })
-    result: dict = {"hits": hits, "query": query}
-    if config.SEMANTIC_PROVIDER:
-        result["semantic"] = "unimplemented"
+    # 语义路径（§8.3：仅有效投影向量参与；provider 未配置显式 degraded）
+    mode = "keyword"
+    if config.SEMANTIC_PROVIDER == "local_bge_zh":
+        sem = semantic.semantic_search(conn, query, limit)
+        mode = "hybrid"
+    else:
+        sem = []
+    # 语义命中去重（关键词已命中的桶保留 keyword 标注优先）
+    seen = {h["memory_id"] for h in hits}
+    for sh in sem:
+        if sh["memory_id"] not in seen:
+            hits.append(sh)
+
+    result: dict = {"hits": hits, "query": query, "mode": mode}
+    if config.SEMANTIC_PROVIDER == "local_bge_zh":
+        result["semantic"] = "local_bge_zh"
     else:
         result["semantic"] = "unavailable"
         result["degraded"] = "semantic_unavailable"
