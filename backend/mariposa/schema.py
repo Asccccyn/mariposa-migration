@@ -352,6 +352,116 @@ CREATE TABLE bootstrap_snapshots(
   created_at TEXT NOT NULL
 );
 """),
+    (5, """
+CREATE TABLE memory_relations(
+  from_memory TEXT NOT NULL REFERENCES memories(memory_id),
+  to_memory TEXT NOT NULL REFERENCES memories(memory_id),
+  relation_type TEXT NOT NULL,
+  custom_label TEXT,
+  reverse_label TEXT,
+  confidence TEXT NOT NULL DEFAULT 'human',
+  active INTEGER NOT NULL DEFAULT 1,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_memory, to_memory, relation_type)
+);
+
+CREATE TABLE memory_raw_refs(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  conversation_id TEXT NOT NULL,
+  message_from TEXT NOT NULL,
+  message_to TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  bind_confidence TEXT NOT NULL DEFAULT 'exact'
+    CHECK(bind_confidence IN ('exact','high','low','revoked')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, conversation_id, message_from)
+);
+
+CREATE TABLE provisional_sources(
+  id TEXT PRIMARY KEY,
+  memory_id TEXT,
+  reported_by TEXT NOT NULL,
+  reported_at TEXT NOT NULL,
+  fragment TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'unbound'
+    CHECK(status IN ('unbound','bound','dismissed'))
+);
+
+CREATE TABLE reminders(
+  id TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  title TEXT NOT NULL,
+  note TEXT,
+  remind_at TEXT NOT NULL,
+  timezone TEXT,
+  status TEXT NOT NULL DEFAULT 'scheduled'
+    CHECK(status IN ('scheduled','fired','cancelled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_reminders_time ON reminders(status, remind_at);
+
+CREATE TABLE media_objects(
+  content_hash TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  storage_key TEXT NOT NULL UNIQUE,
+  owned_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE moments(
+  id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'post' CHECK(kind IN ('post','group_archive')),
+  visibility TEXT NOT NULL DEFAULT 'normal',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE moment_versions(
+  moment_id TEXT NOT NULL REFERENCES moments(id),
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  media_hash TEXT,
+  edited_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(moment_id, version_no)
+);
+
+CREATE TABLE rejection_suppression(
+  target_memory_id TEXT NOT NULL,
+  suppressed_until TEXT NOT NULL,
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(target_memory_id, suppressed_until)
+);
+"""),
+    (6, """
+ALTER TABLE memories ADD COLUMN source_state TEXT NOT NULL DEFAULT 'raw_pending'
+  CHECK(source_state IN ('raw_pending','bound','conflict'));
+"""),
+    (7, """
+CREATE TABLE moment_comments(
+  id TEXT PRIMARY KEY,
+  moment_id TEXT NOT NULL REFERENCES moments(id),
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_moment_comments ON moment_comments(moment_id);
+
+CREATE TABLE moment_reactions(
+  moment_id TEXT NOT NULL REFERENCES moments(id),
+  principal TEXT NOT NULL,
+  reaction TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(moment_id, principal)
+);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

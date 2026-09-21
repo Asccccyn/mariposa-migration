@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 from .. import config
+from ..memory import relations as relations_mod
 from . import projection
 
 
-def search(conn, query: str, limit: int = 20) -> dict:
-    phrase = projection.compile_query(query)
+def search(conn, query: str, limit: int = 20,
+           related_of: str | None = None) -> dict:
+    """related_of：按关联找到的桶（matched_by=relation），不依赖文本匹配。"""
     hits: list[dict] = []
+    phrase = projection.compile_query(query)
     if phrase:
         rows = conn.execute(
             "SELECT f.memory_id, rd.projection_kind, rd.memory_version_no,"
@@ -36,6 +39,19 @@ def search(conn, query: str, limit: int = 20) -> dict:
                     "memory_version": r["memory_version_no"],
                 }
             )
+    if related_of:
+        for mid in relations_mod.related_ids(conn, related_of):
+            state = conn.execute(
+                "SELECT compression_state, visibility, current_version_no"
+                " FROM memories WHERE memory_id=?", (mid,)).fetchone()
+            if state is None or state["visibility"] != "active":
+                continue
+            hits.append({
+                "memory_id": mid,
+                "matched_by": "relation",
+                "projection_kind": state["compression_state"],
+                "memory_version": state["current_version_no"],
+            })
     result: dict = {"hits": hits, "query": query}
     if config.SEMANTIC_PROVIDER:
         result["semantic"] = "unimplemented"

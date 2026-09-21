@@ -28,6 +28,9 @@ FORMAL_TABLES = [
     "letter_versions", "letters", "deletion_requests",
     "home_versions", "home", "self_versions", "self_entries",
     "diary_versions", "diary_entries", "memory_tags", "bootstrap_snapshots",
+    "memory_relations", "memory_raw_refs", "provisional_sources",
+    "reminders", "media_objects", "moment_reactions", "moment_comments",
+    "moment_versions", "moments", "rejection_suppression",
 ]
 WORKSPACE_TABLES = [
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .. import audit as audit_mod
@@ -63,6 +63,9 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
                 ).fetchone()
             if exists:
                 skipped.append({"memory_id": r["memory_id"], "reason": "open_item"})
+                continue
+            if _suppressed(r["memory_id"]):
+                skipped.append({"memory_id": r["memory_id"], "reason": "rejection_cooldown"})
                 continue
             created.append(_create_draft(started_by.principal_id, r["memory_id"]))
 
@@ -249,6 +252,14 @@ def submit(principal, proposal_id: str, revision: int) -> dict:
     }
 
 
+def _target_of(proposal_id: str) -> str:
+    with db.workspace() as wconn:
+        row = wconn.execute(
+            "SELECT target_memory_id FROM work_items WHERE item_id=?",
+            (proposal_id,)).fetchone()
+    return row["target_memory_id"] if row else ""
+
+
 def decide(principal: identity.Principal, proposal_id: str, proposal_revision: int,
            proposal_hash: str, expected_memory_version: int, decision: str) -> dict:
     """审批协调：worker 一律拒绝；审批在一个正式库事务内应用后回填工作区。"""
@@ -305,6 +316,10 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
                 raise
         result = {"proposal_id": proposal_id, "decision": decision}
         new_state = "rejected" if decision == "reject" else "deferred"
+        if decision == "reject":
+            record_rejection_cooldown(
+                _target_of(proposal_id), config.FORGET_REJECT_COOLDOWN_DAYS,
+                "rejected_by_" + principal.principal_id)
 
     with db.workspace() as wconn:
         if new_state != "deferred":
@@ -321,6 +336,46 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
              f"proposal.{decision}", proposal_id, ""),
         )
     return result
+
+
+def decide_batch(principal: identity.Principal, items: list[dict]) -> dict:
+    """批量决议：逐项冻结 ID/hash；单项失败不影响其余（结果逐项返回）。"""
+    results = []
+    for it in items or []:
+        try:
+            out = decide(
+                principal,
+                proposal_id=str(it.get("proposal_id", "")),
+                proposal_revision=int(it.get("proposal_revision", 0)),
+                proposal_hash=str(it.get("proposal_hash", "")),
+                expected_memory_version=int(it.get("expected_memory_version", 0)),
+                decision=str(it.get("decision", "")),
+            )
+            results.append({"proposal_id": it.get("proposal_id"), "ok": True,
+                            "outcome": out})
+        except Exception as e:
+            code = getattr(e, "code", "ERROR")
+            results.append({"proposal_id": it.get("proposal_id"), "ok": False,
+                            "error": code, "message": str(e)})
+    return {"results": results}
+
+
+def record_rejection_cooldown(target_memory_id: str, days: int, reason: str) -> None:
+    """批量拒绝冷却：减少反复送审（§7.3 初值 30 天，可配）。"""
+    until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    with db.formal() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO rejection_suppression(target_memory_id,"
+            " suppressed_until, reason, created_at) VALUES(?,?,?,?)",
+            (target_memory_id, until, reason, _now()))
+
+
+def _suppressed(memory_id: str) -> bool:
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM rejection_suppression WHERE target_memory_id=?"
+            " AND suppressed_until>?", (memory_id, _now())).fetchone()
+    return bool(row)
 
 
 def list_items(states: list[str] | None = None) -> list[dict]:

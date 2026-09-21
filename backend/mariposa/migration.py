@@ -196,15 +196,90 @@ def main(argv: list[str] | None = None) -> int:
     p_dry.add_argument("--out")
     p_ver = sub.add_parser("verify")
     p_ver.add_argument("--report", required=True)
+    p_app = sub.add_parser("apply")
+    p_app.add_argument("--report", required=True)
     args = ap.parse_args(argv)
     if args.cmd == "inventory":
         r = inventory(args.source, args.out)
     elif args.cmd == "dry-run":
         r = dry_run(args.fixtures, args.out)
-    else:
+    elif args.cmd == "verify":
         r = verify(args.report)
+    else:
+        r = apply_from_report(args.report)
     return 0 if r.get("ok") else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def apply_from_report(report_path: str) -> dict:
+    """迁移演练 apply：把 dry-run 报告（合成 fixture）落到当前正式库并核对。
+
+    仅接受 fixture 规模的报告（与 dry-run 同防）；真实数据 apply 需获准快照。
+    """
+    from . import db as _db
+    from .identity import service as identity
+    from .memory import service as memory
+    from .letters import service as letters
+    _migrator = identity.Principal("system", "迁移执行器", "system", "migration",
+                                   "binding_migration")
+    p = Path(report_path)
+    report = json.loads(p.read_text(encoding="utf-8"))
+    entries = report.get("entries", [])
+    if len(entries) > 50:
+        return {"ok": False, "error": "报告超出合成样本规模；真实迁移需获准快照"}
+    fdir = Path(report["fixture_dir"])
+    applied, problems = [], []
+    for e in entries:
+        f = fdir / e["legacy_id"]
+        if not f.exists():
+            problems.append({"legacy_id": e["legacy_id"], "issue": "file_missing"})
+            continue
+        _, body = parse_frontmatter(f.read_text(encoding="utf-8"))
+        meta = parse_frontmatter(f.read_text(encoding="utf-8"))[0]
+        recomputed = hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+        if recomputed != e["payload_hash"]:
+            problems.append({"legacy_id": e["legacy_id"], "issue": "hash_mismatch"})
+            continue
+        if e["target"] == "memories":
+            out = memory.hold(_migrator,
+                              text=body.strip(),
+                              why_remember=meta.get("why_remembered"),
+                              memory_date=e["mapping"]["memory_date"],
+                              date_confidence="inferred")
+            mid = out["memory_id"]
+            if e["mapping"]["pinned"]:
+                with _db.formal() as conn:
+                    conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
+                                 (mid,))
+            applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
+                            "target": "memories"})
+        else:
+            lock = e["mapping"]["letter_lock"] or {}
+            out = letters.write_letter(
+                _migrator, body.strip(),
+                letter_date=e["mapping"]["memory_date"],
+                lock_type=lock.get("lock_type", "none") or "none",
+                unlock_date=lock.get("unlock_date"))
+            applied.append({"legacy_id": e["legacy_id"], "new_id": out["letter_id"],
+                            "target": "letters"})
+    # 逐项核对：新库可读、锁参数保留、pinned 保留
+    verified = 0
+    for a in applied:
+        with _db.formal() as conn:
+            if a["target"] == "memories":
+                row = conn.execute("SELECT pinned FROM memories WHERE memory_id=?",
+                                   (a["new_id"],)).fetchone()
+            else:
+                row = conn.execute("SELECT lock_type FROM letters WHERE id=?",
+                                   (a["new_id"],)).fetchone()
+        if row is not None:
+            verified += 1
+    result = {"ok": not problems, "applied": len(applied), "verified": verified,
+              "problems": problems,
+              "note": "合成 fixture 演练；真实数据 apply 仍 blocked: 快照未获准"}
+    print(json.dumps({k: v for k, v in result.items() if k != "problems"},
+                     ensure_ascii=False))
+    return result
