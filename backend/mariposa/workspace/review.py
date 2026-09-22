@@ -138,6 +138,68 @@ def _check_summary_terms(summary_body: str) -> None:
                 code="SUMMARY_TERM_BANNED", term=term)
 
 
+def _eligible_target(conn, memory_id: str) -> bool:
+    """到期且可建审查项：真正到期、非确定留、无未终局工作项。"""
+    m = conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
+                     (memory_id,)).fetchone()
+    if m is None:
+        return False
+    r = ret_mod.get(conn, memory_id)
+    if r and r["status"] == "retained":
+        # RET-11：确定留是终局，不再周期送审；显式拒绝而非静默跳过
+        raise Forbidden("确定留的桶不再进入自动遗忘审查（终局）",
+                        code="RETAINED_FINAL", memory_id=memory_id)
+    if not ret_mod.is_due(conn, memory_id):
+        return False  # 只有真正到期（business_today >= due_date）才生成
+    with db.workspace() as wconn:
+        exists = wconn.execute(
+            "SELECT 1 FROM v2_review_items WHERE target_id=? AND"
+            " state NOT IN ('forgotten','retained','withdrawn',"
+            " 'stale','failed')", (memory_id,)).fetchone()
+    return not exists
+
+
+def _insert_review_item(fconn, principal_id: str, memory_id: str,
+                        candidate_summary: str, candidate_tags_json: str,
+                        now: str) -> dict:
+    """落 v2_review_items（+首版候选稿）；返回 {item_id, state}。"""
+    m = fconn.execute("SELECT current_version_no FROM memories WHERE"
+                      " memory_id=?", (memory_id,)).fetchone()
+    has_summary = bool(candidate_summary.strip())
+    item_id = f"rev_{uuid.uuid4().hex[:12]}"
+    hints = json.dumps(_collect_retain_hints(fconn, memory_id),
+                       ensure_ascii=False)
+    with db.workspace() as wconn:
+        wconn.execute("BEGIN IMMEDIATE")
+        try:
+            wconn.execute(
+                "INSERT INTO v2_review_items(item_id, target_kind,"
+                " target_id, state, current_revision, generated_summary,"
+                " generated_tags, source_version, source_fields_hash,"
+                " retention_revision, policy_version, created_by,"
+                " retain_hints, created_at, updated_at)"
+                " VALUES(?,?,?,?,1,?,?,?,?,?,?,?, ?,?,?)",
+                (item_id, "memory", memory_id,
+                 "in_review" if has_summary else "generated",
+                 candidate_summary.strip(), candidate_tags_json,
+                 m["current_version_no"], _fields_hash(fconn, memory_id),
+                 (ret_mod.get(fconn, memory_id) or {}).get("retention_revision"),
+                 ret_mod.POLICY_VERSION, principal_id, hints, now, now))
+            if has_summary:
+                wconn.execute(
+                    "INSERT INTO v2_proposal_versions(item_id, revision,"
+                    " summary_body, forget_tags, created_by, created_at)"
+                    " VALUES(?,1,?,?,?,?)",
+                    (item_id, candidate_summary.strip(), candidate_tags_json,
+                     principal_id, now))
+            wconn.execute("COMMIT")
+        except Exception:
+            wconn.execute("ROLLBACK")
+            raise
+    return {"item_id": item_id, "target_id": memory_id,
+            "state": "in_review" if has_summary else "generated"}
+
+
 def generate(principal, memory_id: str | None = None,
              candidate_summary: str = "",
              candidate_tags: list[str] | None = None,
@@ -161,67 +223,16 @@ def generate(principal, memory_id: str | None = None,
         return {"created": [], "note": "无到期目标（due queue 为空）"}
     if candidate_summary.strip():
         _check_summary_terms(candidate_summary)
+    tags_json = json.dumps(candidate_tags or [], ensure_ascii=False)
     created = []
     now = _now()
     for mid in targets:
         with db.formal() as conn:
-            m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
-                             (mid,)).fetchone()
-            if m is None:
+            if not _eligible_target(conn, mid):
                 continue
-            r = ret_mod.get(conn, mid)
-            if r and r["status"] == "retained":
-                # RET-11：确定留是终局，不再周期送审；显式拒绝而非静默跳过
-                raise Forbidden(
-                    "确定留的桶不再进入自动遗忘审查（终局）",
-                    code="RETAINED_FINAL", memory_id=mid)
-            if not ret_mod.is_due(conn, mid):
-                continue  # 只有真正到期（business_today >= due_date）才生成
-            with db.workspace() as wconn:
-                exists = wconn.execute(
-                    "SELECT 1 FROM v2_review_items WHERE target_id=? AND"
-                    " state NOT IN ('forgotten','retained','withdrawn',"
-                    " 'stale','failed')", (mid,)).fetchone()
-            if exists:
-                continue
-            item_id = f"rev_{uuid.uuid4().hex[:12]}"
-            state = "in_review" if candidate_summary.strip() else "generated"
-            hints = json.dumps(_collect_retain_hints(conn, mid),
-                               ensure_ascii=False)
-            if hints != "[]" and state == "in_review":
-                state = "in_review"  # 疑点项同样可领取，但 release 会被拦
-            with db.workspace() as wconn:
-                wconn.execute("BEGIN IMMEDIATE")
-                try:
-                    wconn.execute(
-                        "INSERT INTO v2_review_items(item_id, target_kind,"
-                        " target_id, state, current_revision, generated_summary,"
-                        " generated_tags, source_version, source_fields_hash,"
-                        " retention_revision, policy_version, created_by,"
-                        " retain_hints, created_at, updated_at)"
-                        " VALUES(?,?,?,?,1,?,?,?,?,?,?,?, ?,?,?)",
-                        (item_id, "memory", mid, state,
-                         candidate_summary.strip(),
-                         json.dumps(candidate_tags or [], ensure_ascii=False),
-                         m["current_version_no"], _fields_hash(conn, mid),
-                         (ret_mod.get(conn, mid) or {}).get("retention_revision"),
-                         ret_mod.POLICY_VERSION, principal.principal_id,
-                         hints, now, now))
-                    if candidate_summary.strip():
-                        wconn.execute(
-                            "INSERT INTO v2_proposal_versions(item_id, revision,"
-                            " summary_body, forget_tags, created_by, created_at)"
-                            " VALUES(?,1,?,?,?,?)",
-                            (item_id, candidate_summary.strip(),
-                             json.dumps(candidate_tags or [],
-                                        ensure_ascii=False),
-                             principal.principal_id, now))
-                    wconn.execute("COMMIT")
-                except Exception:
-                    wconn.execute("ROLLBACK")
-                    raise
-            created.append({"item_id": item_id, "target_id": mid,
-                            "state": state})
+            created.append(_insert_review_item(
+                conn, principal.principal_id, mid, candidate_summary,
+                tags_json, now))
     return {"created": created}
 
 
@@ -549,6 +560,54 @@ def decide_retention(principal, item_id: str, decision: str) -> dict:
 
     needs_jiaming_decision（共同话语）只有周家明能裁。
     """
+def _owner_keep(item, pid: str, item_id: str) -> dict:
+    """keep：确定留终局（R15），retention 行正式化，不再周期送审。"""
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            ret_mod.mark_retained(conn, item["target_id"],
+                                  "owner_decision", pid)
+            audit_mod.record(conn, "memory.retention.retained", pid,
+                             resource_id=item["target_id"],
+                             payload={"item_id": item_id})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {}
+
+
+def _owner_continue(item, pid: str, item_id: str) -> dict:
+    """continue：按当前候选稿现在生效（仍核验源版本，一步不缺）。"""
+    with db.workspace() as wconn:
+        vrow = wconn.execute(
+            "SELECT summary_body, forget_tags FROM v2_proposal_versions"
+            " WHERE item_id=? AND revision=?",
+            (item_id, item["current_revision"])).fetchone()
+    if vrow is None:
+        raise Forbidden("no candidate to apply")
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            m = conn.execute(
+                "SELECT current_version_no FROM memories WHERE"
+                " memory_id=?", (item["target_id"],)).fetchone()
+            if m["current_version_no"] != item["source_version"]:
+                raise ProposalStale("source version moved")
+            result = _apply_forget(conn, item, vrow["summary_body"],
+                                   json.loads(vrow["forget_tags"]), pid)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return result
+
+
+def decide_retention(principal, item_id: str, decision: str) -> dict:
+    """终裁（R14/R15）：keep=确定留终局；continue=现在生效；defer=挂起。
+
+    needs_jiaming_decision（共同话语）只有周家明能裁。
+    """
     pid = principal.principal_id
     if pid not in OWNERS:
         raise Forbidden("only qiaosheng/jiaming decide retention",
@@ -563,48 +622,12 @@ def decide_retention(principal, item_id: str, decision: str) -> dict:
         if item["state"] == "needs_jiaming_decision" and pid != "jiaming":
             raise Forbidden("共同话语的终裁限定周家明", principal=pid)
     now = _now()
-    result: dict = {}
     if decision == "keep":
-        with db.formal() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                ret_mod.mark_retained(conn, item["target_id"],
-                                      "owner_decision", pid)
-                audit_mod.record(conn, "memory.retention.retained", pid,
-                                 resource_id=item["target_id"],
-                                 payload={"item_id": item_id})
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        new_state = "retained"
+        result, new_state = _owner_keep(item, pid, item_id), "retained"
     elif decision == "continue":
-        vrow = None
-        with db.workspace() as wconn:
-            vrow = wconn.execute(
-                "SELECT summary_body, forget_tags FROM v2_proposal_versions"
-                " WHERE item_id=? AND revision=?",
-                (item_id, item["current_revision"])).fetchone()
-        if vrow is None:
-            raise Forbidden("no candidate to apply")
-        with db.formal() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                m = conn.execute(
-                    "SELECT current_version_no FROM memories WHERE"
-                    " memory_id=?", (item["target_id"],)).fetchone()
-                if m["current_version_no"] != item["source_version"]:
-                    raise ProposalStale("source version moved")
-                result = _apply_forget(conn, item, vrow["summary_body"],
-                                       json.loads(vrow["forget_tags"]), pid)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        new_state = "forgotten"
+        result, new_state = _owner_continue(item, pid, item_id), "forgotten"
     else:
-        result = {}
-        new_state = "deferred"
+        result, new_state = {}, "deferred"
     with db.workspace() as wconn:
         wconn.execute(
             "UPDATE v2_review_items SET state=?, updated_at=? WHERE item_id=?",

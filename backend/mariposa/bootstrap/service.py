@@ -117,6 +117,34 @@ def _i_section() -> dict:
                     "I 尚未落笔（无旧Self自动映射，V2-I-03）"}
 
 
+def _memory_section(conn, three_days: list[str]) -> dict:
+    """三天桶段：标题+心情标签+心情文字+分类；不默认展开事件正文。"""
+    mem_rows = conn.execute(
+        "SELECT memory_id, memory_date FROM memories WHERE visibility='active'"
+        " AND memory_date IN (?,?,?) ORDER BY memory_date DESC, memory_id"
+        " LIMIT ?", tuple(three_days) + (BOOT_SECTION_LIMIT,)).fetchall()
+    items = [_memory_slim(conn, r["memory_id"]) for r in mem_rows]
+    total = conn.execute(
+        "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
+        " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
+    if total > len(items):
+        last = mem_rows[-1]
+        next_cursor = {"memory_before_date": last["memory_date"],
+                       "memory_last_id": last["memory_id"],
+                       "remaining": total - len(items)}
+    else:
+        next_cursor = None
+    return {"items": items, "count": len(items), "total_in_window": total,
+            "next_cursor": next_cursor}
+
+
+def _three_day_window(tz) -> tuple:
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone.utc).astimezone(tz).date()
+    return today, [(today - timedelta(days=i)).isoformat()
+                   for i in range(BOOT_MEMORY_DAYS)]
+
+
 def get(principal_id: str, entry_source: str, profile: str,
         loaded_snapshot_id: str | None = None,
         cursor: dict | None = None) -> dict:
@@ -147,19 +175,10 @@ def get(principal_id: str, entry_source: str, profile: str,
                     "note": "底层资源未变化；继续用已加载内容，不重发开窗包"}
 
     tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).astimezone(tz).date()
-    three_days = [(today - timedelta(days=i)).isoformat() for i in range(BOOT_MEMORY_DAYS)]
+    today, three_days = _three_day_window(tz)
 
     with db.formal() as conn:
-        mem_rows = conn.execute(
-            "SELECT memory_id, memory_date FROM memories WHERE visibility='active'"
-            " AND memory_date IN (?,?,?) ORDER BY memory_date DESC, memory_id"
-            " LIMIT ?", tuple(three_days) + (BOOT_SECTION_LIMIT,)).fetchall()
-        memory_items = [_memory_slim(conn, r["memory_id"]) for r in mem_rows]
-        mem_total = conn.execute(
-            "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
-            " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
+        md = _memory_section(conn, three_days)
 
     plan_items = plans.bootstrap_plans(today, BOOT_UPCOMING_DAYS)
     active_plans = [p for p in plan_items if p["state"] in plans.OPEN_STATES]
@@ -167,14 +186,6 @@ def get(principal_id: str, entry_source: str, profile: str,
     plan_page = plan_items[:BOOT_SECTION_LIMIT]
     plan_cursor = {"plans_offset": BOOT_SECTION_LIMIT} \
         if len(plan_items) > BOOT_SECTION_LIMIT else {"plans_offset": None}
-
-    if mem_total > len(memory_items):
-        last = mem_rows[-1]
-        mem_cursor = {"memory_before_date": last["memory_date"],
-                      "memory_last_id": last["memory_id"],
-                      "remaining": mem_total - len(memory_items)}
-    else:
-        mem_cursor = None
 
     result: dict = {
         "snapshot_id": f"snap_{uuid.uuid4().hex[:12]}",
@@ -184,10 +195,8 @@ def get(principal_id: str, entry_source: str, profile: str,
                  "timezone": config.RELATIONSHIP_TIMEZONE},
         "memory_days": {
             "dates": three_days, "mode": BOOT_DAY_WINDOW_MODE,
-            "items": memory_items, "count": len(memory_items),
-            "total_in_window": mem_total,
+            **md,
             "section_limit": BOOT_SECTION_LIMIT,
-            "next_cursor": mem_cursor,
             "fields": ["original_title", "mood_tags", "mood_text",
                        "categories"],
             "note": "三天桶只出标题+心情；事件正文须明确打开该桶",

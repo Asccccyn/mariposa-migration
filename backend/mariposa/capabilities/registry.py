@@ -346,85 +346,67 @@ def _payload_hash(arguments: dict) -> str:
     return memory.canonical_hash(arguments)
 
 
+_IDEMPOTENCY_STALE_SECONDS = 60
+
+
+def _claim_idempotency(principal_id: str, capability: str, key: str,
+                       payload_hash: str) -> bool:
+    """认领语义：新记录插入即占位；对账后 failed 的记录可被原子转移回
+    running 重新执行；completed/running 一律不占。"""
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                "INSERT INTO idempotency_records(principal_id,"
+                " capability, idempotency_key, payload_hash, status,"
+                " result_ref, created_at)"
+                " VALUES(?,?,?,?, 'running', NULL, datetime('now'))"
+                " ON CONFLICT(principal_id, capability, idempotency_key)"
+                " DO UPDATE SET status='running',"
+                " payload_hash=excluded.payload_hash, result_ref=NULL,"
+                " created_at=excluded.created_at"
+                " WHERE idempotency_records.status='failed'",
+                (principal_id, capability, key, payload_hash))
+            conn.execute("COMMIT")
+            return cur.rowcount == 1
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _read_idempotency(principal_id: str, capability: str, key: str):
+    with db.formal() as conn:
+        return conn.execute(
+            "SELECT * FROM idempotency_records WHERE principal_id=? AND"
+            " capability=? AND idempotency_key=?",
+            (principal_id, capability, key)).fetchone()
+
+
+def _idempotency_stale(row) -> bool:
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        created = _dt.fromisoformat(row["created_at"])
+    except ValueError:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=_tz.utc)
+    return (_dt.now(_tz.utc) - created).total_seconds() > _IDEMPOTENCY_STALE_SECONDS
+
+
 def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                        key: str) -> dict:
     """原子 claim 幂等：先 INSERT 占位（status=running），占位成功者才执行副作用。
 
-    并发同 key：仅一方能占位；另一方等待后读终态重放。
+    并发同 key：仅一方能占位；另一方有界等待后读终态重放。
     崩溃窗口（§13.2）：running 残留超过阈值时不盲删盲重放——副作用是否
     已发生不明，返回 OUTCOME_UNKNOWN，由显式对账（maintenance.idempotency.
     reconcile）核实业务结果后才能放行重试。
     """
     ph = _payload_hash(arguments)
-    STALE_SECONDS = 60
-
-    def claim() -> bool:
-        with db.formal() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                # 认领语义：新记录插入即占位；对账后标记 failed 的记录可被
-                # 原子转移回 running 重新执行；completed/running 一律不占。
-                cur = conn.execute(
-                    "INSERT INTO idempotency_records(principal_id,"
-                    " capability, idempotency_key, payload_hash, status,"
-                    " result_ref, created_at)"
-                    " VALUES(?,?,?,?, 'running', NULL, datetime('now'))"
-                    " ON CONFLICT(principal_id, capability, idempotency_key)"
-                    " DO UPDATE SET status='running',"
-                    " payload_hash=excluded.payload_hash, result_ref=NULL,"
-                    " created_at=excluded.created_at"
-                    " WHERE idempotency_records.status='failed'",
-                    (principal.principal_id, cap.name, key, ph))
-                conn.execute("COMMIT")
-                return cur.rowcount == 1
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-
-    def read_record():
-        with db.formal() as conn:
-            return conn.execute(
-                "SELECT * FROM idempotency_records WHERE principal_id=? AND"
-                " capability=? AND idempotency_key=?",
-                (principal.principal_id, cap.name, key)).fetchone()
-
-    def _stale(row) -> bool:
-        from datetime import datetime as _dt, timezone as _tz
-        try:
-            created = _dt.fromisoformat(row["created_at"])
-        except ValueError:
-            return True
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=_tz.utc)
-        return (_dt.now(_tz.utc) - created).total_seconds() > STALE_SECONDS
-
-    if not claim():
-        # 另一方持有：等待其完成（bounded）
-        import time as _time
-        for _ in range(40):  # <=8s
-            _time.sleep(0.2)
-            row = read_record()
-            if row is None:
-                break  # 被清理，重试 claim
-            if row["payload_hash"] != ph:
-                raise IdempotencyConflict(
-                    "same key with different payload",
-                    capability=cap.name, key=key)
-            if row["status"] == "completed":
-                return {"ok": True,
-                        "data": json.loads(row["result_ref"]),
-                        "idempotent_replay": True}
-        row = read_record()
-        if row is not None and row["status"] == "running":
-            if _stale(row):
-                # 疑似崩溃残留：不盲目重放副作用（B02 崩溃窗口）
-                raise OutcomeUnknown(
-                    "idempotent execution likely crashed mid-flight; "
-                    "verify business outcome and reconcile before retrying",
-                    capability=cap.name, key=key)
-            raise Busy()
-        if not claim():
-            raise Busy()
+    if not _claim_idempotency(principal.principal_id, cap.name, key, ph):
+        replay = _await_completion(principal, cap, key, ph)
+        if replay is not None:
+            return {"ok": True, "data": replay, "idempotent_replay": True}
 
     result = cap.handler(principal, arguments)
     with db.formal() as conn:
@@ -441,6 +423,40 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
             conn.execute("ROLLBACK")
             raise
     return {"ok": True, "data": result}
+
+
+def _await_completion(principal: Principal, cap: Capability, key: str,
+                      ph: str) -> dict | None:
+    """占位失败方：等待占位方终态。
+
+    返回 dict = 已完成（调用方按幂等重放返回）；None = 记录消失或已由
+    本方重新认领（调用方继续执行 handler）。异常：同键异内容冲突 /
+    崩溃窗口 OUTCOME_UNKNOWN / 仍在进行 Busy。
+    """
+    import time as _time
+    for _ in range(40):  # <=8s
+        _time.sleep(0.2)
+        row = _read_idempotency(principal.principal_id, cap.name, key)
+        if row is None:
+            break  # 记录消失，可重试 claim
+        if row["payload_hash"] != ph:
+            raise IdempotencyConflict(
+                "same key with different payload",
+                capability=cap.name, key=key)
+        if row["status"] == "completed":
+            return json.loads(row["result_ref"])
+    row = _read_idempotency(principal.principal_id, cap.name, key)
+    if row is not None and row["status"] == "running":
+        if _idempotency_stale(row):
+            # 疑似崩溃残留：不盲目重放副作用（B02 崩溃窗口）
+            raise OutcomeUnknown(
+                "idempotent execution likely crashed mid-flight; "
+                "verify business outcome and reconcile before retrying",
+                capability=cap.name, key=key)
+        raise Busy()
+    if not _claim_idempotency(principal.principal_id, cap.name, key, ph):
+        raise Busy()
+    return None
 
 
 
