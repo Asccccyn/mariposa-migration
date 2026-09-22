@@ -1,6 +1,6 @@
 # 118 条验收用例逐条映射（v1.1 执行包原件）
 
-> 生成 2026-09-22T01:41:09；证据=测试文件/文档/实测。**PASS 106 / BLOCKED 12 / NOT_IMPLEMENTED 0 / unmapped 0**。
+> 审计复核后证据名全量补全为可收集测试 ID（校验失败=0）。**PASS 106 / BLOCKED 12 / unmapped 0**。
 
 
 ## T-ID

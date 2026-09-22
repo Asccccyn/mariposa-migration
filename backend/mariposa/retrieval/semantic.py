@@ -12,8 +12,6 @@ import os
 import sqlite3
 from pathlib import Path
 
-import numpy as np
-
 from .. import config
 from . import projection
 
@@ -48,7 +46,13 @@ def get_provider():
     return _provider
 
 
-def embed(texts: list[str]) -> list[np.ndarray]:
+def _np():
+    import numpy  # 懒加载：核心包不强依赖（provider 未配置时无需 numpy）
+    return numpy
+
+
+def embed(texts: list[str]):
+    np = _np()
     p = get_provider()
     if p is None:
         raise RuntimeError("semantic provider not configured")
@@ -130,6 +134,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20) -> li
             else:
                 pending += 1
     from . import projection as _pj
+    np = _np()
     qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
     scored = []
     for r in conn.execute(

@@ -67,6 +67,17 @@
       "description": "日期区间聚合（端点含）"
     },
     {
+      "canonical_name": "calendar.undated",
+      "transport_name": "mariposa_calendar_undated",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "待定日期区（日期未知不冒充今天）"
+    },
+    {
       "canonical_name": "diary.hide",
       "transport_name": "mariposa_diary_hide",
       "allowed_principals": [
@@ -185,6 +196,16 @@
       "write": true,
       "idempotent": false,
       "description": "修改 Home（唯一正本，版本乐观锁）"
+    },
+    {
+      "canonical_name": "identity.bindings.revoke",
+      "transport_name": "mariposa_identity_bindings_revoke",
+      "allowed_principals": [
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "撤销客户端绑定（旧 token 立即失效）"
     },
     {
       "canonical_name": "letter.edit",
@@ -307,6 +328,17 @@
       "write": true,
       "idempotent": false,
       "description": "到期提醒结算（幂等；无常驻 scheduler，无外部副作用）"
+    },
+    {
+      "canonical_name": "maintenance.semantic.warmup",
+      "transport_name": "mariposa_maintenance_semantic_warmup",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）"
     },
     {
       "canonical_name": "maintenance.settings.get",
@@ -611,6 +643,17 @@
       "write": true,
       "idempotent": false,
       "description": "撤下一条（撤下后校对不得重新浮现）"
+    },
+    {
+      "canonical_name": "memory.reengagement.record",
+      "transport_name": "mariposa_memory_reengagement_record",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "记录真实再提起（按证据原时刻；扫描/访问不算）"
     },
     {
       "canonical_name": "memory.relations.detach",
