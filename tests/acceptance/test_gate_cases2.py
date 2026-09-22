@@ -83,7 +83,10 @@ class TestBOOT:
         boot = bootstrap.get("jiaming", "cc", "cc")
         for m in boot["memory_days"]["items"]:
             if m["memory_id"] == h["memory_id"]:
-                assert m["text"] == "安全摘要词PLMOK"
+                # superseded by V2-BOOT-01：开窗条目不再携带正文/摘要文本；
+                # 遗忘桶只标注当前表示，正文须显式打开（只见批准摘要）
+                assert "text" not in m
+                assert m["representation"] == "forgotten_summary"
         for i in calendar.day(today)["items"]:
             if i.get("resource_id") == h["memory_id"]:
                 assert "XMNQA" not in (i.get("preview") or "")

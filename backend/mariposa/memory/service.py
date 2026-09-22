@@ -29,6 +29,68 @@ def canonical_hash(payload: dict) -> str:
     ).hexdigest()
 
 
+from .. import audit, db
+from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
+from ..retrieval import projection
+from . import categories as categories_mod
+from . import retention as retention_mod
+from . import our_words as our_words_mod
+
+_APPROVERS = {"qiaosheng", "jiaming"}  # 工具人无审批权（§6.3）
+
+#: v2 hold 识别：出现任一 v2 字段即走分层写入路径
+V2_HOLD_FIELDS = ("original_title", "categories", "mood", "our_words",
+                  "creation_mode", "occurred_start", "occurred_end")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def canonical_hash(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def representation_version(conn, memory_id: str) -> int:
+    """当前表示版本：内容修订不改它，遗忘/恢复等表示变化才 +1（§5.3）。"""
+    m = conn.execute("SELECT representation_state FROM memories WHERE memory_id=?",
+                     (memory_id,)).fetchone()
+    if m is None:
+        raise NotFound("memory not found", memory_id=memory_id)
+    return m["representation_state"]
+
+
+def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
+    """当时心情资格（R05/§5.1）：仅周家明、仅同期 hold 可写。"""
+    if not isinstance(mood, dict):
+        raise Forbidden("mood must be an object", code="INVALID_ARGUMENT")
+    if principal.principal_id != "jiaming":
+        raise Forbidden(
+            "当时心情只能由周家明（jiaming）在原事件窗口内写下；"
+            "乔生/worker 不可代写（V2-REC-09）",
+            code="MOOD_AUTHOR_REQUIRED")
+    if creation_mode != "contemporaneous":
+        raise Forbidden(
+            "跨窗口补记不能补造当时心情（V2-REC-04）；仍可保存事件本身",
+            code="MOOD_WINDOW_REQUIRED")
+    text = mood.get("text")
+    tags = mood.get("tags") or []
+    if not isinstance(tags, list) or any(not isinstance(t, str) or not t.strip()
+                                         for t in tags):
+        raise Forbidden("mood.tags must be a list of non-empty strings",
+                        code="INVALID_ARGUMENT")
+    if text is not None and not isinstance(text, str):
+        raise Forbidden("mood.text must be a string", code="INVALID_ARGUMENT")
+    deduped = []
+    for t in tags:
+        t = t.strip()
+        if t not in deduped:
+            deduped.append(t)
+    return {"text": text, "tags": deduped}
+
+
 def hold(
     principal,
     text: str,
@@ -38,9 +100,27 @@ def hold(
     entry_source: str | None = None,
     raw_refs: list[dict] | None = None,
     raw_pending: bool = True,
+    original_title: str | None = None,
+    categories: list[str] | None = None,
+    mood: dict | None = None,
+    our_words: list[dict] | None = None,
+    creation_mode: str | None = None,
+    occurred_start: str | None = None,
+    occurred_end: str | None = None,
 ) -> dict:
     if not text or not text.strip():
         raise Forbidden("hold text required")
+    v2 = any(v is not None for v in (original_title, categories, mood,
+                                     our_words, creation_mode,
+                                     occurred_start, occurred_end))
+    cats = categories_mod.validate(categories) if categories else None
+    mode = creation_mode or ("contemporaneous" if v2 else None)
+    if mode is not None and mode not in ("contemporaneous", "retrospective"):
+        raise Forbidden("creation_mode must be contemporaneous/retrospective",
+                        code="INVALID_ARGUMENT")
+    mood_data = None
+    if mood is not None:
+        mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
     # §9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有记录，不新建
     import hashlib as _hl
     if raw_refs:
@@ -69,21 +149,69 @@ def hold(
         try:
             conn.execute(
                 "INSERT INTO memories(memory_id, current_version_no, memory_date,"
-                " date_confidence, visibility, compression_state, created_at, updated_at)"
-                " VALUES(?,?,?,?, 'active','full', ?, ?)",
-                (memory_id, 1, memory_date, date_confidence, now, now),
+                " date_confidence, visibility, compression_state, created_at,"
+                " updated_at, held_at, held_at_confidence, creation_mode)"
+                " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?)",
+                (memory_id, 1, memory_date, date_confidence, now, now,
+                 now if v2 else None,
+                 "exact" if v2 else "unknown",
+                 mode or "legacy_unknown"),
             )
-            conn.execute(
-                "INSERT INTO memory_versions(memory_id, version_no, representation,"
-                " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
-                " origin_kind, payload_hash, created_at)"
-                " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
-                (memory_id, text, why_remember, principal.principal_id, canonical_hash(payload), now),
-            )
-            projection.upsert(
-                conn, memory_id, 1, "full",
-                projection.build_full(text, why_remember),
-            )
+            if v2:
+                conn.execute(
+                    "INSERT INTO memory_versions(memory_id, version_no,"
+                    " representation, hold_text, compressed_summary,"
+                    " why_remember, authored_by, confirmed_by, origin_kind,"
+                    " payload_hash, created_at, original_title, event_text,"
+                    " schema_version)"
+                    " VALUES(?,1,'full',NULL,NULL,?,?,NULL,'initial_hold',?,?,"
+                    "?,?,2)",
+                    (memory_id, why_remember, principal.principal_id,
+                     canonical_hash(payload), now, original_title, text),
+                )
+                # v2 投影白名单：只索引事件正文；标题/心情/话语/回忆一律不进
+                projection.upsert(conn, memory_id, 1, "full",
+                                  projection.build_full(text, None))
+            else:
+                conn.execute(
+                    "INSERT INTO memory_versions(memory_id, version_no, representation,"
+                    " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
+                    " origin_kind, payload_hash, created_at)"
+                    " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
+                    (memory_id, text, why_remember, principal.principal_id, canonical_hash(payload), now),
+                )
+                projection.upsert(
+                    conn, memory_id, 1, "full",
+                    projection.build_full(text, why_remember),
+                )
+            if cats:
+                categories_mod.replace(conn, memory_id, cats,
+                                       principal.principal_id)
+            if mood_data is not None:
+                conn.execute(
+                    "INSERT INTO memory_moods(memory_id, mood_text, author,"
+                    " captured_session, captured_at, evidence_state)"
+                    " VALUES(?,?,?,?,?, 'contemporaneous')",
+                    (memory_id, mood_data["text"], "jiaming",
+                     entry_source, now))
+                for tag in mood_data["tags"]:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
+                        " VALUES(?,?)", (memory_id, tag))
+            if our_words:
+                validated = [our_words_mod._validate_word(w) for w in our_words]
+                for i, w in enumerate(validated, start=1):
+                    conn.execute(
+                        "INSERT INTO memory_our_words(word_id, memory_id,"
+                        " ordinal, speaker, text, expression_kind, source_ref,"
+                        " created_by, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (f"ow_{uuid.uuid4().hex[:12]}", memory_id, i,
+                         w["speaker"], w["text"], w["expression_kind"],
+                         w["source_ref"], principal.principal_id, now))
+            if v2:
+                # R03/D01：期限从首次 hold 时刻起算，不用事件日期/迁移时间
+                retention_mod.create_for_memory(
+                    conn, memory_id, cats or [], now)
             if raw_refs:
                 for ref in raw_refs:
                     src_hash = _hl.sha256(
@@ -102,7 +230,9 @@ def hold(
             audit.record(
                 conn, "memory.created", principal.principal_id,
                 resource_id=memory_id, resource_version=1,
-                payload={"entry_source": entry_source, "memory_date": memory_date},
+                payload={"entry_source": entry_source, "memory_date": memory_date,
+                         "creation_mode": mode or "legacy_unknown",
+                         "v2_layered": v2},
             )
             conn.execute("COMMIT")
         except Exception:
@@ -120,20 +250,46 @@ def get(conn, memory_id: str) -> dict:
         "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
         (memory_id, m["current_version_no"]),
     ).fetchone()
-    return {
+    is_summary = v["representation"] == "forgotten_summary"
+    body = v["compressed_summary"] if is_summary else (
+        v["event_text"] if v["event_text"] is not None else v["hold_text"])
+    out = {
         "memory_id": memory_id,
         "version": m["current_version_no"],
         "memory_date": m["memory_date"],
         "date_confidence": m["date_confidence"],
         "visibility": m["visibility"],
         "representation": v["representation"],
-        "text": (
-            v["compressed_summary"] if v["representation"] == "forgotten_summary" else v["hold_text"]
-        ),
-        "why_remember": v["why_remember"] if v["representation"] == "full" else None,
+        "text": body,
+        "why_remember": v["why_remember"] if not is_summary else None,
         "pinned": bool(m["pinned"]),
         "protected": bool(m["protected"]),
+        "creation_mode": m["creation_mode"],
+        "held_at": m["held_at"],
     }
+    # v2 分层字段（有则给出；v1 旧桶自然缺省）
+    if not is_summary:
+        out["original_title"] = v["original_title"]
+    else:
+        out["original_title"] = conn.execute(
+            "SELECT original_title FROM memory_versions WHERE memory_id=?"
+            " AND original_title IS NOT NULL ORDER BY version_no LIMIT 1",
+            (memory_id,)).fetchone()
+        out["original_title"] = (out["original_title"]["original_title"]
+                                 if out["original_title"] else None)
+    cats = categories_mod.list_of(conn, memory_id)
+    if cats:
+        out["categories"] = cats
+    mood = conn.execute(
+        "SELECT mood_text, author, captured_at, evidence_state FROM"
+        " memory_moods WHERE memory_id=?", (memory_id,)).fetchone()
+    if mood is not None:
+        tags = conn.execute(
+            "SELECT tag FROM memory_mood_tags WHERE memory_id=? ORDER BY tag",
+            (memory_id,)).fetchall()
+        out["mood"] = {"text": mood["mood_text"], "tags": [t["tag"] for t in tags],
+                       "author": mood["author"], "evidence_state": mood["evidence_state"]}
+    return out
 
 
 def versions_read(conn, memory_id: str) -> list[dict]:
@@ -217,7 +373,7 @@ def apply_forget_approval(
     )
     conn.execute(
         "UPDATE memories SET current_version_no=?, compression_state='forgotten_summary',"
-        " updated_at=? WHERE memory_id=?",
+        " representation_state=representation_state+1, updated_at=? WHERE memory_id=?",
         (new_version, now, memory_id),
     )
     projection.upsert(
@@ -325,7 +481,8 @@ def restore(
             )
             conn.execute(
                 "UPDATE memories SET current_version_no=?, compression_state='full',"
-                " updated_at=? WHERE memory_id=?",
+                " representation_state=representation_state+1, updated_at=?"
+                " WHERE memory_id=?",
                 (new_version, now, memory_id),
             )
             projection.upsert(

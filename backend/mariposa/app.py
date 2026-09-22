@@ -20,7 +20,11 @@ from .capabilities import v1_compat
 from .errors import MariposaError
 from .identity import service as identity
 
-WEB_DIR = config.PROJECT_ROOT / "backend" / "mariposa" / "web"
+# 静态资源相对代码树定位（而非 MARIPOSA_ROOT 数据根）：
+# 测试/隔离根只隔离数据库，代码与构建产物位置不变
+from pathlib import Path as _Path
+_SOURCE_ROOT = _Path(__file__).resolve().parents[2]
+WEB_DIR = _SOURCE_ROOT / "backend" / "mariposa" / "web"
 
 
 @asynccontextmanager
@@ -152,6 +156,6 @@ if WEB_DIR.exists():
         return FileResponse(str(WEB_DIR / "index.html"))
 
 # React/Vite 构建产物（apps/web，npm run build 生成）；与 /api 同源
-WEB_DIST = config.PROJECT_ROOT / "apps" / "web" / "dist"
+WEB_DIST = _SOURCE_ROOT / "apps" / "web" / "dist"
 if WEB_DIST.exists():
     app.mount("/app", StaticFiles(directory=str(WEB_DIST), html=True), name="webapp")

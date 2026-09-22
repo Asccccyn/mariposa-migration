@@ -517,6 +517,192 @@ CREATE TABLE migration_id_map(
   PRIMARY KEY(legacy_id, source_type)
 );
 """),
+    (11, """
+-- ===== v2 分层模型（spec_v2 §5）=====
+
+CREATE TABLE memory_categories(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  category TEXT NOT NULL CHECK(category IN
+    ('daily','milestone','sad','sweet','date','plan','sex','anniversary')),
+  added_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, category)
+);
+CREATE INDEX idx_categories_category ON memory_categories(category);
+
+CREATE TABLE memory_moods(
+  memory_id TEXT PRIMARY KEY REFERENCES memories(memory_id),
+  mood_text TEXT,
+  author TEXT NOT NULL CHECK(author IN ('jiaming')),
+  captured_session TEXT,
+  captured_at TEXT NOT NULL,
+  evidence_state TEXT NOT NULL CHECK(evidence_state IN
+    ('contemporaneous','window_verified','absent'))
+);
+
+CREATE TABLE memory_mood_tags(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  tag TEXT NOT NULL,
+  PRIMARY KEY(memory_id, tag)
+);
+CREATE INDEX idx_mood_tags_tag ON memory_mood_tags(tag);
+
+CREATE TABLE memory_our_words(
+  word_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  ordinal INTEGER NOT NULL,
+  speaker TEXT NOT NULL CHECK(speaker IN ('jiaming','qiaosheng')),
+  text TEXT NOT NULL,
+  expression_kind TEXT NOT NULL DEFAULT 'unspecified'
+    CHECK(expression_kind IN ('verbatim','paraphrase','unspecified')),
+  source_ref TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(memory_id, ordinal)
+);
+
+CREATE TABLE memory_view_receipts(
+  receipt_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  representation_version INTEGER NOT NULL,
+  confirm_key TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  confirmed_at TEXT,
+  UNIQUE(principal_id, confirm_key)
+);
+CREATE INDEX idx_view_receipts_memory ON memory_view_receipts(memory_id, principal_id);
+
+CREATE TABLE memory_recollections(
+  recollection_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  author TEXT NOT NULL CHECK(author IN ('jiaming','qiaosheng')),
+  text TEXT NOT NULL,
+  view_receipt TEXT,
+  supersedes TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  written_at TEXT NOT NULL
+);
+CREATE INDEX idx_recollections_memory ON memory_recollections(memory_id, written_at);
+
+CREATE TABLE memory_retention(
+  memory_id TEXT PRIMARY KEY REFERENCES memories(memory_id),
+  policy_version TEXT NOT NULL,
+  policy_timezone TEXT NOT NULL,
+  basis_at TEXT,
+  basis_date TEXT,
+  due_date TEXT,
+  next_due_at TEXT,
+  last_explicit_open_at TEXT,
+  view_revision INTEGER NOT NULL DEFAULT 0,
+  retention_revision INTEGER NOT NULL DEFAULT 0,
+  permanent_reason TEXT,
+  retain_hint TEXT,
+  status TEXT NOT NULL CHECK(status IN
+    ('active','retained','date_gap','plan_managed','excluded'))
+);
+
+CREATE TABLE memory_summary_versions(
+  memory_id TEXT NOT NULL,
+  summary_version INTEGER NOT NULL,
+  summary_body TEXT NOT NULL,
+  forget_tags TEXT NOT NULL DEFAULT '[]',
+  source_version INTEGER,
+  source_hash TEXT,
+  proposal_id TEXT,
+  applied_at TEXT NOT NULL,
+  applied_by TEXT NOT NULL,
+  PRIMARY KEY(memory_id, summary_version)
+);
+
+CREATE TABLE review_delegations(
+  delegation_id TEXT PRIMARY KEY,
+  reviewed_principal TEXT NOT NULL,
+  allowed_actions TEXT NOT NULL DEFAULT '[]',
+  resource_scope TEXT NOT NULL DEFAULT 'all',
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  revoked INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE i_documents(
+  doc_id TEXT PRIMARY KEY,
+  current_version_no INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE i_versions(
+  doc_id TEXT NOT NULL REFERENCES i_documents(doc_id),
+  version_no INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  authored_by TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(doc_id, version_no)
+);
+
+CREATE TABLE i_suggestions(
+  suggestion_id TEXT PRIMARY KEY,
+  suggested_by TEXT NOT NULL CHECK(suggested_by IN ('qiaosheng')),
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK(status IN ('open','accepted','dismissed')),
+  created_at TEXT NOT NULL
+);
+
+ALTER TABLE memories ADD COLUMN held_at TEXT;
+ALTER TABLE memories ADD COLUMN held_at_confidence TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE memories ADD COLUMN creation_mode TEXT NOT NULL DEFAULT 'legacy_unknown'
+  CHECK(creation_mode IN ('contemporaneous','retrospective','legacy_unknown'));
+ALTER TABLE memories ADD COLUMN representation_state INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE memory_versions ADD COLUMN original_title TEXT;
+ALTER TABLE memory_versions ADD COLUMN event_text TEXT;
+ALTER TABLE memory_versions ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE plans ADD COLUMN completed_at TEXT;
+ALTER TABLE plans ADD COLUMN abandoned_at TEXT;
+ALTER TABLE plans ADD COLUMN terminal_date TEXT;
+ALTER TABLE plans ADD COLUMN due_date TEXT;
+ALTER TABLE plans ADD COLUMN policy_timezone TEXT;
+ALTER TABLE plans ADD COLUMN terminal_revision INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE forgetting_due_queue(
+  item_id TEXT PRIMARY KEY,
+  target_kind TEXT NOT NULL CHECK(target_kind IN ('memory','plan')),
+  target_id TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK(status IN ('pending','leased','done','failed','dead')),
+  lease_id TEXT,
+  lease_expires_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(target_kind, target_id, due_date)
+);
+CREATE INDEX idx_due_queue_status ON forgetting_due_queue(status, due_date);
+
+CREATE TABLE anniversary_definitions(
+  definition_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  rule TEXT NOT NULL DEFAULT 'yearly',
+  rule_version TEXT NOT NULL DEFAULT 'anniversary_rule_v1',
+  memory_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE anniversary_occurrences(
+  occurrence_id TEXT PRIMARY KEY,
+  definition_id TEXT NOT NULL REFERENCES anniversary_definitions(definition_id),
+  occurrence_date TEXT NOT NULL,
+  UNIQUE(definition_id, occurrence_date)
+);
+CREATE INDEX idx_anniv_occ_date ON anniversary_occurrences(occurrence_date);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
@@ -571,6 +757,43 @@ CREATE TABLE workspace_audit(
   action TEXT NOT NULL,
   item_id TEXT,
   detail TEXT
+);
+"""),
+    (3, """
+-- ===== v2 审查闭环（spec_v2 §8）=====
+CREATE TABLE v2_review_items(
+  item_id TEXT PRIMARY KEY,
+  target_kind TEXT NOT NULL DEFAULT 'memory' CHECK(target_kind IN ('memory','plan')),
+  target_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN
+    ('generating','generated','in_review','ready_to_apply',
+     'needs_owner_decision','needs_jiaming_decision',
+     'retained','forgotten','deferred','stale','withdrawn','failed')),
+  current_revision INTEGER NOT NULL DEFAULT 1,
+  generated_summary TEXT,
+  generated_tags TEXT NOT NULL DEFAULT '[]',
+  source_version INTEGER,
+  source_fields_hash TEXT,
+  retention_revision INTEGER,
+  terminal_revision INTEGER,
+  policy_version TEXT,
+  created_by TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TEXT,
+  retain_hints TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_v2_review_state ON v2_review_items(state, updated_at);
+
+CREATE TABLE v2_proposal_versions(
+  item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  summary_body TEXT NOT NULL,
+  forget_tags TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(item_id, revision)
 );
 """),
 ]

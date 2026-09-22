@@ -2,6 +2,55 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-22 · v2.0.1 新语义实施·第一批（P0–P6 后端核心）
+
+依据 docs/spec_v2/（v2.0.1 交付包已归档）。两段提交：
+
+**第一段（P0/P1 收尾，582f681）**：B06 测试根保险丝（conftest fail-closed
+白名单+realpath 规范化，业务根拒绝，V2-OPS-07）；B08 扫描游标防饥饿
+（(memory_date,memory_id) 稳定游标、NULL 日期段 NULL-safe 推进、defer
+实际落状态、workspace.proposals.withdraw 独立工具，V2-RET-09）；B02 加固
+（崩溃残留 running 不盲删重放→OUTCOME_UNKNOWN；maintenance.idempotency.
+reconcile 显式对账后 failed→可重试，V2-OPS-05）。
+
+**第二段（P2–P6 后端核心）**：
+- 迁移 11/3：八分类/当时心情+标签/我们的话/查看回执/回忆/留存行/摘要
+  版本/审查委托/I 正本+建议/计划终结字段/持久到期队列/纪念日/审查工作项。
+- memory.hold 分层写入：标题/八分类/事件/同期心情（仅周家明+仅同期，
+  V2-REC-03/04/09）/我们的话/creation_mode；v2 投影白名单（标题/心情/
+  话语/回忆永不进索引）。
+- retention：自然日语义（basis_date+N、跨月/闰日、日界候选资格），
+  分类周期 20/30/60/永久，明确打开续期（同日不后移、票据幂等），
+  确定留终局不再送审；到期队列（租约/重试/dead-letter）。
+- memory.open/view.confirm/recollections.append/revise/list；our_words；
+  categories.replace；I（i.get/write/versions/suggest）。
+- 计划：完成/放弃→终结自然日+20 固定到期；阅读永不续期/不改
+  terminal_revision；明确重启取消旧周期（PLAN-01..11）。
+- memory.recall：分类 any/all+心情标签+事件日期筛选、空 query 浏览、
+  BM25（升序=更相关）、去重分页、matched_by/matched_fields。
+- 林石见审查闭环：v2_review_items 状态机、claim/get/revise/submit
+  （release/escalate_*）、memory.retention.decide（keep 终局/continue/
+  defer）；禁用概括词拦截；保留线索（共同话语→needs_jiaming_decision、
+  第一次/留附上下文、回忆非空）；执行前再核验（源版本/字段hash/到期/
+  实时线索）；摘要+审查后 tags 入索引（标题永不）。
+- bootstrap v2：三天桶=标题+心情标签+文字（含补录"新收录"标记）+I+
+  0..3 日临近日程全文+纪念日；不再默认 30 条原文（V2-BOOT-03）；
+  snapshot 指纹覆盖记忆/计划/I/纪念日。
+- E2E 隔离化：playwright webServer 自启隔离实例（端口 18799、
+  .pytest_tmp/e2e-isolated、独立 token），不再复用业务 18780（§16）；
+  顺带修复 HEAD 上已损坏的严格 schema 调用点（scan 缺 policy_version、
+  前端 submit 缺 proposal_hash/字段名不对）与静态资源按 MARIPOSA_ROOT
+  误定位问题。
+
+**验证：后端 289 passed（原 214+新增 75）/ pip check 通过 / web build 通过 /
+E2E 2 passed（隔离实例）**。旧用例仅按 superseded 规则更新 4 处
+（V2-BOOT-01/03/08 注明于测试内）。
+
+**尚未实施（见 NEXT/BLOCKERS）**：原文区间绑定 v2（raw_binding_ranges/
+context 确认展开/自动绑定评测关卡）、语义检索 v2 投影切换、迁移映射
+（旧库→v2 字段）、前端 v2 页面（分栏桶详情/召回筛选/审查/I）、
+109 条矩阵的机器可读证据链、v2 契约 JSON 导出。
+
 ## 2026-09-22 · 林石见独立复审问题修复（8/8 项）
 
 复审发现（详见对话/commit）：MCP 三段名反解（52 能能全坏）→ 双向表实时反解；

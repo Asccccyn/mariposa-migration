@@ -10,8 +10,141 @@ from ..memory import relations as relations_mod
 from . import projection, semantic
 
 
+def recall(conn, query: str = "", filters: dict | None = None,
+           limit: int = 20, cursor: list | None = None) -> dict:
+    """v2 统一召回（spec_v2 §9 / §3.1 白名单）。
+
+    - 结构化筛选先缩小候选池（分类 any/all、心情标签、事件日期范围）；
+    - query 为空 = 浏览该池（不强迫全文匹配）；query 非空在池内 BM25 排序
+      （bm25 值越小越相关，[T1]）；
+    - 文本命中只来自当前允许投影：未遗忘=事件正文，遗忘=事后摘要
+      （标题/心情文字/我们的话/回忆/原文永不参与——投影构造层保证）；
+    - 按 memory_id 去重；分页游标：浏览=[last_date, last_id]，
+      关键词=offset；每条带 matched_by / matched_fields / 表示版本。
+    """
+    filters = filters or {}
+    limit = max(1, min(int(limit), 100))
+    where = ["m.visibility='active'"]
+    params: list = []
+
+    cats = [c for c in (filters.get("categories") or []) if c]
+    if cats:
+        marks = ",".join("?" * len(cats))
+        if filters.get("category_match", "any") == "all":
+            where.append(
+                f"m.memory_id IN (SELECT memory_id FROM memory_categories"
+                f" WHERE category IN ({marks})"
+                f" GROUP BY memory_id HAVING COUNT(DISTINCT category)=?)")
+            params += cats + [len(set(cats))]
+        else:
+            where.append(
+                f"EXISTS(SELECT 1 FROM memory_categories c WHERE"
+                f" c.memory_id=m.memory_id AND c.category IN ({marks}))")
+            params += cats
+
+    tags = [t for t in (filters.get("mood_tags") or []) if t]
+    if tags:
+        marks = ",".join("?" * len(tags))
+        if filters.get("mood_match", "any") == "all":
+            where.append(
+                f"m.memory_id IN (SELECT memory_id FROM memory_mood_tags"
+                f" WHERE tag IN ({marks})"
+                f" GROUP BY memory_id HAVING COUNT(DISTINCT tag)=?)")
+            params += tags + [len(set(tags))]
+        else:
+            where.append(
+                f"EXISTS(SELECT 1 FROM memory_mood_tags t WHERE"
+                f" t.memory_id=m.memory_id AND t.tag IN ({marks}))")
+            params += tags
+
+    dr = filters.get("event_date") or {}
+    if dr.get("from"):
+        where.append("m.memory_date >= ?")
+        params.append(dr["from"])
+    if dr.get("to"):
+        where.append("m.memory_date <= ?")
+        params.append(dr["to"])
+
+    phrase = projection.compile_query(query or "")
+    hits: list[dict] = []
+    next_cursor = None
+
+    if phrase:
+        # 关键词模式：池内 FTS + BM25（升序=更相关）；offset 游标
+        offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
+            cursor[0]).isdigit() else 0
+        sql = (
+            "SELECT m.memory_id, m.memory_date, m.compression_state,"
+            " m.current_version_no, rd.projection_kind, bm25(search_fts) AS rank"
+            " FROM memories m"
+            " JOIN retrieval_documents rd ON rd.memory_id = m.memory_id"
+            " JOIN search_fts ON search_fts.memory_id = m.memory_id"
+            f" WHERE {' AND '.join(where)} AND search_fts MATCH ?"
+            " ORDER BY rank, m.memory_id LIMIT ? OFFSET ?")
+        rows = conn.execute(sql, params + [phrase, limit + 1, offset]).fetchall()
+        for r in rows[:limit]:
+            hits.append({
+                "memory_id": r["memory_id"],
+                "matched_by": ("summary_keyword"
+                               if r["compression_state"] == "forgotten_summary"
+                               else "keyword"),
+                "matched_fields": (["summary_body"]
+                                   if r["compression_state"] == "forgotten_summary"
+                                   else ["event_text"]),
+                "projection_kind": r["projection_kind"],
+                "memory_version": r["current_version_no"],
+                "memory_date": r["memory_date"],
+            })
+        if len(rows) > limit:
+            next_cursor = [str(offset + limit)]
+        return {"hits": hits, "query": query, "mode": "keyword",
+                "filters_applied": _filters_summary(filters),
+                "next_cursor": next_cursor, "limit": limit}
+
+    # 浏览模式：稳定键游标 (memory_date DESC, memory_id DESC)
+    extra = ""
+    if cursor and len(cursor) == 2 and cursor[0]:
+        where.append("(m.memory_date < ? OR (m.memory_date = ? AND"
+                     " m.memory_id < ?))")
+        params += [cursor[0], cursor[0], cursor[1] or ""]
+    sql = ("SELECT m.memory_id, m.memory_date, m.compression_state,"
+           " m.current_version_no FROM memories m"
+           f" WHERE {' AND '.join(where)}"
+           " ORDER BY m.memory_date DESC, m.memory_id DESC LIMIT ?")
+    rows = conn.execute(sql, params + [limit + 1]).fetchall()
+    for r in rows[:limit]:
+        hits.append({
+            "memory_id": r["memory_id"],
+            "matched_by": "filter",
+            "matched_fields": [],
+            "projection_kind": r["compression_state"],
+            "memory_version": r["current_version_no"],
+            "memory_date": r["memory_date"],
+        })
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = [last["memory_date"], last["memory_id"]]
+    return {"hits": hits, "query": "", "mode": "browse",
+            "filters_applied": _filters_summary(filters),
+            "next_cursor": next_cursor, "limit": limit}
+
+
+def _filters_summary(filters: dict) -> dict:
+    out = {}
+    if filters.get("categories"):
+        out["categories"] = list(filters["categories"])
+        out["category_match"] = filters.get("category_match", "any")
+    if filters.get("mood_tags"):
+        out["mood_tags"] = list(filters["mood_tags"])
+        out["mood_match"] = filters.get("mood_match", "any")
+    if filters.get("event_date"):
+        out["event_date"] = filters["event_date"]
+    return out
+
+
 def search(conn, query: str, limit: int = 20,
            related_of: str | None = None) -> dict:
+    """related_of：按关联找到的桶（matched_by=relation），不依赖文本匹配。"""
     """related_of：按关联找到的桶（matched_by=relation），不依赖文本匹配。"""
     hits: list[dict] = []
     phrase = projection.compile_query(query)

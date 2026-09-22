@@ -17,6 +17,7 @@ PRINCIPALS = [
     ("qiaosheng", "江乔生", "human"),
     ("jiaming", "周家明", "agent"),
     ("worker", "维护工具人", "agent"),
+    ("linshijian", "林石见", "agent"),  # v2：受限审查者（只可改候选摘要/tags）
     ("system", "系统", "system"),
 ]
 
@@ -68,6 +69,7 @@ def _entry_source(pid: str) -> str:
         "qiaosheng": "web",
         "jiaming": "claude_chat",
         "worker": "gpt_chat",
+        "linshijian": "review_mcp",
         "system": "scheduler",
     }[pid]
 

@@ -1,14 +1,21 @@
-"""bootstrap 分页 cursor（§12.2）：不静默截断、STALE 不一半新一半旧。"""
+"""bootstrap 分页 cursor（§12.2 / v2-BOOT）：不静默截断、STALE 不一半新一半旧。
+
+superseded：旧 raw 30 条分页用例由 V2-BOOT-03 废止（开窗默认包不含原文）；
+分页语义改为 memory_days/plans 两段验证；raw 的显式分页仍由 raw.list_recent
+（before 游标）承担。
+"""
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from mariposa.bootstrap import service as bootstrap
 from mariposa.errors import Forbidden, SnapshotStale
 from mariposa.identity import service as identity
+from mariposa.memory import service as memory
 from mariposa.raw import service as raw
 from tests.conftest import reset_all
 
@@ -17,9 +24,78 @@ from tests.conftest import reset_all
 def actors():
     reset_all()
     return {
-        "jiaming": identity.Principal("jiaming", "周家明", "agent", "claude_chat", "bj"),
-        "worker": identity.Principal("worker", "维护工具人", "agent", "gpt_chat", "bw"),
+        "jiaming": identity.Principal("jiaming", "周家明", "agent",
+                                      "claude_chat", "bj"),
+        "worker": identity.Principal("worker", "维护工具人", "agent",
+                                     "gpt_chat", "bw"),
     }
+
+
+def _today():
+    return datetime.now(timezone.utc).astimezone(
+        ZoneInfo("Asia/Shanghai")).date()
+
+
+def test_no_raw_in_default_package_boot03(actors):
+    _import(75)
+    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
+    assert "raw" not in first
+    assert first["coverage"]["raw"] == "not_in_default_package"
+    # 显式取源仍可分页（raw.list_recent before 游标）
+    msgs = raw.list_recent(30)
+    assert len(msgs) == 30
+    older = raw.list_recent(30, before=msgs[0]["occurred_at"])
+    assert older and older[0]["occurred_at"] < msgs[0]["occurred_at"]
+
+
+def test_memory_days_pagination_no_silent_truncation(actors):
+    today = _today()
+    ids = set()
+    for i in range(60):  # 窗口内 60 桶 > 段上限 50
+        h = memory.hold(actors["jiaming"], text=f"分页桶 {i}",
+                        memory_date=today.isoformat())
+        ids.add(h["memory_id"])
+    first = bootstrap.get("jiaming", "cc", "cc")
+    md = first["memory_days"]
+    assert md["count"] == 50 and md["total_in_window"] == 60
+    seen = {m["memory_id"] for m in md["items"]}
+    page2 = bootstrap.next_page("jiaming", "cc", first["snapshot_id"],
+                                md["next_cursor"], section="memory_days")
+    seen |= {m["memory_id"] for m in page2["items"]}
+    assert seen == ids  # 全量可达，无重叠无丢失
+    assert page2["next_cursor"] is None
+
+
+def test_page2_stale_when_resources_change(actors):
+    first = bootstrap.get("jiaming", "cc", "cc")
+    # 底层资源变化（记忆/计划/I/纪念日任一）→ 旧快照分页拒绝
+    memory.hold(actors["jiaming"], text="新桶", memory_date=_today().isoformat())
+    with pytest.raises(SnapshotStale):
+        bootstrap.next_page("jiaming", "cc", first["snapshot_id"],
+                            {"plans_offset": 0}, section="plans")
+
+
+def test_i_change_invalidates_snapshot(actors):
+    from mariposa.identity_i import service as i_svc
+    first = bootstrap.get("jiaming", "cc", "cc")
+    i_svc.write("jiaming", "I 正本第一版")
+    with pytest.raises(SnapshotStale):
+        bootstrap.get("jiaming", "cc", "cc",
+                      loaded_snapshot_id=first["snapshot_id"])
+
+
+def test_raw_section_removed_from_next_page(actors):
+    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
+    with pytest.raises(Forbidden):
+        bootstrap.next_page("jiaming", "claude_chat", first["snapshot_id"],
+                            {"raw_before": "x"}, section="raw")
+
+
+def test_small_dataset_no_cursor(actors):
+    _import(10)
+    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
+    assert first["cursor"]["next"] is None
+    assert first["memory_days"]["next_cursor"] is None
 
 
 def _import(n):
@@ -28,51 +104,9 @@ def _import(n):
         "source_channel": "claude_export",
         "external_id": f"ex_{uuid.uuid4().hex[:8]}",
         "messages": [
-            {"source_message_id": f"m{i:04d}", "role": "user" if i % 2 == 0 else "assistant",
+            {"source_message_id": f"m{i:04d}",
+             "role": "user" if i % 2 == 0 else "assistant",
              "body": f"分页测试消息 {i}", "occurred_at":
              (base + timedelta(minutes=i)).isoformat(), "sequence": i}
             for i in range(n)],
     })
-
-
-def test_cursor_pagination_no_silent_truncation(actors):
-    _import(75)
-    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-    assert first["raw"]["count"] == 30
-    assert first["cursor"]["next"] is not None
-    seen = {m["source_message_id"] for m in first["raw"]["messages"]}
-
-    second = bootstrap.next_page("jiaming", "claude_chat", first["snapshot_id"],
-                                 first["cursor"]["next"])
-    assert second["raw"]["count"] == 30
-    second_ids = {m["source_message_id"] for m in second["raw"]["messages"]}
-    assert not seen & second_ids  # 页间不重叠
-    seen |= second_ids
-
-    third = bootstrap.next_page("jiaming", "claude_chat", first["snapshot_id"],
-                                second["cursor"]["next"])
-    assert third["raw"]["count"] == 15
-    seen |= {m["source_message_id"] for m in third["raw"]["messages"]}
-    assert third["cursor"]["next"] is None
-    assert len(seen) == 75  # 全量可达，无静默丢失
-
-
-def test_page2_stale_when_resources_change(actors):
-    _import(40)
-    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-    _import(5)  # 新消息到来
-    with pytest.raises(SnapshotStale):
-        bootstrap.next_page("jiaming", "claude_chat", first["snapshot_id"],
-                            first["cursor"]["next"])
-
-
-def test_cc_profile_has_no_pagination(actors):
-    first = bootstrap.get("jiaming", "cc", "cc")
-    assert first["cursor"]["next"] is None
-
-
-def test_small_dataset_no_cursor(actors):
-    _import(10)
-    first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-    assert first["raw"]["count"] == 10
-    assert first["cursor"]["next"] is None

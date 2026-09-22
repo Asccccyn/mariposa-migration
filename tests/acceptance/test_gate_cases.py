@@ -384,12 +384,15 @@ class TestRAW:
         assert any(i["proposal_id"] == out["workspace_item"] for i in items)
 
     def test_T_RAW_07_provisional_not_in_bootstrap(self, actors):
-        """T-RAW-07：复述片段不计入真实原文 30 条。"""
+        """T-RAW-07（superseded by V2-BOOT-03）：复述片段不进入真实原文。
+
+        v2 开窗默认包已不含 30 条原文；本用例改为验证：显式 raw 查询
+        也只返回已收录 raw_messages，复述片段（provisional）不混入。
+        """
         binding.report_fragment("jiaming", "她说想去看海")
-        from mariposa.bootstrap import service as bootstrap
-        out = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-        bodies = [m["body"] for m in out["raw"]["messages"]]
-        assert not any("想去看海" in b for b in bodies)
+        from mariposa.raw import service as raw_svc
+        msgs = raw_svc.list_recent(30)
+        assert not any("想去看海" in m["body"] for m in msgs)
 
     def test_T_RAW_08_import_never_creates_memory(self, actors):
         """T-RAW-08：导入原文不自动产生正式记忆。"""

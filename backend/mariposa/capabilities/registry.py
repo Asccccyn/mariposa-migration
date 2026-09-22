@@ -61,9 +61,36 @@ def _register() -> dict[str, Capability]:
         caps[name] = Capability(name, handler, set(allowed), write, idempotent, description)
 
     add("memory.hold", _hold, {"qiaosheng", "jiaming"}, True,
-        description="写入一条正式记忆（full 表示，version 1）")
+        description="写入一条正式记忆（v2 分层：标题/八分类/事件/同期心情/我们的话）")
     add("memory.get", _get, _owners(), False, description="读取当前表示（遗忘桶只返回摘要）")
+    add("memory.open", _open, _owners(), True,
+        description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
+    add("memory.view.confirm", _view_confirm, _owners(), True, True,
+        description="确认本次明确查看；普通桶按自然日续期（plan 不适用）")
+    add("memory.recollections.append", _recollect_append, _owners(), True, True,
+        description="凭有效查看回执追加本人回忆（不索引；触发保留线索）")
+    add("memory.recollections.revise", _recollect_revise, _owners(), True,
+        description="修订本人回忆（原话留底，supersedes 链）")
+    add("memory.recollections.list", _recollect_list, _owners(), False,
+        description="列出桶的回忆（当前版；include_history 含修订历史）")
+    add("memory.our_words.append", _our_words_append, _owners(), True,
+        description="追加我们的话（speaker/ordinal；不参与召回）")
+    add("memory.our_words.list", _our_words_list, _owners(), False,
+        description="列出桶内双方话语（按 ordinal）")
+    add("memory.categories.replace", _categories_replace, _owners(), True,
+        description="整组替换八分类（平行多选；触发期限重算）")
+    add("i.get", _i_get, _owners(), False, description="I 正本当前版（周家明写）")
+    add("i.write", _i_write, {"jiaming"}, True,
+        description="写 I 正本（仅周家明；版本留底；无情绪准入）")
+    add("i.versions.read", _i_versions, _owners(), False,
+        description="I 版本历史（只读）")
+    add("i.suggest", _i_suggest, {"qiaosheng"}, True,
+        description="乔生提建议（待提议材料，不改正本）")
+    add("i.suggestions.list", _i_suggestions, _owners(), False,
+        description="I 建议列表")
     add("memory.search", _search, _owners(), False, description="关键词检索有效投影")
+    add("memory.recall", _recall, _owners(), False,
+        description="v2 统一召回：query可空浏览；分类/心情标签/事件日期筛选；any/all；去重分页")
     add("memory.versions.read", _versions, _owners(), False,
         description="明确展开历史版本，不自动 restore")
     add("memory.restore", _restore, _owners(), True,
@@ -82,6 +109,20 @@ def _register() -> dict[str, Capability]:
         True, description="撤回自己未终局的已提交提案（提交者或两人；不要求hash）")
     add("maintenance.idempotency.reconcile", _idem_reconcile, _owners(), True,
         description="崩溃窗口对账：核实业务结果后清除 running 幂等占位")
+    add("workspace.forgetting.generate", _v2_generate,
+        {"worker", "qiaosheng", "jiaming"}, True,
+        description="v2：从到期队列生成审查项（候选摘要/tags；无正式写入权）")
+    add("workspace.review.claim", _v2_claim, {"linshijian"}, True,
+        description="林石见领取待审项（受限委托；不改原始字段）")
+    add("workspace.review.get", _v2_review_get,
+        {"linshijian", "qiaosheng", "jiaming", "worker"}, False,
+        description="审查材料：原标题/正文/心情/分类+候选稿版本+保留线索")
+    add("workspace.review.revise", _v2_review_revise, {"linshijian"}, True,
+        description="林石见只改候选summary_body/forget_tags；其余字段拒绝")
+    add("workspace.review.submit", _v2_review_submit, {"linshijian"}, True, True,
+        description="放行干净到期项或转疑难（release/escalate_*）")
+    add("memory.retention.decide", _v2_retention_decide, _owners(), True, True,
+        description="终裁 keep/continue/defer；共同话语限定周家明")
     add("raw.import", _raw_import, {"worker", "qiaosheng", "jiaming"}, True, True,
         description="导入原文（同源同消息 ID 幂等，不覆盖已存在消息）")
     add("raw.messages.list", _raw_list, _owners(), False,
@@ -417,7 +458,106 @@ def _hold(principal: Principal, a: dict) -> dict:
         entry_source=principal.entry_source,
         raw_refs=a.get("raw_refs"),
         raw_pending=bool(a.get("raw_pending", True)),
+        original_title=a.get("original_title"),
+        categories=a.get("categories"),
+        mood=a.get("mood"),
+        our_words=a.get("our_words"),
+        creation_mode=a.get("creation_mode"),
+        occurred_start=a.get("occurred_start"),
+        occurred_end=a.get("occurred_end"),
     )
+
+
+def _open(principal: Principal, a: dict) -> dict:
+    from ..memory import views as views_mod
+    return views_mod.open_memory(principal, str(a.get("memory_id", "")))
+
+
+def _view_confirm(principal: Principal, a: dict) -> dict:
+    from ..memory import views as views_mod
+    return views_mod.confirm_view(
+        principal, str(a.get("memory_id", "")),
+        str(a.get("receipt_id", "")), a.get("confirm_key"))
+
+
+def _recollect_append(principal: Principal, a: dict) -> dict:
+    from ..memory import recollections as rec_mod
+    return rec_mod.append(principal, str(a.get("memory_id", "")),
+                          str(a.get("receipt_id", "")),
+                          str(a.get("text", "")))
+
+
+def _recollect_revise(principal: Principal, a: dict) -> dict:
+    from ..memory import recollections as rec_mod
+    return rec_mod.revise(principal, str(a.get("recollection_id", "")),
+                          str(a.get("text", "")))
+
+
+def _recollect_list(principal: Principal, a: dict) -> dict:
+    from ..memory import recollections as rec_mod
+    return {"recollections": rec_mod.list_for(
+        str(a.get("memory_id", "")), bool(a.get("include_history", False)))}
+
+
+def _our_words_append(principal: Principal, a: dict) -> dict:
+    from ..memory import our_words as ow_mod
+    return ow_mod.append(principal.principal_id, str(a.get("memory_id", "")),
+                         a.get("words") or [])
+
+
+def _our_words_list(principal: Principal, a: dict) -> dict:
+    from ..memory import our_words as ow_mod
+    return {"words": ow_mod.list_for(str(a.get("memory_id", "")))}
+
+
+def _categories_replace(principal: Principal, a: dict) -> dict:
+    from ..memory import categories as cats_mod
+    from ..memory import retention as retention_mod
+    from .. import db as _db
+    with _db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
+                                (str(a.get("memory_id", "")),)).fetchone():
+                raise NotFound("memory not found",
+                               memory_id=a.get("memory_id"))
+            cats_mod.replace(conn, str(a.get("memory_id", "")),
+                             a.get("categories") or [],
+                             principal.principal_id)
+            out = retention_mod.recompute(conn, str(a.get("memory_id", "")))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"memory_id": a.get("memory_id"),
+            "categories": a.get("categories"),
+            "due_date": out.get("due_date"), "status": out.get("status")}
+
+
+def _i_get(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.get()
+
+
+def _i_write(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.write(principal.principal_id, str(a.get("content", "")),
+                       a.get("expected_version"))
+
+
+def _i_versions(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return {"versions": i_svc.versions_read()}
+
+
+def _i_suggest(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.suggest(principal.principal_id, str(a.get("content", "")))
+
+
+def _i_suggestions(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return {"suggestions": i_svc.suggestions_list(a.get("status"))}
 
 
 def _get(principal: Principal, a: dict) -> dict:
@@ -434,6 +574,13 @@ def _search(principal: Principal, a: dict) -> dict:
     with db.formal() as conn:
         return retrieval_search.search(conn, str(a.get("query", "")),
                                        int(a.get("limit", 20)))
+
+
+def _recall(principal: Principal, a: dict) -> dict:
+    with db.formal() as conn:
+        return retrieval_search.recall(
+            conn, str(a.get("query", "")), a.get("filters") or {},
+            int(a.get("limit", 20)), a.get("cursor"))
 
 
 def _restore(principal: Principal, a: dict) -> dict:
@@ -470,6 +617,46 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
         str(a.get("record_principal", principal.principal_id)),
         str(a.get("capability", "")), str(a.get("idempotency_key", "")),
         int(a.get("stale_seconds", 60)))
+
+
+def _v2_generate(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    review_mod.ensure_default_delegation()
+    return review_mod.generate(
+        principal, a.get("memory_id"),
+        str(a.get("candidate_summary", "")),
+        a.get("candidate_tags"))
+
+
+def _v2_claim(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    review_mod.ensure_default_delegation()
+    return review_mod.claim(principal)
+
+
+def _v2_review_get(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    return review_mod.get_item(principal, str(a.get("item_id", "")))
+
+
+def _v2_review_revise(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    return review_mod.revise(principal, str(a.get("item_id", "")),
+                             a.get("changes") or {})
+
+
+def _v2_review_submit(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    return review_mod.submit(
+        principal, str(a.get("item_id", "")),
+        str(a.get("decision", "")), int(a.get("expected_revision", 0)),
+        a.get("candidate_hash"))
+
+
+def _v2_retention_decide(principal: Principal, a: dict) -> dict:
+    from ..workspace import review as review_mod
+    return review_mod.decide_retention(
+        principal, str(a.get("item_id", "")), str(a.get("decision", "")))
 
 
 def _revise(principal: Principal, a: dict) -> dict:

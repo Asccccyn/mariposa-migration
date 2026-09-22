@@ -121,6 +121,8 @@ export function Workspace({ note }: { note: (s: string, err?: boolean) => void }
   const { data, error, reload } = useAsync<{ items: Proposal[] }>(
     () => call("workspace.proposals.list", {}), []);
   const [drafts, setDrafts] = useState<Record<string, { sum: string; rsn: string }>>({});
+  // 冻结稿信息：revise 返回的 revision/hash 供 submit/decide 精确引用
+  const [frozen, setFrozen] = useState<Record<string, { revision: number; hash: string }>>({});
 
   if (error) return <Err e={error} />;
   if (!data) return <Empty>加载中…</Empty>;
@@ -132,16 +134,22 @@ export function Workspace({ note }: { note: (s: string, err?: boolean) => void }
   const act = async (kind: string, p: Proposal) => {
     try {
       if (kind === "revise") {
-        const d = await call<{ revision: number }>("workspace.proposals.revise", {
+        const d = await call<{ revision: number; payload_hash: string }>(
+          "workspace.proposals.revise", {
           proposal_id: p.proposal_id,
           compressed_summary: drafts[p.proposal_id]?.sum ?? p.compressed_summary,
           reason: drafts[p.proposal_id]?.rsn ?? p.reason,
         });
+        setFrozen((f) => ({ ...f, [p.proposal_id]:
+          { revision: d.revision, hash: d.payload_hash } }));
         note(`修订到 r${d.revision}`);
       } else if (kind === "submit") {
-        await call("workspace.proposals.submit",
-          { proposal_id: p.proposal_id, revision: p.revision },
-          `ui-submit-${p.proposal_id}-${p.revision}`);
+        const info = frozen[p.proposal_id];
+        await call("workspace.proposals.submit", {
+          proposal_id: p.proposal_id,
+          proposal_revision: info ? info.revision : p.revision,
+          proposal_hash: info ? info.hash : p.proposal_hash,
+        }, `ui-submit-${p.proposal_id}-${p.revision}`);
         note("已提交，hash 冻结");
       } else if (kind === "approve" || kind === "reject") {
         await call("memory.forgetting.decide", {
