@@ -2,6 +2,10 @@
 
 > 每项：原因 / 已尝试 / 影响范围 / 解锁条件。blocked 只阻塞相关链路，不影响其余工作。
 
+## B0 · chat.*/voice.*/group.*/wishstar.*/wakeup.*（v1.1 规格 blocked 注册）
+- 与 B1/B4/B5/B6 同源（CC/Siren/扎西德勒/Superposition/wakeup）；
+  兼容层已注册这些能力名并如实返回 blocked 状态与解锁条件（不假实现）。
+
 ## B1 · CC Host 全链（T-CC-01..06；T-ID-10）
 - 原因：本机无 `claude` CLI（`Get-Command claude` 无结果）
 - 已尝试：无（不装 CLI 不做任何 API/`--bare` 替代——按 00 §9 禁止冒充）

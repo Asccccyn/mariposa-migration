@@ -30,13 +30,22 @@ PROFILE_PRINCIPALS = {
 }
 
 
+from .registry import REGISTRY  # noqa: E402  （延迟导入避免循环依赖）
+
+_T_PREFIX = "mariposa_"
+
+
 def _transport_name(canonical: str) -> str:
-    return "mariposa_" + canonical.replace(".", "_")
+    return _T_PREFIX + canonical.replace(".", "_")
 
 
+# 反解必须查表（字符串变换不可逆：memory.versions.read 的下划线归属有歧义）。
+# 实时查 REGISTRY：兼容层在运行期注册的能力同样可反解。
 def _canonical_name(transport: str) -> str:
-    if transport.startswith("mariposa_"):
-        return transport[len("mariposa_"):].replace("_", ".", 1)
+    if transport.startswith(_T_PREFIX):
+        for name in REGISTRY:
+            if _transport_name(name) == transport:
+                return name
     return transport
 
 
@@ -45,10 +54,13 @@ def _tools_for(principal: Principal) -> list[dict]:
     for cap in registry.REGISTRY.values():
         if principal.principal_id not in cap.allowed_principals:
             continue
+        from . import input_schemas
+        schema = input_schemas.schema_for(cap.name) or {
+            "type": "object", "properties": {}, "additionalProperties": True}
         tools.append({
             "name": _transport_name(cap.name),
             "description": cap.description,
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True},
+            "inputSchema": schema,
             "annotations": {"readOnlyHint": not cap.write,
                             "idempotentHint": cap.idempotent},
         })

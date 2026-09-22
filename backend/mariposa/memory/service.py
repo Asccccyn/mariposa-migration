@@ -37,6 +37,7 @@ def hold(
     date_confidence: str = "unknown",
     entry_source: str | None = None,
     raw_refs: list[dict] | None = None,
+    raw_pending: bool = True,
 ) -> dict:
     if not text or not text.strip():
         raise Forbidden("hold text required")
@@ -61,6 +62,7 @@ def hold(
         "why_remember": why_remember,
         "authored_by": principal.principal_id,
     }
+    initial_source_state = "bound" if (raw_refs and not raw_pending)         else ("raw_pending" if raw_pending else "raw_pending")
     now = _now()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")

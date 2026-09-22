@@ -16,3 +16,6 @@
 | D10 | scan 排除有 meaning/活跃关联的桶（自动候选） | §7.2 意义审查；主体仍可手动提案 | 仅标记不排除 |
 | D11 | 幂等记录/审计/向量各自独立表而非 JSON 列 | 可查询可索引；跨库对账需要 | JSON 聚合 |
 | D12 | contracts/capabilities.v1.json 由 registry 同源生成 | 防漂移（重导出 diff 为空有验证） | 手工维护（拒绝） |
+| D13 | v1.1 规格 150 项最低能力的缺口以三类兼容：别名（6，同 handler）、blocked/reserved 注册（31+8，如实返回状态不假实现）、薄实现（18，单条查询/快捷动作/hold_candidate 最小机制）；另有 4 项为规格名与实现名并存 | 林石见复审指出契约未完整落地；blocked 状态本身是规格要求的交付物 | 只实现真实可用的部分 |
+| D14 | 幂等键由调用方显式给出即生效（与 cap.idempotent hint 无关）；原子 claim=先 INSERT running 占位（60s 崩溃残留可清理）+ 有界等待对方终态 + BUSY 拒绝盲重放 | 复审确认查-执行-写存在并发双副作用窗口 | 分布式锁（过度设计） |
+| D15 | 12 个严格 schema 以最小校验器接入（$ref/$defs/anyOf/enum/长度/模式；不引第三方依赖）；schema 生效后 hold 必须显式 date_confidence+raw_pending（U16 来源完整度显式化） | 规格 additionalProperties:false 是真实契约；测试调用点已全部对齐 | jsonschema 库（引入依赖换完整 Draft2020 支持） |
