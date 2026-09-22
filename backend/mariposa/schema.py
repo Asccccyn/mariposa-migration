@@ -496,6 +496,27 @@ CREATE TABLE import_jobs(
     (9, """
 ALTER TABLE letters ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
 """),
+    (10, """
+CREATE TABLE memory_reengagements(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  evidence_kind TEXT NOT NULL,
+  evidence_ref TEXT,
+  occurred_at TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  recorded_by TEXT NOT NULL,
+  PRIMARY KEY(memory_id, occurred_at, evidence_kind)
+);
+CREATE INDEX idx_reengage ON memory_reengagements(memory_id, occurred_at);
+
+CREATE TABLE migration_id_map(
+  legacy_id TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  new_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  migrated_at TEXT NOT NULL,
+  PRIMARY KEY(legacy_id, source_type)
+);
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

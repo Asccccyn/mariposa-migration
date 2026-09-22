@@ -64,6 +64,10 @@ def get(principal_id: str, entry_source: str, profile: str,
                 raise SnapshotStale(
                     "underlying resources changed since snapshot; re-fetch",
                     snapshot_id=loaded_snapshot_id)
+            # §12.2 开窗去重：同 session 同策略状态未变 -> 薄响应，不重复灌包
+            return {"snapshot_id": loaded_snapshot_id, "unchanged": True,
+                    "profile": profile,
+                    "note": "底层资源未变化；继续用已加载内容，不重发开窗包"}
 
     tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
     from datetime import datetime, timezone

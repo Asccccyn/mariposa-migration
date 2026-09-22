@@ -45,6 +45,7 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         raise Forbidden("confidence must be exact/high/low")
     source_hash = hashlib.sha256(
         f"{conversation_id}:{message_from}:{message_to}".encode()).hexdigest()
+    low_confidence = confidence == "low"
     with db.formal() as conn:
         if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
                             (memory_id,)).fetchone():
@@ -56,6 +57,30 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         if msgs == 0:
             raise NotFound("no raw messages in range",
                            conversation_id=conversation_id)
+        if low_confidence:
+            # §9.2 低置信来源不自动认领：只生成工作区审阅项（RAW-06）
+            import uuid as _u
+            item_id = f"rbr_{_u.uuid4().hex[:10]}"
+            payload = {"memory_id": memory_id, "conversation_id": conversation_id,
+                       "message_from": message_from, "message_to": message_to,
+                       "review_kind": "raw_binding_review",
+                       "source_hash": source_hash}
+            with db.workspace() as wconn:
+                wconn.execute(
+                    "INSERT INTO work_items(item_id, item_type, target_memory_id,"
+                    " state, current_revision, created_by, created_at, updated_at,"
+                    " resolution_note) VALUES(?, 'raw_binding_review', ?,"
+                    " 'deferred', 1, ?, ?, ?, ?)",
+                    (item_id, memory_id, principal_id, _now(), _now(),
+                     __import__("json").dumps(payload, ensure_ascii=False)))
+                wconn.execute(
+                    "INSERT INTO proposal_versions(proposal_id, revision, payload,"
+                    " payload_hash, created_by, submitted_at) VALUES(?,1,?,?,?,NULL)",
+                    (item_id, __import__("json").dumps(payload, ensure_ascii=False),
+                     memory.canonical_hash(payload), principal_id))
+            return {"memory_id": memory_id, "source_state": "raw_pending",
+                    "workspace_item": item_id,
+                    "note": "低置信来源待核：未绑定，进工作区审阅"}
         # 去重：同一范围已绑到别的桶
         dup = conn.execute(
             "SELECT memory_id FROM memory_raw_refs WHERE conversation_id=?"

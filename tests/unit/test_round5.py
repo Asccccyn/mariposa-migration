@@ -73,10 +73,12 @@ class TestMeanings:
 
     def test_forgotten_meaning_not_searchable(self, actors):
         h = _hold(actors, "待遗忘的桶")
-        listing.meanings_append("jiaming", h["memory_id"], "独特意义词雾隐青竹")
+        # 注意顺序：先扫描拿候选（meaning 建立后会被自动候选排除），
+        # 再追加 meaning，最后提交审批——审批时 meaning 已存在
         scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
         prop = next(p for p in scan["created"]
                     if p["target_memory_id"] == h["memory_id"])
+        listing.meanings_append("jiaming", h["memory_id"], "独特意义词雾隐青竹")
         rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
                                      "压缩后的摘要。", "压缩")
         sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])

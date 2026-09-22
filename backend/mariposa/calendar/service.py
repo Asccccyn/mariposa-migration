@@ -143,3 +143,30 @@ def month(year: int, month: int, types: list[str] | None = None) -> dict:
     last = monthrange(year, month)[1]
     return range_items(f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last:02d}",
                        types)
+
+
+def undated(types: list[str] | None = None) -> dict:
+    """日期未知的资源进"待定日期"区，不塞进今天（§11.2）。"""
+    items: list[dict] = []
+    if not types or "memory" in types:
+        with db.formal() as conn:
+            rows = conn.execute(
+                "SELECT memory_id, current_version_no FROM memories WHERE"
+                " memory_date IS NULL AND visibility='active'").fetchall()
+            for r in rows:
+                rep = memory.get(conn, r["memory_id"])
+                items.append(_item(
+                    f"memory:{r['memory_id']}", "memory", r["memory_id"],
+                    "undated", "undated",
+                    (rep["text"][:16] + "…") if len(rep["text"]) > 16 else rep["text"],
+                    rep["text"], rep["representation"], "active",
+                    r["current_version_no"]))
+    if not types or "plan" in types:
+        for p_ in plans.list_plans(["planned", "active", "waiting", "blocked"]):
+            if not (p_.get("starts_at") or p_.get("due_at") or p_.get("date_start")):
+                items.append(_item(
+                    f"plan:{p_['plan_id']}", "plan", p_["plan_id"],
+                    "undated", "undated", p_["title"], p_["content"] or "",
+                    "plan_content", p_["state"], p_["version"]))
+    return {"section": "undated", "items": items, "count": len(items),
+            "note": "日期未知；不冒充今天，进待核对清单"}

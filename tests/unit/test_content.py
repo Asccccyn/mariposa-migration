@@ -130,7 +130,8 @@ class TestBootstrapSnapshot:
         first = bootstrap.get("jiaming", "cc", "cc")
         snap = first["snapshot_id"]
         again = bootstrap.get("jiaming", "cc", "cc", loaded_snapshot_id=snap)
-        assert again["snapshot_id"] != snap  # 状态未变也可重新取
+        # BOOT-08：未变 -> 薄响应不重复灌包（unchanged=true）
+        assert again.get("unchanged") is True
         memory.hold(actors["jiaming"], text="新桶", memory_date=None)
         with pytest.raises(SnapshotStale):
             bootstrap.get("jiaming", "cc", "cc", loaded_snapshot_id=snap)
