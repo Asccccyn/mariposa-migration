@@ -23,6 +23,11 @@
 7. **审查通知/待办入口**：队列非空时的已授权通知通道（未配置时诚实
    显示待审数，不假报送达）。
 
+7. **存量超长函数重构**（651d647 维护性重构后遗留的旧代码热点）：
+   `workspace/service.py::decide`（96行/嵌套5）、`submit`（88行）、
+   `memory/service.py::apply_forget_approval`（95行）、`restore`（75行）。
+   行为敏感且测试密集，留待独立一轮：先补行为测试画像再拆分验证。
+
 ## blocked（解锁条件明确）
 
 - **CC Host**：需先安装官方 Claude Code CLI 并核验订阅登录（`CC_AUTH_MODE=subscription_cli`）；本机当前无 claude 命令。不装不用 API 替代。
