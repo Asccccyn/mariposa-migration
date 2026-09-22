@@ -53,7 +53,7 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
             except ValueError:
                 skipped.append({"memory_id": r["memory_id"], "reason": "bad_date"})
                 continue
-            if (today_local - d).days <= idle:
+            if (today_local - d).days < idle:  # min_idle_days=0 意为无门槛
                 skipped.append({"memory_id": r["memory_id"], "reason": "too_recent"})
                 continue
             with db.workspace() as wconn:

@@ -231,6 +231,8 @@ def _register() -> dict[str, Capability]:
         description="列出当前 meaning 层")
     add("maintenance.rebuild_index", _rebuild_index, _owners(), True,
         description="按当前版本重建全部投影与 FTS（遗忘桶仅摘要）")
+    add("maintenance.semantic.warmup", _semantic_warmup, _owners(), True,
+        description="全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）")
     add("workspace.tasks.list", _tasks_list, {"worker", "qiaosheng", "jiaming"}, False,
         description="可认领工作项列表")
     add("workspace.tasks.claim", _task_claim, {"worker", "qiaosheng", "jiaming"}, True,
@@ -810,6 +812,12 @@ def _meaning_list(principal: Principal, a: dict) -> dict:
 
 def _rebuild_index(principal: Principal, a: dict) -> dict:
     return rebuild_mod.rebuild_index(principal.principal_id)
+
+
+def _semantic_warmup(principal: Principal, a: dict) -> dict:
+    from ..retrieval import semantic as _sem
+    with db.formal() as conn:
+        return _sem.warmup(conn)
 
 
 def _tasks_list(principal: Principal, a: dict) -> dict:

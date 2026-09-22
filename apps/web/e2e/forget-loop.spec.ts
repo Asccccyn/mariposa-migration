@@ -65,9 +65,11 @@ test("浏览器级遗忘闭环：写桶→扫描→提案→审批→摘要切�
 
   // 2. 搜索命中；记下本轮桶的 memory_id 用于后续锚定
   await doSearch(page, magicWord);
-  await expect(page.locator(".item")).toContainText(magicWord);
-  await expect(page.locator(".item .tag.full")).toBeVisible();
-  const memId = (await page.locator(".item .meta span").first().textContent())!.trim();
+  await expect(page.locator(".item").filter({ hasText: magicWord })
+    .first()).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".item .tag.full").first()).toBeVisible();
+  const memId = (await page.locator(".item").filter({ hasText: magicWord })
+    .first().locator(".meta span").first().textContent())!.trim();
 
   // 3. 扫描候选（40 天前 > 30 天门槛）
   await page.getByRole("button", { name: "扫描遗忘候选" }).click();
@@ -94,20 +96,34 @@ test("浏览器级遗忘闭环：写桶→扫描→提案→审批→摘要切�
   await page.getByRole("button", { name: "记忆 / 检索" }).click();
   await page.waitForTimeout(800);
   await doSearch(page, magicWord);
-  await expect(page.locator(".item")).toHaveCount(0, { timeout: 10000 });
+  // 本轮桶旧词不出现（其他相似桶的语义召回属正常补充召回）
+  await expect(page.locator(".item").filter({ hasText: magicWord }))
+    .toHaveCount(0, { timeout: 10000 });
   await doSearch(page, "心爱的小物");
-  await expect(page.locator(".item .tag.forgotten_summary").first()).toBeVisible();
+  await expect(page.locator(".item .tag.forgotten_summary").first())
+    .toBeVisible({ timeout: 15000 });
 
   // 7. 恢复后旧词重新命中（入口在摘要词结果里；本测试的桶是最新审批的一个）
   await page.getByRole("button", { name: "恢复旧正文" }).first().click();
   await page.waitForTimeout(1500);
   await doSearch(page, magicWord);
-  await expect(page.locator(".item").first()).toContainText(magicWord);
+  await expect(page.locator(".item").filter({ hasText: magicWord })
+    .first()).toBeVisible({ timeout: 15000 });
 });
 
-test("日历页签渲染月视图", async ({ page }) => {
+test("日历页签渲染月视图 + 刷新后状态保持（T-OPS-04）", async ({ page }) => {
   await login(page, "qiaosheng");
   await page.getByRole("button", { name: "日历" }).click();
   await expect(page.locator("table.cal")).toBeVisible();
-  await page.locator("table.cal td").first().click(); // 不崩溃即可
+  await page.locator("table.cal td").first().click();
+  // 刷新后 token/页签定位仍成立，数据仍在
+  await page.reload();
+  await page.getByRole("button", { name: "日历" }).click();
+  await expect(page.locator("table.cal")).toBeVisible();
+  // 移动端视口无横向溢出
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(overflow).toBe(false);
 });
