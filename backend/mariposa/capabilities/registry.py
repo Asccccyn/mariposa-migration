@@ -25,7 +25,7 @@ from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
 from ..letters import service as letters
 from ..content import service as content
-from ..memory import extras, listing, relations
+from ..memory import extras, listing, relations, reengagement
 from ..memory import service as memory
 from ..retrieval import rebuild as rebuild_mod
 from ..workspace import tasks as ws_tasks
@@ -106,6 +106,12 @@ def _register() -> dict[str, Capability]:
     add("calendar.day", _cal_day, _owners(), False, description="单日聚合视图")
     add("calendar.range", _cal_range, _owners(), False, description="日期区间聚合（端点含）")
     add("calendar.month", _cal_month, _owners(), False, description="月视图聚合")
+    add("calendar.undated", _cal_undated, _owners(), False,
+        description="待定日期区（日期未知不冒充今天）")
+    add("memory.reengagement.record", _reengage, _owners(), True,
+        description="记录真实再提起（按证据原时刻；扫描/访问不算）")
+    add("identity.bindings.revoke", _binding_revoke, {"qiaosheng"}, True,
+        description="撤销客户端绑定（旧 token 立即失效）")
     add("bootstrap.get", _bootstrap, {"jiaming"}, False,
         description="两入口开窗（entry_source 校验 profile；worker 拒绝）")
     add("bootstrap.next", _bootstrap_next, {"jiaming"}, False,
@@ -471,6 +477,22 @@ def _cal_range(principal: Principal, a: dict) -> dict:
 
 def _cal_month(principal: Principal, a: dict) -> dict:
     return calendar.month(int(a.get("year", 0)), int(a.get("month", 0)), a.get("types"))
+
+
+def _cal_undated(principal: Principal, a: dict) -> dict:
+    return calendar.undated(a.get("types"))
+
+
+def _reengage(principal: Principal, a: dict) -> dict:
+    return reengagement.record(
+        principal.principal_id, str(a.get("memory_id", "")),
+        str(a.get("evidence_kind", "")), str(a.get("occurred_at", "")),
+        a.get("evidence_ref"))
+
+
+def _binding_revoke(principal: Principal, a: dict) -> dict:
+    return identity.revoke_binding(principal.principal_id,
+                                   str(a.get("binding_id", "")))
 
 
 def _bootstrap(principal: Principal, a: dict) -> dict:

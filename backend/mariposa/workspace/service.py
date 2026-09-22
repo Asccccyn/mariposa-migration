@@ -16,6 +16,7 @@ from .. import config, db
 from ..errors import Forbidden, NotFound, ProposalAlreadyResolved
 from ..identity import service as identity
 from ..memory import service as memory
+from ..memory import reengagement
 
 _SUBMITTERS = {"worker", "jiaming", "qiaosheng"}
 _APPROVERS = {"qiaosheng", "jiaming"}
@@ -67,6 +68,25 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
             if _suppressed(r["memory_id"]):
                 skipped.append({"memory_id": r["memory_id"], "reason": "rejection_cooldown"})
                 continue
+            # §7.2 意义审查：有 meaning 层或活跃关联的桶不进自动候选
+            with db.formal() as fconn:
+                has_meaning = fconn.execute(
+                    "SELECT 1 FROM memory_meanings WHERE memory_id=?"
+                    " AND layer_no<1000 LIMIT 1", (r["memory_id"],)).fetchone()
+                has_relation = fconn.execute(
+                    "SELECT 1 FROM memory_relations WHERE (from_memory=? OR"
+                    " to_memory=?) AND active=1 LIMIT 1",
+                    (r["memory_id"], r["memory_id"])).fetchone()
+            if has_meaning or has_relation:
+                skipped.append({"memory_id": r["memory_id"],
+                                "reason": "has_meaning_or_relations"})
+                continue
+            # §7.3：再提起按证据原时刻判断冷却，不用数据库 created_at
+            last_re = reengagement.last_reengaged_at(r["memory_id"])
+            if last_re and last_re >= (today_local - timedelta(days=idle)).isoformat():
+                skipped.append({"memory_id": r["memory_id"],
+                                "reason": "recently_reengaged"})
+                continue
             created.append(_create_draft(started_by.principal_id, r["memory_id"]))
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -77,7 +97,16 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
             (run_id, "forgetting_scan", started_by.principal_id, _now(), _now(),
              json.dumps({"created": len(created), "skipped": len(skipped)}, ensure_ascii=False)),
         )
+    # §7.3 覆盖诚实：raw 收录范围未知时如实说明，不断言"从未提起"
+    with db.formal() as fconn:
+        raw_cov = fconn.execute(
+            "SELECT coverage, MAX(ended_at) AS m FROM raw_conversations"
+        ).fetchone()
+    coverage = {"raw": raw_cov["coverage"] or "unknown",
+                "raw_latest": raw_cov["m"],
+                "note": "闲置判定基于已收录资料；覆盖不完整时可能遗漏再提及"}
     return {"run_id": run_id, "created": created, "skipped": skipped,
+            "coverage": coverage,
             "policy": {"idle_days": idle, "version": config.POLICY_VERSION}}
 
 
@@ -263,11 +292,11 @@ def _target_of(proposal_id: str) -> str:
 def decide(principal: identity.Principal, proposal_id: str, proposal_revision: int,
            proposal_hash: str, expected_memory_version: int, decision: str) -> dict:
     """审批协调：worker 一律拒绝；审批在一个正式库事务内应用后回填工作区。"""
-    if principal.principal_id not in _APPROVERS:
+    if decision not in ("approve", "reject", "defer", "withdraw"):
+        raise Forbidden("decision must be approve/reject/defer/withdraw")
+    if decision in ("approve", "reject") and principal.principal_id not in _APPROVERS:
         raise Forbidden("worker principals cannot approve proposals",
                         principal=principal.principal_id)
-    if decision not in ("approve", "reject", "defer"):
-        raise Forbidden("decision must be approve/reject/defer")
 
     with db.workspace() as wconn:
         v = wconn.execute(
@@ -278,6 +307,17 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
             raise NotFound("submitted proposal revision not found",
                            proposal_id=proposal_id, revision=proposal_revision)
         payload = json.loads(v["payload"])
+        if decision == "withdraw":
+            # 撤回权：提交者本人或乔生/周家明（§6.3 工具人可请求撤回自己的提案）
+            with db.formal() as fconn:
+                env = fconn.execute(
+                    "SELECT submitted_by FROM proposal_envelopes WHERE proposal_id=?",
+                    (proposal_id,)).fetchone()
+            if env is None:
+                raise NotFound("proposal envelope not found",
+                               proposal_id=proposal_id)
+            if principal.principal_id not in _APPROVERS and                     env["submitted_by"] != principal.principal_id:
+                raise Forbidden("only the submitter or an approver may withdraw")
 
     result: dict
     if decision == "approve":
@@ -308,6 +348,11 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
                         fconn, proposal_id, "rejected",
                         principal.principal_id, principal.binding_id,
                     )
+                elif decision == "withdraw":
+                    memory.reject_or_withdraw(
+                        fconn, proposal_id, "withdrawn",
+                        principal.principal_id, principal.binding_id,
+                    )
                 else:  # defer：挂起，不产生终局
                     pass
                 fconn.execute("COMMIT")
@@ -315,7 +360,8 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
                 fconn.execute("ROLLBACK")
                 raise
         result = {"proposal_id": proposal_id, "decision": decision}
-        new_state = "rejected" if decision == "reject" else "deferred"
+        new_state = {"reject": "rejected", "withdraw": "withdrawn"}.get(
+            decision, "deferred")
         if decision == "reject":
             record_rejection_cooldown(
                 _target_of(proposal_id), config.FORGET_REJECT_COOLDOWN_DAYS,

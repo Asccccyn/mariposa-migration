@@ -106,3 +106,16 @@ def require_any(principal: Principal, allowed: set[str]) -> None:
 def generate_dev_tokens() -> dict[str, str]:
     """doctor/start 为本地开发生成随机 token（写入 runtime/.env，不入 git）。"""
     return {pid: secrets.token_urlsafe(24) for pid, _, _ in PRINCIPALS if pid != "system"}
+
+
+def revoke_binding(principal_id: str, binding_id: str) -> dict:
+    """撤销客户端绑定；旧 token/session 立即失效（T-ID-06）。"""
+    if principal_id != "qiaosheng":
+        raise Forbidden("only qiaosheng manages bindings", principal=principal_id)
+    with db.formal() as conn:
+        cur = conn.execute(
+            "UPDATE client_bindings SET revoked=1 WHERE binding_id=? AND revoked=0",
+            (binding_id,))
+        if cur.rowcount == 0:
+            raise NotFound("active binding not found", binding_id=binding_id)
+    return {"binding_id": binding_id, "revoked": True}

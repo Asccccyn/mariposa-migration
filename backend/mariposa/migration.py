@@ -138,6 +138,14 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
         if terminal:
             entry["deletion_terminal_fields"] = terminal
             stats["deletion_terminal"] += 1
+        # §5 迁移映射：dont_surface 保留隐藏语义；tags_only/digested 待审
+        if str(meta.get("dont_surface", "")).lower() in ("true", "1"):
+            entry["migrate_as_hidden"] = True
+            stats["dont_surface_hidden"] = stats.get("dont_surface_hidden", 0) + 1
+        if str(meta.get("tags_only", "")).lower() in ("true", "1") or (
+                str(meta.get("digested", "")).lower() in ("true", "1")):
+            entry["needs_migration_review"] = True
+            stats["needs_migration_review"] = stats.get("needs_migration_review", 0) + 1
         if target == "letters":
             lock = {"lock_type": str(meta.get("lock_type", "none")),
                     "unlock_date": meta.get("unlock_date"),
@@ -377,7 +385,9 @@ def apply_from_report(report_path: str) -> dict:
     if len(entries) > 50:
         return {"ok": False, "error": "报告超出合成样本规模；真实迁移需获准快照"}
     fdir = Path(report["fixture_dir"])
-    applied, problems = [], []
+    applied, problems, skipped_existing = [], [], []
+    from datetime import datetime as _dt
+    from .retrieval import projection as _pj
     for e in entries:
         f = fdir / e["legacy_id"]
         if not f.exists():
@@ -389,6 +399,21 @@ def apply_from_report(report_path: str) -> dict:
         if recomputed != e["payload_hash"]:
             problems.append({"legacy_id": e["legacy_id"], "issue": "hash_mismatch"})
             continue
+        # MIG-06 幂等：同 (legacy_id, source_type) 已迁移 -> 返回既有映射
+        ensure_id_map_schema()
+        with _db.formal() as conn:
+            prior = conn.execute(
+                "SELECT new_id, payload_hash FROM migration_id_map WHERE"
+                " legacy_id=? AND source_type=?", (e["legacy_id"], e["target"])
+            ).fetchone()
+        if prior:
+            if prior["payload_hash"] != recomputed:
+                problems.append({"legacy_id": e["legacy_id"],
+                                 "issue": "id_map_hash_mismatch"})
+            else:
+                skipped_existing.append({"legacy_id": e["legacy_id"],
+                                         "new_id": prior["new_id"]})
+            continue
         if e["target"] == "memories":
             out = memory.hold(_migrator,
                               text=body.strip(),
@@ -396,10 +421,31 @@ def apply_from_report(report_path: str) -> dict:
                               memory_date=e["mapping"]["memory_date"],
                               date_confidence="inferred")
             mid = out["memory_id"]
-            if e["mapping"]["pinned"]:
-                with _db.formal() as conn:
+            with _db.formal() as conn:
+                if e["mapping"].get("pinned"):
                     conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
                                  (mid,))
+                if e.get("migrate_as_archived"):
+                    conn.execute("UPDATE memories SET visibility='archived',"
+                                 " updated_at=? WHERE memory_id=?",
+                                 (_dt.utcnow().isoformat(), mid))
+                if e.get("migrate_as_hidden"):
+                    conn.execute("UPDATE memories SET visibility='hidden',"
+                                 " updated_at=? WHERE memory_id=?",
+                                 (_dt.utcnow().isoformat(), mid))
+                if e.get("migrate_as_archived") or e.get("migrate_as_hidden"):
+                    _pj.remove(conn, mid)  # 隐藏/归档不进新检索（§20.3）
+                if e.get("needs_migration_review"):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO memory_tags(memory_id, namespace,"
+                        " tag, whose, confidence, created_by) VALUES(?,"
+                        " 'migration', 'needs_review', 'qiaosheng', 'system',"
+                        " 'migration')", (mid,))
+                conn.execute(
+                    "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
+                    " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
+                    (e["legacy_id"], "memories", mid, recomputed,
+                     _dt.utcnow().isoformat()))
             applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
                             "target": "memories"})
         else:
@@ -409,6 +455,12 @@ def apply_from_report(report_path: str) -> dict:
                 letter_date=e["mapping"]["memory_date"],
                 lock_type=lock.get("lock_type", "none") or "none",
                 unlock_date=lock.get("unlock_date"))
+            with _db.formal() as conn:
+                conn.execute(
+                    "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
+                    " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
+                    (e["legacy_id"], "letters", out["letter_id"], recomputed,
+                     _dt.utcnow().isoformat()))
             applied.append({"legacy_id": e["legacy_id"], "new_id": out["letter_id"],
                             "target": "letters"})
     # 逐项核对：新库可读、锁参数保留、pinned 保留
@@ -423,9 +475,25 @@ def apply_from_report(report_path: str) -> dict:
                                    (a["new_id"],)).fetchone()
         if row is not None:
             verified += 1
-    result = {"ok": not problems, "applied": len(applied), "verified": verified,
-              "problems": problems,
-              "note": "合成 fixture 演练；真实数据 apply 仍 blocked: 快照未获准"}
+    result = {"ok": not problems, "applied": len(applied),
+              "skipped_already_migrated": len(skipped_existing),
+              "verified": verified, "problems": problems,
+              "note": "幂等：重复 apply 按 migration_id_map 返回既有映射；"
+                      "真实数据 apply 仍需另行授权"}
     print(json.dumps({k: v for k, v in result.items() if k != "problems"},
                      ensure_ascii=False))
     return result
+
+
+def ensure_id_map_schema() -> None:
+    from . import db as _db
+    with _db.formal() as conn:
+        conn.execute("""
+CREATE TABLE IF NOT EXISTS migration_id_map(
+  legacy_id TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  new_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  migrated_at TEXT NOT NULL,
+  PRIMARY KEY(legacy_id, source_type)
+)""")
