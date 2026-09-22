@@ -55,6 +55,7 @@ def test_http_full_forget_loop(c):
         "why_remember": "钥匙位置",
         "memory_date": "2026-06-01",
         "date_confidence": "exact",
+        "raw_pending": False,
     })
     assert r.status_code == 200
     mem_id = r.json()["data"]["memory_id"]
@@ -62,7 +63,7 @@ def test_http_full_forget_loop(c):
     hits = call(c, "qiaosheng", "memory.search", {"query": "蓝瓷小钥匙"}).json()["data"]["hits"]
     assert any(h["memory_id"] == mem_id for h in hits)
 
-    scan = call(c, "worker", "workspace.forgetting.scan", {}).json()["data"]
+    scan = call(c, "worker", "workspace.forgetting.scan", {"policy_version": "forget_policy_v1"}).json()["data"]
     prop = next(p for p in scan["created"] if p["target_memory_id"] == mem_id)
 
     rev = call(c, "worker", "workspace.proposals.revise", {
@@ -72,7 +73,9 @@ def test_http_full_forget_loop(c):
     }).json()["data"]
 
     sub = call(c, "worker", "workspace.proposals.submit",
-               {"proposal_id": prop["proposal_id"], "revision": rev["revision"]},
+               {"proposal_id": prop["proposal_id"],
+         "proposal_revision": rev["revision"],
+         "proposal_hash": rev["payload_hash"]},
                idem=f"submit-{prop['proposal_id']}").json()["data"]
 
     dec = call(c, "jiaming", "memory.forgetting.decide", {

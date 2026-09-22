@@ -2,6 +2,20 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-22 · 林石见独立复审问题修复（8/8 项）
+
+复审发现（详见对话/commit）：MCP 三段名反解（52 能能全坏）→ 双向表实时反解；
+幂等并发双副作用 → 原子 claim（running 占位+有界等待+BUSY）；150 项契约缺口
+（60 缺/25 异名）→ 兼容层（别名 6/blocked 31/reserved 8/薄实现 18+4），规格
+全覆盖且 blocked 如实返回；12 严格 schema 未接入 → 最小校验器（$ref/anyOf）+
+tools/list 真实 schema + 调用点全对齐（hold 显式 raw_pending/date_confidence、
+submit 带 proposal_hash、scan 带 policy_version——均为规格必填）；revoke
+NameError → 修复+失败分支测试；证据映射短名 → 源头 M 表修复+持久校验测试
+（TestEvidenceMapIntegrity 防退化）；pytest basetemp 默认项目内（默认命令可
+复现）；一次性脚本清除。
+**198 测试 + E2E 2 全绿**；服务级实测：三段名 MCP 调用通过、tools/list 168 项
+带真实 schema。
+
 ## 2026-09-22 · 执行包 v1.1 完整对照（第二次交付：118 条逐条映射）
 
 工程包原件到位（docs/execution_pack_v1.1/，含 02 验收清单 118 条与 05 连续执行模式）。

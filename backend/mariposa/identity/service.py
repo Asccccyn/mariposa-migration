@@ -11,7 +11,7 @@ import secrets
 from dataclasses import dataclass
 
 from .. import db
-from ..errors import Forbidden, Unauthenticated
+from ..errors import Forbidden, NotFound, Unauthenticated
 
 PRINCIPALS = [
     ("qiaosheng", "江乔生", "human"),

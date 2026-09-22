@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-22T01:59:13.988518+00:00",
+ "generated_at": "2026-09-22T06:46:29.419360+00:00",
  "source": "docs/execution_pack_v1.1/contracts/acceptance_cases.json（118 条原件）",
  "summary": {
   "PASS": 106,
@@ -285,7 +285,7 @@
    "phase": 3,
    "title": "旧记录回填再次提起",
    "status": "PASS",
-   "evidence": "test_T_FOR_13（回填证据原时刻）",
+   "evidence": "test_T_FOR_13_scan_does_not_extend_life（同测试覆盖回填原时刻断言）",
    "note": "按消息原时刻记录"
   },
   {
@@ -330,7 +330,7 @@
    "phase": 2,
    "title": "摘要语义命中",
    "status": "PASS",
-   "evidence": "test_semantic_forgetting.py::test_case1",
+   "evidence": "test_semantic_forgetting.py::test_case1_summary_semantic_hit_without_shared_words",
    "note": "真实本地 ONNX 模型，非 mock"
   },
   {
@@ -339,7 +339,7 @@
    "phase": 2,
    "title": "旧向量失效",
    "status": "PASS",
-   "evidence": "test_case2 + 直查 SQLite（审计 §2）",
+   "evidence": "test_semantic_forgetting.py::test_case2_old_body_semantic_must_not_hit + 直查 SQLite（审计 §2）",
    "note": "旧向量无通道；无缓存面"
   },
   {
@@ -366,7 +366,7 @@
    "phase": 2,
    "title": "摘要向量未就绪",
    "status": "PASS",
-   "evidence": "test_case4（provider 关 degraded）；向量同步惰性+限流补算=关键词始终可用",
+   "evidence": "test_semantic_forgetting.py::test_keyword_path_unchanged_when_provider_unset；向量同步惰性+限流补算=关键词始终可用",
    "note": "等效实现"
   },
   {
@@ -420,7 +420,7 @@
    "phase": 4,
    "title": "bootstrap 和日历不展开旧桶",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestBOOT::test_T_BOOT_13",
+   "evidence": "test_gate_cases2.py::TestBOOT::test_T_BOOT_13_bootstrap_and_calendar_only_summary",
    "note": "bootstrap/日历仅批准摘要"
   },
   {
@@ -627,7 +627,7 @@
    "phase": 4,
    "title": "快照跨遗忘失效",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestBOOT::test_T_BOOT_07",
+   "evidence": "test_gate_cases2.py::TestBOOT::test_T_BOOT_07_snapshot_stale_across_forget",
    "note": "遗忘后快照 STALE"
   },
   {
@@ -681,7 +681,7 @@
    "phase": 4,
    "title": "计划改日历即时变",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestCAL::test_T_CAL_03",
+   "evidence": "test_gate_cases2.py::TestCAL::test_T_CAL_03_plan_date_change_reflected",
    "note": "改日期即时反映同 ID"
   },
   {
@@ -726,7 +726,7 @@
    "phase": 4,
    "title": "导入回填不当成此刻见面",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestTIME::test_T_TIME_03",
+   "evidence": "test_gate_cases2.py::TestTIME::test_T_TIME_03_backfill_uses_message_time",
    "note": "回填原时刻"
   },
   {
@@ -762,7 +762,7 @@
    "phase": 3,
    "title": "情绪主语与用户修正",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestSELF::test_T_SELF_03",
+   "evidence": "test_gate_cases2.py::TestSELF::test_T_SELF_03_q_correction_not_overwritten",
    "note": "Q 修正不被覆盖"
   },
   {
@@ -843,7 +843,7 @@
    "phase": 5,
    "title": "旧dont_surface不假装遗忘摘要",
    "status": "PASS",
-   "evidence": "test_gate_cases2.py::TestMIG::test_T_MIG_03_04",
+   "evidence": "test_gate_cases2.py::TestMIG::test_T_MIG_03_04_semantic_flags",
    "note": "dont_surface→hidden 不进检索"
   },
   {
@@ -1023,7 +1023,7 @@
    "phase": 8,
    "title": "同能力三适配器一致",
    "status": "PASS",
-   "evidence": "test_T_OPS_01 + 架构测试 test_single_business_entry",
+   "evidence": "test_gate_cases2.py::test_T_OPS_01_http_mcp_same_handler_consistency + 架构测试 test_single_business_entry",
    "note": "三适配器同 handler"
   },
   {

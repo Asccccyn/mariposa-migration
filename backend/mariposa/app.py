@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, schema
 from .capabilities import mcp_adapter
 from .capabilities import registry
+from .capabilities import v1_compat
 from .errors import MariposaError
 from .identity import service as identity
 
@@ -25,6 +26,7 @@ WEB_DIR = config.PROJECT_ROOT / "backend" / "mariposa" / "web"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     schema.migrate()
+    v1_compat.register_v1_compat()
     yield
 
 

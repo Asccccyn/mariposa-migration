@@ -272,14 +272,27 @@ def _register() -> dict[str, Capability]:
     return caps
 
 
+class Busy(MariposaError):
+    """同幂等键的执行仍在进行（并发的另一方尚未回填终态）。"""
+    code = "IDEMPOTENCY_IN_PROGRESS"
+    http_status = 409
+
+    def __init__(self):
+        super().__init__("idempotent execution still in progress; retry")
+
+
 def invoke(principal: Principal, capability: str, arguments: dict,
            idempotency_key: str | None) -> dict:
     cap = REGISTRY.get(capability)
     if cap is None:
         raise NotFound("unknown capability", capability=capability)
     identity.require_any(principal, cap.allowed_principals)
+    from . import input_schemas
+    input_schemas.validate(capability, arguments)
 
-    if cap.idempotent and idempotency_key:
+    # 幂等键由调用方显式给出即生效（与 cap.idempotent hint 无关）：
+    # 同 key 同 payload 必须可安全重试（U16/OPS-02；原子 claim 防并发双副作用）
+    if idempotency_key:
         return _idempotent_invoke(principal, cap, arguments, idempotency_key)
     return {"ok": True, "data": cap.handler(principal, arguments)}
 
@@ -290,36 +303,79 @@ def _payload_hash(arguments: dict) -> str:
 
 def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                        key: str) -> dict:
+    """原子 claim 幂等：先 INSERT 占位（status=running），占位成功者才执行副作用。
+
+    并发同 key：仅一方能占位；另一方等待后读终态重放。
+    崩溃残留的 running（>60s）视为可重占（对账语义：副作用由业务幂等键兜底）。
+    """
     ph = _payload_hash(arguments)
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT * FROM idempotency_records WHERE principal_id=? AND capability=?"
-            " AND idempotency_key=?",
-            (principal.principal_id, cap.name, key),
-        ).fetchone()
-        if row:
+
+    def claim() -> bool:
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # 清理崩溃残留（超时 running）
+                conn.execute(
+                    "DELETE FROM idempotency_records WHERE principal_id=? AND"
+                    " capability=? AND idempotency_key=? AND status='running'"
+                    " AND created_at < datetime('now', '-60 seconds')",
+                    (principal.principal_id, cap.name, key))
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO idempotency_records(principal_id,"
+                    " capability, idempotency_key, payload_hash, status,"
+                    " result_ref, created_at)"
+                    " VALUES(?,?,?,?, 'running', NULL, datetime('now'))",
+                    (principal.principal_id, cap.name, key, ph))
+                conn.execute("COMMIT")
+                return cur.rowcount == 1
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def read_record():
+        with db.formal() as conn:
+            return conn.execute(
+                "SELECT * FROM idempotency_records WHERE principal_id=? AND"
+                " capability=? AND idempotency_key=?",
+                (principal.principal_id, cap.name, key)).fetchone()
+
+    if not claim():
+        # 另一方持有：等待其完成（bounded）
+        import time as _time
+        for _ in range(40):  # <=8s
+            _time.sleep(0.2)
+            row = read_record()
+            if row is None:
+                break  # 被清理，重试 claim
             if row["payload_hash"] != ph:
                 raise IdempotencyConflict(
                     "same key with different payload",
-                    capability=cap.name, key=key,
-                )
-            return {"ok": True, "data": json.loads(row["result_ref"]), "idempotent_replay": True}
+                    capability=cap.name, key=key)
+            if row["status"] == "completed":
+                return {"ok": True,
+                        "data": json.loads(row["result_ref"]),
+                        "idempotent_replay": True}
+        # 仍在 running（执行方超时未回填）：拒绝盲重放，让调用方重试
+        raise Busy()
+
     result = cap.handler(principal, arguments)
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
-                "INSERT OR IGNORE INTO idempotency_records(principal_id, capability,"
-                " idempotency_key, payload_hash, status, result_ref, created_at)"
-                " VALUES(?,?,?,?, 'completed', ?, datetime('now'))",
-                (principal.principal_id, cap.name, key, ph,
-                 json.dumps(result, ensure_ascii=False)),
-            )
+                "UPDATE idempotency_records SET status='completed', result_ref=?"
+                " WHERE principal_id=? AND capability=? AND idempotency_key=?"
+                " AND status='running'",
+                (json.dumps(result, ensure_ascii=False), principal.principal_id,
+                 cap.name, key))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return {"ok": True, "data": result}
+
+
+
 
 
 # ---------- handlers：纯领域逻辑，不做传输层判断 ----------
@@ -332,6 +388,8 @@ def _hold(principal: Principal, a: dict) -> dict:
         memory_date=a.get("memory_date"),
         date_confidence=a.get("date_confidence", "unknown"),
         entry_source=principal.entry_source,
+        raw_refs=a.get("raw_refs"),
+        raw_pending=bool(a.get("raw_pending", True)),
     )
 
 
@@ -361,6 +419,12 @@ def _restore(principal: Principal, a: dict) -> dict:
 
 
 def _scan(principal: Principal, a: dict) -> dict:
+    from .. import config as _cfg
+    pv = a.get("policy_version")
+    if pv and pv != _cfg.POLICY_VERSION:
+        raise Forbidden("policy_version mismatch",
+                        code="VERSION_CONFLICT",
+                        expected=_cfg.POLICY_VERSION, got=pv)
     return workspace.scan_candidates(principal, a.get("min_idle_days"))
 
 
@@ -377,7 +441,8 @@ def _submit(principal: Principal, a: dict) -> dict:
     return workspace.submit(
         principal,
         proposal_id=str(a.get("proposal_id", "")),
-        revision=int(a.get("revision", 1)),
+        revision=int(a.get("proposal_revision", a.get("revision", 1))),
+        expected_hash=a.get("proposal_hash"),
     )
 
 
@@ -417,7 +482,9 @@ def _raw_convs(principal: Principal, a: dict) -> dict:
 
 def _quote_keep(principal: Principal, a: dict) -> dict:
     return quotes.keep(principal.principal_id, str(a.get("text", "")),
-                       a.get("said_at"), a.get("said_at_confidence", "unknown"),
+                       a.get("said_at"),
+                       a.get("date_confidence")
+                       or a.get("said_at_confidence", "unknown"),
                        a.get("raw_ref"))
 
 

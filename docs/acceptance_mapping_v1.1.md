@@ -1,6 +1,6 @@
 # 118 条验收用例逐条映射（v1.1 执行包原件）
 
-> 审计复核后证据名全量补全为可收集测试 ID（校验失败=0）。**PASS 106 / BLOCKED 12 / unmapped 0**。
+> 生成 2026-09-22T06:46:29；证据=测试文件/文档/实测。**PASS 106 / BLOCKED 12 / NOT_IMPLEMENTED 0 / unmapped 0**。
 
 
 ## T-ID
@@ -44,7 +44,7 @@
 | T-FOR-11 | **PASS** | test_pinned_not_candidate | 保护桶排除自动候选 |
 | T-FOR-12 | **PASS** | test_T_FOR_12_meaning_excludes_auto_candidate | meaning/关联桶不进自动候选 |
 | T-FOR-13 | **PASS** | test_T_FOR_13_scan_does_not_extend_life | 扫描不刷新再提起时间 |
-| T-FOR-14 | **PASS** | test_T_FOR_13（回填证据原时刻） | 按消息原时刻记录 |
+| T-FOR-14 | **PASS** | test_T_FOR_13_scan_does_not_extend_life（同测试覆盖回填原时刻断言） | 按消息原时刻记录 |
 | T-FOR-15 | **PASS** | test_T_FOR_15_coverage_honesty | 覆盖说明，不断言从未提起 |
 | T-FOR-16 | **PASS** | tests/unit/test_round5.py::TestBatchAndCooldown | 拒绝冷却 scan 跳过 |
 
@@ -53,17 +53,17 @@
 |---|---|---|---|
 | T-RET-01 | **PASS** | test_full_lifecycle | summary_keyword 命中 |
 | T-RET-02 | **PASS** | test_full_lifecycle | 旧正文/why/meaning 词不命中 |
-| T-RET-03 | **PASS** | test_semantic_forgetting.py::test_case1 | 真实本地 ONNX 模型，非 mock |
-| T-RET-04 | **PASS** | test_case2 + 直查 SQLite（审计 §2） | 旧向量无通道；无缓存面 |
+| T-RET-03 | **PASS** | test_semantic_forgetting.py::test_case1_summary_semantic_hit_without_shared_words | 真实本地 ONNX 模型，非 mock |
+| T-RET-04 | **PASS** | test_semantic_forgetting.py::test_case2_old_body_semantic_must_not_hit + 直查 SQLite（审计 §2） | 旧向量无通道；无缓存面 |
 | T-RET-05 | **PASS** | test_gate_cases.py::TestRET::test_T_RET_05_late_embedding_rejected | 迟到向量从未被安装 |
 | T-RET-06 | **PASS** | tests/unit/test_round5.py::TestRebuildIndex | 重建不复活旧正文 |
-| T-RET-07 | **PASS** | test_case4（provider 关 degraded）；向量同步惰性+限流补算=关键词始终可用 | 等效实现 |
+| T-RET-07 | **PASS** | test_semantic_forgetting.py::test_keyword_path_unchanged_when_provider_unset；向量同步惰性+限流补算=关键词始终可用 | 等效实现 |
 | T-RET-08 | **PASS** | by_date/by_tag/relation 三入口 matched_by | 结构化入口返回真实途径 |
 | T-RET-09 | **PASS** | test_T_RET_09_versions_read_no_side_effect | 历史读取无副作用 |
 | T-RET-10 | **PASS** | quotes/diary 独立 source 标注测试 | 不冒充桶命中 |
 | T-RET-11 | **PASS** | test_T_RET_11_filter_before_vector | hidden 桶不进语义候选 |
 | T-RET-12 | **PASS** | test_substring_semantics + test_fts_injection_is_inert | 中文命中与操作符转义 |
-| T-RET-13 | **PASS** | test_gate_cases2.py::TestBOOT::test_T_BOOT_13 | bootstrap/日历仅批准摘要 |
+| T-RET-13 | **PASS** | test_gate_cases2.py::TestBOOT::test_T_BOOT_13_bootstrap_and_calendar_only_summary | bootstrap/日历仅批准摘要 |
 
 ## T-RAW
 | ID | 状态 | 证据 | 备注 |
@@ -98,7 +98,7 @@
 | T-BOOT-04 | **PASS** | test_bootstrap_plans_filter | 进行中/临近/逾期，排除远期与完成 |
 | T-BOOT-05 | **PASS** | tests/unit/test_bootstrap_sections.py | 完整正文+段上限+cursor 分页 |
 | T-BOOT-06 | **PASS** | test_small_dataset_no_cursor + coverage 字段 | 不足 30 诚实返回 |
-| T-BOOT-07 | **PASS** | test_gate_cases2.py::TestBOOT::test_T_BOOT_07 | 遗忘后快照 STALE |
+| T-BOOT-07 | **PASS** | test_gate_cases2.py::TestBOOT::test_T_BOOT_07_snapshot_stale_across_forget | 遗忘后快照 STALE |
 | T-BOOT-08 | **PASS** | test_T_BOOT_08_no_repeated_full_package | unchanged 薄响应 |
 | T-BOOT-09 | **PASS** | test_claude_chat_profile（默认无旧目录注入；diary 全文默认 0） | 按需读取独立能力保留 |
 | T-BOOT-10 | **PASS** | TestHandoff + TestTimeContext | 便签不进召回不刷 contact |
@@ -108,7 +108,7 @@
 |---|---|---|---|
 | T-CAL-01 | **PASS** | test_calendar_aggregates_and_forgotten_preview | 遗忘仅摘要+深链 |
 | T-CAL-02 | **PASS** | 同上（types 筛选） | 类型聚合无复制 |
-| T-CAL-03 | **PASS** | test_gate_cases2.py::TestCAL::test_T_CAL_03 | 改日期即时反映同 ID |
+| T-CAL-03 | **PASS** | test_gate_cases2.py::TestCAL::test_T_CAL_03_plan_date_change_reflected | 改日期即时反映同 ID |
 | T-CAL-04 | **PASS** | test_T_CAL_04_undated_section | 未知日期进待定区 |
 | T-CAL-05 | **PASS** | test_T_CAL_05_hidden_not_in_calendar | 锁/隐藏不泄露计数 |
 
@@ -117,7 +117,7 @@
 |---|---|---|---|
 | T-TIME-01 | **PASS** | test_three_timelines_separated | 程序活动另记 |
 | T-TIME-02 | **PASS** | 同上（ui_activity 不刷 contact） | 浏览不是聊天 |
-| T-TIME-03 | **PASS** | test_gate_cases2.py::TestTIME::test_T_TIME_03 | 回填原时刻 |
+| T-TIME-03 | **PASS** | test_gate_cases2.py::TestTIME::test_T_TIME_03_backfill_uses_message_time | 回填原时刻 |
 | T-TIME-04 | **PASS** | test_T_TIME_04_gap_wording | 缺口措辞不说错误上下界 |
 
 ## T-SELF
@@ -125,7 +125,7 @@
 |---|---|---|---|
 | T-SELF-01 | **PASS** | TestSelf::test_next_day_rule | 写即正式+隔日规则 |
 | T-SELF-02 | **PASS** | 同上（版本留底/仅周家明） | 版本与作者保护 |
-| T-SELF-03 | **PASS** | test_gate_cases2.py::TestSELF::test_T_SELF_03 | Q 修正不被覆盖 |
+| T-SELF-03 | **PASS** | test_gate_cases2.py::TestSELF::test_T_SELF_03_q_correction_not_overwritten | Q 修正不被覆盖 |
 | T-SELF-04 | **PASS** | test_T_SELF_04_diary_never_compressed | 日记 hash 不变 |
 | T-SELF-05 | **PASS** | TestHome（唯一正本版本化）；平台副本提示 blocked 于无平台 | 本地正本成立 |
 
@@ -142,7 +142,7 @@
 |---|---|---|---|
 | T-MIG-01 | **PASS** | snapshot sha256 逐字节 + apply hash 核对 | 不重写不调模型 |
 | T-MIG-02 | **PASS** | dry_run_real 484/484 映射 + importance_raw 原值保留 | weight 不换算 |
-| T-MIG-03 | **PASS** | test_gate_cases2.py::TestMIG::test_T_MIG_03_04 | dont_surface→hidden 不进检索 |
+| T-MIG-03 | **PASS** | test_gate_cases2.py::TestMIG::test_T_MIG_03_04_semantic_flags | dont_surface→hidden 不进检索 |
 | T-MIG-04 | **PASS** | 同上 | tags_only→migration review 标记 |
 | T-MIG-05 | **PASS** | dream 键仅入 legacy extension；无 dream 消费（架构） | 机制不迁移 |
 | T-MIG-06 | **PASS** | test_T_MIG_06_apply_idempotent_with_id_map | 幂等+ID 映射稳定 |
@@ -174,7 +174,7 @@
 ## T-OPS
 | ID | 状态 | 证据 | 备注 |
 |---|---|---|---|
-| T-OPS-01 | **PASS** | test_T_OPS_01 + 架构测试 test_single_business_entry | 三适配器同 handler |
+| T-OPS-01 | **PASS** | test_gate_cases2.py::test_T_OPS_01_http_mcp_same_handler_consistency + 架构测试 test_single_business_entry | 三适配器同 handler |
 | T-OPS-02 | **PASS** | test_same_key_different_payload_conflict | IDEMPOTENCY_CONFLICT |
 | T-OPS-03 | **PASS** | TestSecurity 5 项（XSS/穿越/鉴权） | 上传与渲染安全 |
 | T-OPS-04 | **PASS** | E2E T-OPS-04（导航+刷新保持+390px 无横向溢出） | 真实路由 |

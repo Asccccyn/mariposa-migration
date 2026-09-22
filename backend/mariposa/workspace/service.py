@@ -200,8 +200,13 @@ def revise_draft(principal, proposal_id: str, compressed_summary: str,
             "base_memory_version": base_version}
 
 
-def submit(principal, proposal_id: str, revision: int) -> dict:
-    """提交：工作区版本冻结 + 正式库登记 envelope。登记失败则仍未正式提交。"""
+def submit(principal, proposal_id: str, revision: int,
+           expected_hash: str | None = None) -> dict:
+    """提交：工作区版本冻结 + 正式库登记 envelope。登记失败则仍未正式提交。
+
+    expected_hash（规格 schema 必填）：客户端从 revise 结果取得的冻结 hash；
+    与工作区存储不一致时拒绝，防止提交非预期内容。
+    """
     pid = getattr(principal, "principal_id", principal)
     if pid not in _SUBMITTERS:
         raise Forbidden("principal cannot submit proposals", principal=pid)
@@ -217,6 +222,10 @@ def submit(principal, proposal_id: str, revision: int) -> dict:
             raise NotFound("proposal revision not found", proposal_id=proposal_id)
         if item["state"] != "draft":
             raise Forbidden("item is not a draft", state=item["state"])
+        if expected_hash and expected_hash != v["payload_hash"]:
+            raise Forbidden("proposal_hash does not match the revision to submit",
+                            code="PROPOSAL_HASH_MISMATCH",
+                            expected=expected_hash, stored=v["payload_hash"])
         payload = json.loads(v["payload"])
         if not payload.get("compressed_summary"):
             raise Forbidden("compressed_summary required before submit")
