@@ -38,10 +38,6 @@ from . import our_words as our_words_mod
 
 _APPROVERS = {"qiaosheng", "jiaming"}  # 工具人无审批权（§6.3）
 
-#: v2 hold 识别：出现任一 v2 字段即走分层写入路径
-V2_HOLD_FIELDS = ("original_title", "categories", "mood", "our_words",
-                  "creation_mode", "occurred_start", "occurred_end")
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -91,6 +87,115 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     return {"text": text, "tags": deduped}
 
 
+def _raw_ref_hash(ref: dict) -> str:
+    import hashlib as _hl
+    return _hl.sha256(
+        f"{ref.get('conversation_id')}:{ref.get('message_from')}"
+        f":{ref.get('message_to')}".encode()).hexdigest()
+
+
+def _duplicated_by_raw_ref(raw_refs: list[dict] | None) -> str | None:
+    """§9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有 memory_id。"""
+    if not raw_refs:
+        return None
+    with db.formal() as conn:
+        for ref in raw_refs:
+            dup = conn.execute(
+                "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
+                " AND bind_confidence<>'revoked'",
+                (_raw_ref_hash(ref),)).fetchone()
+            if dup:
+                return dup["memory_id"]
+    return None
+
+
+def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
+                      why_remember, memory_date, date_confidence, mode,
+                      original_title, v2: bool, now: str) -> None:
+    """memories + memory_versions(1) + 投影。必须在正式库事务内调用。"""
+    conn.execute(
+        "INSERT INTO memories(memory_id, current_version_no, memory_date,"
+        " date_confidence, visibility, compression_state, created_at,"
+        " updated_at, held_at, held_at_confidence, creation_mode)"
+        " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?)",
+        (memory_id, 1, memory_date, date_confidence, now, now,
+         now if v2 else None, "exact" if v2 else "unknown",
+         mode or "legacy_unknown"))
+    payload = {"representation": "full", "hold_text": text,
+               "why_remember": why_remember, "authored_by": principal_id}
+    if v2:
+        conn.execute(
+            "INSERT INTO memory_versions(memory_id, version_no,"
+            " representation, hold_text, compressed_summary,"
+            " why_remember, authored_by, confirmed_by, origin_kind,"
+            " payload_hash, created_at, original_title, event_text,"
+            " schema_version)"
+            " VALUES(?,1,'full',NULL,NULL,?,?,NULL,'initial_hold',?,?,"
+            "?,?,2)",
+            (memory_id, why_remember, principal_id, canonical_hash(payload),
+             now, original_title, text))
+        # v2 投影白名单：只索引事件正文；标题/心情/话语/回忆一律不进
+        projection.upsert(conn, memory_id, 1, "full",
+                          projection.build_full(text, None))
+    else:
+        conn.execute(
+            "INSERT INTO memory_versions(memory_id, version_no, representation,"
+            " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
+            " origin_kind, payload_hash, created_at)"
+            " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
+            (memory_id, text, why_remember, principal_id,
+             canonical_hash(payload), now))
+        projection.upsert(conn, memory_id, 1, "full",
+                          projection.build_full(text, why_remember))
+
+
+def _insert_layers(conn, *, memory_id: str, principal_id: str,
+                   cats: list[str] | None, mood_data: dict | None,
+                   our_words: list[dict] | None, entry_source,
+                   v2: bool, now: str) -> None:
+    """v2 分层：分类/当时心情+标签/我们的话/留存行。事务内调用。"""
+    if cats:
+        categories_mod.replace(conn, memory_id, cats, principal_id)
+    if mood_data is not None:
+        conn.execute(
+            "INSERT INTO memory_moods(memory_id, mood_text, author,"
+            " captured_session, captured_at, evidence_state)"
+            " VALUES(?,?,?,?,?, 'contemporaneous')",
+            (memory_id, mood_data["text"], "jiaming", entry_source, now))
+        for tag in mood_data["tags"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
+                " VALUES(?,?)", (memory_id, tag))
+    if our_words:
+        for i, w in enumerate(
+                (our_words_mod._validate_word(x) for x in our_words), start=1):
+            conn.execute(
+                "INSERT INTO memory_our_words(word_id, memory_id,"
+                " ordinal, speaker, text, expression_kind, source_ref,"
+                " created_by, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (f"ow_{uuid.uuid4().hex[:12]}", memory_id, i,
+                 w["speaker"], w["text"], w["expression_kind"],
+                 w["source_ref"], principal_id, now))
+    if v2:
+        # R03/D01：期限从首次 hold 时刻起算，不用事件日期/迁移时间
+        retention_mod.create_for_memory(conn, memory_id, cats or [], now)
+
+
+def _insert_raw_refs(conn, memory_id: str, raw_refs: list[dict],
+                     now: str) -> None:
+    for ref in raw_refs:
+        conn.execute(
+            "INSERT OR REPLACE INTO memory_raw_refs(memory_id,"
+            " conversation_id, message_from, message_to, source_hash,"
+            " bind_confidence, created_at) VALUES(?,?,?,?,?,'exact',?)",
+            (memory_id, ref.get("conversation_id"),
+             ref.get("message_from"), ref.get("message_to"),
+             _raw_ref_hash(ref), now))
+    conn.execute(
+        "UPDATE memories SET source_state='bound' WHERE memory_id=?",
+        (memory_id,))
+
+
 def hold(
     principal,
     text: str,
@@ -110,6 +215,7 @@ def hold(
 ) -> dict:
     if not text or not text.strip():
         raise Forbidden("hold text required")
+    # v2 分层识别：出现任一 v2 字段即走分层写入路径
     v2 = any(v is not None for v in (original_title, categories, mood,
                                      our_words, creation_mode,
                                      occurred_start, occurred_end))
@@ -121,112 +227,27 @@ def hold(
     mood_data = None
     if mood is not None:
         mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
-    # §9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有记录，不新建
-    import hashlib as _hl
-    if raw_refs:
-        with db.formal() as conn:
-            for ref in raw_refs:
-                src_hash = _hl.sha256(
-                    f"{ref.get('conversation_id')}:{ref.get('message_from')}"
-                    f":{ref.get('message_to')}".encode()).hexdigest()
-                dup = conn.execute(
-                    "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
-                    " AND bind_confidence<>'revoked'", (src_hash,)).fetchone()
-                if dup:
-                    return {"memory_id": dup["memory_id"],
-                            "deduplicated": True}
+
+    dup = _duplicated_by_raw_ref(raw_refs)
+    if dup:
+        return {"memory_id": dup, "deduplicated": True}
+
     memory_id = f"mem_{uuid.uuid4().hex[:12]}"
-    payload = {
-        "representation": "full",
-        "hold_text": text,
-        "why_remember": why_remember,
-        "authored_by": principal.principal_id,
-    }
-    initial_source_state = "bound" if (raw_refs and not raw_pending)         else ("raw_pending" if raw_pending else "raw_pending")
     now = _now()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "INSERT INTO memories(memory_id, current_version_no, memory_date,"
-                " date_confidence, visibility, compression_state, created_at,"
-                " updated_at, held_at, held_at_confidence, creation_mode)"
-                " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?)",
-                (memory_id, 1, memory_date, date_confidence, now, now,
-                 now if v2 else None,
-                 "exact" if v2 else "unknown",
-                 mode or "legacy_unknown"),
-            )
-            if v2:
-                conn.execute(
-                    "INSERT INTO memory_versions(memory_id, version_no,"
-                    " representation, hold_text, compressed_summary,"
-                    " why_remember, authored_by, confirmed_by, origin_kind,"
-                    " payload_hash, created_at, original_title, event_text,"
-                    " schema_version)"
-                    " VALUES(?,1,'full',NULL,NULL,?,?,NULL,'initial_hold',?,?,"
-                    "?,?,2)",
-                    (memory_id, why_remember, principal.principal_id,
-                     canonical_hash(payload), now, original_title, text),
-                )
-                # v2 投影白名单：只索引事件正文；标题/心情/话语/回忆一律不进
-                projection.upsert(conn, memory_id, 1, "full",
-                                  projection.build_full(text, None))
-            else:
-                conn.execute(
-                    "INSERT INTO memory_versions(memory_id, version_no, representation,"
-                    " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
-                    " origin_kind, payload_hash, created_at)"
-                    " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
-                    (memory_id, text, why_remember, principal.principal_id, canonical_hash(payload), now),
-                )
-                projection.upsert(
-                    conn, memory_id, 1, "full",
-                    projection.build_full(text, why_remember),
-                )
-            if cats:
-                categories_mod.replace(conn, memory_id, cats,
-                                       principal.principal_id)
-            if mood_data is not None:
-                conn.execute(
-                    "INSERT INTO memory_moods(memory_id, mood_text, author,"
-                    " captured_session, captured_at, evidence_state)"
-                    " VALUES(?,?,?,?,?, 'contemporaneous')",
-                    (memory_id, mood_data["text"], "jiaming",
-                     entry_source, now))
-                for tag in mood_data["tags"]:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
-                        " VALUES(?,?)", (memory_id, tag))
-            if our_words:
-                validated = [our_words_mod._validate_word(w) for w in our_words]
-                for i, w in enumerate(validated, start=1):
-                    conn.execute(
-                        "INSERT INTO memory_our_words(word_id, memory_id,"
-                        " ordinal, speaker, text, expression_kind, source_ref,"
-                        " created_by, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                        (f"ow_{uuid.uuid4().hex[:12]}", memory_id, i,
-                         w["speaker"], w["text"], w["expression_kind"],
-                         w["source_ref"], principal.principal_id, now))
-            if v2:
-                # R03/D01：期限从首次 hold 时刻起算，不用事件日期/迁移时间
-                retention_mod.create_for_memory(
-                    conn, memory_id, cats or [], now)
+            _insert_core_rows(
+                conn, memory_id=memory_id, principal_id=principal.principal_id,
+                text=text, why_remember=why_remember, memory_date=memory_date,
+                date_confidence=date_confidence, mode=mode,
+                original_title=original_title, v2=v2, now=now)
+            _insert_layers(
+                conn, memory_id=memory_id, principal_id=principal.principal_id,
+                cats=cats, mood_data=mood_data, our_words=our_words,
+                entry_source=entry_source, v2=v2, now=now)
             if raw_refs:
-                for ref in raw_refs:
-                    src_hash = _hl.sha256(
-                        f"{ref.get('conversation_id')}:{ref.get('message_from')}"
-                        f":{ref.get('message_to')}".encode()).hexdigest()
-                    conn.execute(
-                        "INSERT OR REPLACE INTO memory_raw_refs(memory_id,"
-                        " conversation_id, message_from, message_to, source_hash,"
-                        " bind_confidence, created_at) VALUES(?,?,?,?,?,'exact',?)",
-                        (memory_id, ref.get("conversation_id"),
-                         ref.get("message_from"), ref.get("message_to"),
-                         src_hash, now))
-                conn.execute(
-                    "UPDATE memories SET source_state='bound' WHERE memory_id=?",
-                    (memory_id,))
+                _insert_raw_refs(conn, memory_id, raw_refs, now)
             audit.record(
                 conn, "memory.created", principal.principal_id,
                 resource_id=memory_id, resource_version=1,
