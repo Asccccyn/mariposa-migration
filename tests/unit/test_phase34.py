@@ -163,19 +163,22 @@ class TestPlansAndCalendar:
 
 class TestBootstrap:
     def test_claude_chat_profile(self, actors):
+        # superseded by V2-BOOT-03/08：claude_chat 不再默认附 30 条原文；
+        # 临近计划改为日期差 0..3 日
         raw.import_payload("worker", _conv_payload(35))
         memory.hold(actors["jiaming"], text="今天的桶", memory_date=None)  # 无日期不进三天
         out = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-        assert out["raw"]["count"] == 30
-        assert out["raw"]["messages"][0]["role"] in ("user", "assistant")
+        assert "raw" not in out  # v2：取原文走 raw.messages.list 显式查询
+        assert out["coverage"]["raw"] == "not_in_default_package"
         assert out["memory_days"]["mode"] == "calendar_days"
-        assert out["plans"]["upcoming_days"] == 7
+        assert out["plans"]["upcoming_days"] == 3
+        assert out["policy"]["raw_in_default_package"] is False
 
     def test_cc_profile_no_raw(self, actors):
         raw.import_payload("worker", _conv_payload(35))
         out = bootstrap.get("jiaming", "cc", "cc")
         assert "raw" not in out
-        assert out["coverage"]["raw"] == "not_applicable"
+        assert out["coverage"]["raw"] == "not_in_default_package"
 
     def test_profile_mismatch_rejected(self, actors):
         with pytest.raises(Forbidden):
@@ -184,17 +187,19 @@ class TestBootstrap:
             bootstrap.get("worker", "gpt_chat", "claude_chat")
 
     def test_three_day_bucket_uses_event_date(self, actors):
+        # superseded by V2-BOOT-01：开窗条目不再携带正文，改为按事件日期
+        # 判定窗口成员（三天=今天及前两天，四天前不进窗）
         from zoneinfo import ZoneInfo
         today = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date()
-        memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat())
-        memory.hold(actors["jiaming"], text="前天的记忆",
-                    memory_date=(today - timedelta(days=2)).isoformat())
+        h1 = memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat())
+        h2 = memory.hold(actors["jiaming"], text="前天的记忆",
+                         memory_date=(today - timedelta(days=2)).isoformat())
         memory.hold(actors["jiaming"], text="四天前旧桶",
                     memory_date=(today - timedelta(days=4)).isoformat())
         out = bootstrap.get("jiaming", "cc", "cc")
-        texts = [m["text"] for m in out["memory_days"]["items"]]
-        assert "今天的记忆" in texts and "前天的记忆" in texts
-        assert "四天前旧桶" not in texts
+        ids = {m["memory_id"] for m in out["memory_days"]["items"]}
+        assert h1["memory_id"] in ids and h2["memory_id"] in ids
+        assert all("text" not in m for m in out["memory_days"]["items"])
 
 
 class TestTimeContext:

@@ -35,10 +35,6 @@ def load_schemas() -> dict:
     return _CACHE
 
 
-def schema_for(capability: str) -> dict | None:
-    return load_schemas().get(capability)
-
-
 def _resolve(spec: dict, root: dict) -> dict:
     """解 $ref（仅支持本文件 #/$defs/x）。"""
     ref = spec.get("$ref")
@@ -74,7 +70,197 @@ def _matches(spec: dict, value, root: dict) -> bool:
             import re
             if not re.match(spec["pattern"], value):
                 return False
+    if isinstance(value, list) and "items" in spec:
+        if not all(_matches(spec["items"], item, root) for item in value):
+            return False
+    if isinstance(value, dict) and "properties" in spec:
+        sub_props = spec.get("properties", {})
+        if spec.get("additionalProperties") is False:
+            for k in value:
+                if k not in sub_props:
+                    return False
+        for k, sub in sub_props.items():
+            if k in value and not _matches(sub, value[k], root):
+                return False
     return True
+
+
+#: v2 能力输入 schema（spec_v2 §12；与包内 v1.1 契约分层，schema_for 优先取此层）
+V2_INPUT_SCHEMAS: dict[str, dict] = {
+    "memory.hold": {
+        "type": "object",
+        "required": ["text"],
+        "additionalProperties": False,
+        "properties": {
+            "text": {"type": "string", "minLength": 1},
+            "why_remember": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "memory_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "date_confidence": {"type": "string",
+                                 "enum": ["exact", "inferred", "unknown"]},
+            "occurred_start": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "occurred_end": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "raw_refs": {"type": "array"},
+            "raw_pending": {"type": "boolean"},
+            "original_title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "categories": {"type": "array", "items": {"type": "string", "enum": [
+                "daily", "milestone", "sad", "sweet", "date", "plan", "sex",
+                "anniversary"]}},
+            "mood": {"type": "object", "additionalProperties": False,
+                      "properties": {"text": {"type": "string"},
+                                     "tags": {"type": "array",
+                                              "items": {"type": "string"}}}},
+            "our_words": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["speaker", "text"],
+                "properties": {
+                    "speaker": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
+                    "text": {"type": "string", "minLength": 1},
+                    "expression_kind": {"type": "string", "enum": [
+                        "verbatim", "paraphrase", "unspecified"]},
+                    "source_ref": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}},
+            "creation_mode": {"type": "string",
+                               "enum": ["contemporaneous", "retrospective"]},
+        },
+    },
+    "memory.open": {
+        "type": "object", "required": ["memory_id"], "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.view.confirm": {
+        "type": "object", "required": ["memory_id", "receipt_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                        "receipt_id": {"type": "string", "minLength": 1},
+                        "confirm_key": {"type": "string"}},
+    },
+    "memory.recollections.append": {
+        "type": "object", "required": ["memory_id", "receipt_id", "text"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                        "receipt_id": {"type": "string", "minLength": 1},
+                        "text": {"type": "string", "minLength": 1}},
+    },
+    "memory.recollections.revise": {
+        "type": "object", "required": ["recollection_id", "text"],
+        "additionalProperties": False,
+        "properties": {"recollection_id": {"type": "string", "minLength": 1},
+                        "text": {"type": "string", "minLength": 1}},
+    },
+    "memory.recollections.list": {
+        "type": "object", "required": ["memory_id"], "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                        "include_history": {"type": "boolean"}},
+    },
+    "memory.our_words.append": {
+        "type": "object", "required": ["memory_id", "words"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                        "words": {"type": "array", "minLength": 1, "items": {
+                            "type": "object",
+                            "required": ["speaker", "text"],
+                            "properties": {
+                                "speaker": {"type": "string",
+                                             "enum": ["jiaming", "qiaosheng"]},
+                                "text": {"type": "string", "minLength": 1}}}}},
+    },
+    "memory.our_words.list": {
+        "type": "object", "required": ["memory_id"], "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.categories.replace": {
+        "type": "object", "required": ["memory_id", "categories"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "categories": {"type": "array", "minLength": 1, "items": {
+                "type": "string", "enum": ["daily", "milestone", "sad", "sweet",
+                                            "date", "plan", "sex", "anniversary"]}}},
+    },
+    "i.get": {"type": "object", "properties": {}, "additionalProperties": False},
+    "i.write": {
+        "type": "object", "required": ["content"], "additionalProperties": False,
+        "properties": {"content": {"type": "string", "minLength": 1},
+                        "expected_version": {"type": "integer"}},
+    },
+    "i.versions.read": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    "i.suggest": {
+        "type": "object", "required": ["content"], "additionalProperties": False,
+        "properties": {"content": {"type": "string", "minLength": 1}},
+    },
+    "i.suggestions.list": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"status": {"type": "string",
+                                   "enum": ["open", "accepted", "dismissed"]}},
+    },
+    "memory.recall": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"},
+            "cursor": {"type": "array", "items": {"type": "string"}},
+            "filters": {"type": "object", "additionalProperties": False,
+                         "properties": {
+                             "categories": {"type": "array", "items": {
+                                 "type": "string"}},
+                             "category_match": {"type": "string",
+                                                 "enum": ["any", "all"]},
+                             "mood_tags": {"type": "array", "items": {
+                                 "type": "string"}},
+                             "mood_match": {"type": "string",
+                                             "enum": ["any", "all"]},
+                             "event_date": {"type": "object",
+                                             "additionalProperties": False,
+                                             "properties": {
+                                                 "from": {"type": "string"},
+                                                 "to": {"type": "string"}}}}}},
+    },
+    # v1.1 包 schema 曾要求 policy_version 必填，与处理器"缺省=按当前策略"
+    # 的行为不符且打断既有调用点；v2 层对齐处理器语义（提供则校验）。
+    "workspace.forgetting.scan": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "policy_version": {"type": "string"},
+            "min_idle_days": {"type": "integer"},
+            "cursor": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    "workspace.forgetting.generate": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string"},
+            "candidate_summary": {"type": "string"},
+            "candidate_tags": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    "workspace.review.submit": {
+        "type": "object", "required": ["item_id", "decision",
+                                        "expected_revision"],
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string", "minLength": 1},
+            "decision": {"type": "string", "enum": ["release", "escalate_retain",
+                                                     "escalate_owner",
+                                                     "escalate_jiaming"]},
+            "expected_revision": {"type": "integer"},
+            "candidate_hash": {"type": "string"},
+        },
+    },
+    "memory.retention.decide": {
+        "type": "object", "required": ["item_id", "decision"],
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string", "minLength": 1},
+            "decision": {"type": "string", "enum": ["keep", "continue", "defer"]},
+        },
+    },
+}
+
+
+def schema_for(capability: str) -> dict | None:
+    if capability in V2_INPUT_SCHEMAS:
+        return V2_INPUT_SCHEMAS[capability]
+    return load_schemas().get(capability)
 
 
 def validate(capability: str, arguments: dict) -> None:

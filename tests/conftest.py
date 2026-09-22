@@ -71,10 +71,18 @@ import pytest  # noqa: E402
 from mariposa import db, schema  # noqa: E402
 from mariposa.identity import service as identity  # noqa: E402
 
-TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}
+TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w",
+          "linshijian": "tok-l"}
 
 FORMAL_TABLES = [
     # 子表在前，父表在后
+    "i_suggestions", "i_versions", "i_documents",
+    "review_delegations",
+    "memory_summary_versions", "memory_retention",
+    "memory_recollections", "memory_view_receipts", "memory_our_words",
+    "memory_mood_tags", "memory_moods", "memory_categories",
+    "forgetting_due_queue",
+    "anniversary_occurrences", "anniversary_definitions",
     "audit_events", "events_outbox", "idempotency_records", "proposal_resolutions",
     "proposal_envelopes", "search_fts", "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",
@@ -93,6 +101,7 @@ FORMAL_TABLES = [
     "memory_reengagements", "migration_id_map",
 ]
 WORKSPACE_TABLES = [
+    "v2_proposal_versions", "v2_review_items",
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
     "workspace_task_leases",
 ]

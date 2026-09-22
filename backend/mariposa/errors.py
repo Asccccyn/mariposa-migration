@@ -70,3 +70,27 @@ class OutcomeUnknown(MariposaError):
     """同幂等键的执行疑似中途崩溃：副作用是否发生不明，需对账后才能重试。"""
     code = "OUTCOME_UNKNOWN"
     http_status = 409
+
+
+class ViewRequired(MariposaError):
+    """需要先明确打开并确认查看（例如写回忆）。"""
+    code = "VIEW_REQUIRED"
+    http_status = 403
+
+
+class ViewReceiptInvalid(MariposaError):
+    """查看回执无效：跨桶/跨身份/跨版本/过期/不存在。"""
+    code = "VIEW_RECEIPT_INVALID"
+    http_status = 403
+
+
+class BindingStale(MariposaError):
+    """原文绑定所依赖的源版本/hash已变化。"""
+    code = "BINDING_STALE"
+    http_status = 409
+
+
+class RawContextConfirmationRequired(MariposaError):
+    """展开隐藏原文需要先确认范围与预计token。"""
+    code = "RAW_CONTEXT_CONFIRMATION_REQUIRED"
+    http_status = 428

@@ -4,11 +4,13 @@ import { fileURLToPath } from "node:url";
 import { test, expect, request, type Page } from "@playwright/test";
 
 // React 版（/app，构建产物同源 /api）浏览器级遗忘闭环。
-// 前置：后端 18780 运行中、apps/web 已 npm run build。
-
+// 隔离实例：playwright webServer 自启（端口 18799、隔离库），不再复用
+// 业务 18780；token 从隔离根读取（spec_v2 §16）。
+const E2E_BASE = "http://127.0.0.1:18799";
 const __dir = dirname(fileURLToPath(import.meta.url));
 const tokens = JSON.parse(readFileSync(
-  resolve(__dir, "../../../runtime/dev_tokens.json"), "utf-8")) as Record<string, string>;
+  resolve(__dir, "../../../.pytest_tmp/e2e-isolated/runtime/dev_tokens.json"),
+  "utf-8")) as Record<string, string>;
 
 async function login(page: Page, who: string) {
   await page.goto("/app/");
@@ -27,7 +29,7 @@ async function doSearch(page: Page, query: string) {
 
 async function resetForgottenToFull() {
   const ctx = await request.newContext({
-    baseURL: "http://127.0.0.1:18780",
+    baseURL: E2E_BASE,
     extraHTTPHeaders: { Authorization: `Bearer ${tokens["qiaosheng"]}` },
   });
   const out = await (await ctx.post("/api/capability/memory.search", {
