@@ -1,8 +1,66 @@
-"""测试环境：必须在 import mariposa 之前固定 MARIPOSA_ROOT。"""
+"""测试环境：必须在 import mariposa 之前固定 MARIPOSA_ROOT。
+
+保险丝（B06）：测试会清空数据库；外部传入的 MARIPOSA_ROOT 若不在允许的
+测试根目录内则 fail closed，防止误把业务/生产库当测试库清掉。
+路径比较基于规范化真实路径（realpath），不做字符串前缀判断。
+"""
 from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _real(path) -> Path:
+    return Path(os.path.realpath(str(path)))
+
+
+def _is_within(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+#: 允许的测试根目录（fail closed 白名单）：
+#: 1) 系统临时目录（默认）；2) 项目内 pytest basetemp；
+#: 3) runtime/verification 取证隔离目录（§16.1 模板）；
+#: 4) MARIPOSA_TEST_ROOTS 显式白名单（分号分隔的规范化路径）。
+def _test_root_allowed(raw_root: str) -> tuple[bool, str]:
+    root = _real(raw_root)
+    candidates = [
+        (_real(tempfile.gettempdir()), "system temp dir"),
+        (_real(_REPO_ROOT / ".pytest_tmp"), "project pytest basetemp"),
+        (_real(_REPO_ROOT / "runtime" / "verification"),
+         "runtime/verification evidence dir"),
+    ]
+    for base, why in candidates:
+        if _is_within(root, base):
+            return True, why
+    for entry in os.environ.get("MARIPOSA_TEST_ROOTS", "").split(";"):
+        if entry.strip() and root == _real(entry.strip()):
+            return True, "MARIPOSA_TEST_ROOTS allowlist"
+    return False, ""
+
+
+def _enforce_test_root_fuse() -> None:
+    raw = os.environ.get("MARIPOSA_ROOT")
+    if not raw:
+        return
+    ok, why = _test_root_allowed(raw)
+    if ok:
+        return
+    raise RuntimeError(
+        f"MARIPOSA_ROOT={raw} 拒绝用作测试根目录（fail closed）："
+        "测试会清空该目录下的数据库。允许的根：系统临时目录、"
+        ".pytest_tmp、runtime/verification、或 MARIPOSA_TEST_ROOTS 白名单"
+        "（分号分隔）。业务/生产库绝不能作为测试根。")
+
+
+_enforce_test_root_fuse()
 
 _TEST_ROOT = os.environ.setdefault(
     "MARIPOSA_ROOT", os.path.join(tempfile.mkdtemp(prefix="mariposa-test-"))

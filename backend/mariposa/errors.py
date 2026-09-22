@@ -64,3 +64,9 @@ class ProviderUnavailable(MariposaError):
 class SnapshotStale(MariposaError):
     code = "SNAPSHOT_STALE"
     http_status = 409
+
+
+class OutcomeUnknown(MariposaError):
+    """同幂等键的执行疑似中途崩溃：副作用是否发生不明，需对账后才能重试。"""
+    code = "OUTCOME_UNKNOWN"
+    http_status = 409
