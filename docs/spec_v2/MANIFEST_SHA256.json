@@ -1,0 +1,37 @@
+{
+  "version": "2.0.1",
+  "date": "2026-09-22",
+  "supersedes_document_version": "2.0",
+  "files": [
+    {
+      "name": "README.md",
+      "size_bytes": 1363,
+      "sha256": "c22484b952c646f41993c9f35e5d13a96f377d4e57ef8776eee51510a63b46cd"
+    },
+    {
+      "name": "mariposa_v2.0.1_GLM实现路径与执行规章.md",
+      "size_bytes": 86000,
+      "sha256": "640ea87fa0d4772a1f297c5f776e3a2c3a303624cf688a07e824888266399202"
+    },
+    {
+      "name": "mariposa_v2.0.1_工程说明_给乔生.docx",
+      "size_bytes": 55888,
+      "sha256": "25d6385ee68cddfa8a1508bf4ad482845cb2fe542cab4a11a3cbe18d19674e4e"
+    },
+    {
+      "name": "mariposa_v2.0.1_架构与使用说明_给周家明.md",
+      "size_bytes": 14379,
+      "sha256": "66a1a653bb987b477066b39201a08ded0683ac6fd326ee22a1ae9a081a12e34d"
+    },
+    {
+      "name": "mariposa_v2.0.1_需求与验收矩阵.json",
+      "size_bytes": 62315,
+      "sha256": "03f30d5111cd6107864f5c06639acc5953af766d0e7f1f72175b5c6cda3e1b55"
+    },
+    {
+      "name": "修订记录_v2.0.1.md",
+      "size_bytes": 1572,
+      "sha256": "07d0f49b068008ce9c7e2651428d033f0789569b44505b505a58fbed36a29543"
+    }
+  ]
+}

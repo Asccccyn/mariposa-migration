@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .. import db
-from ..errors import Forbidden, IdempotencyConflict, MariposaError, NotFound
+from ..errors import Forbidden, IdempotencyConflict, MariposaError, NotFound, OutcomeUnknown
 from ..identity import Principal
 from ..identity import service as identity
 from ..memory import service as memory
@@ -78,6 +78,10 @@ def _register() -> dict[str, Capability]:
         description="列出工作区提案")
     add("memory.forgetting.decide", _decide, _owners(), True, True,
         description="审批遗忘提案（worker 拒绝）")
+    add("workspace.proposals.withdraw", _withdraw, {"worker", "qiaosheng", "jiaming"},
+        True, description="撤回自己未终局的已提交提案（提交者或两人；不要求hash）")
+    add("maintenance.idempotency.reconcile", _idem_reconcile, _owners(), True,
+        description="崩溃窗口对账：核实业务结果后清除 running 幂等占位")
     add("raw.import", _raw_import, {"worker", "qiaosheng", "jiaming"}, True, True,
         description="导入原文（同源同消息 ID 幂等，不覆盖已存在消息）")
     add("raw.messages.list", _raw_list, _owners(), False,
@@ -306,25 +310,29 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
     """原子 claim 幂等：先 INSERT 占位（status=running），占位成功者才执行副作用。
 
     并发同 key：仅一方能占位；另一方等待后读终态重放。
-    崩溃残留的 running（>60s）视为可重占（对账语义：副作用由业务幂等键兜底）。
+    崩溃窗口（§13.2）：running 残留超过阈值时不盲删盲重放——副作用是否
+    已发生不明，返回 OUTCOME_UNKNOWN，由显式对账（maintenance.idempotency.
+    reconcile）核实业务结果后才能放行重试。
     """
     ph = _payload_hash(arguments)
+    STALE_SECONDS = 60
 
     def claim() -> bool:
         with db.formal() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                # 清理崩溃残留（超时 running）
-                conn.execute(
-                    "DELETE FROM idempotency_records WHERE principal_id=? AND"
-                    " capability=? AND idempotency_key=? AND status='running'"
-                    " AND created_at < datetime('now', '-60 seconds')",
-                    (principal.principal_id, cap.name, key))
+                # 认领语义：新记录插入即占位；对账后标记 failed 的记录可被
+                # 原子转移回 running 重新执行；completed/running 一律不占。
                 cur = conn.execute(
-                    "INSERT OR IGNORE INTO idempotency_records(principal_id,"
+                    "INSERT INTO idempotency_records(principal_id,"
                     " capability, idempotency_key, payload_hash, status,"
                     " result_ref, created_at)"
-                    " VALUES(?,?,?,?, 'running', NULL, datetime('now'))",
+                    " VALUES(?,?,?,?, 'running', NULL, datetime('now'))"
+                    " ON CONFLICT(principal_id, capability, idempotency_key)"
+                    " DO UPDATE SET status='running',"
+                    " payload_hash=excluded.payload_hash, result_ref=NULL,"
+                    " created_at=excluded.created_at"
+                    " WHERE idempotency_records.status='failed'",
                     (principal.principal_id, cap.name, key, ph))
                 conn.execute("COMMIT")
                 return cur.rowcount == 1
@@ -338,6 +346,16 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                 "SELECT * FROM idempotency_records WHERE principal_id=? AND"
                 " capability=? AND idempotency_key=?",
                 (principal.principal_id, cap.name, key)).fetchone()
+
+    def _stale(row) -> bool:
+        from datetime import datetime as _dt, timezone as _tz
+        try:
+            created = _dt.fromisoformat(row["created_at"])
+        except ValueError:
+            return True
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=_tz.utc)
+        return (_dt.now(_tz.utc) - created).total_seconds() > STALE_SECONDS
 
     if not claim():
         # 另一方持有：等待其完成（bounded）
@@ -355,8 +373,17 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                 return {"ok": True,
                         "data": json.loads(row["result_ref"]),
                         "idempotent_replay": True}
-        # 仍在 running（执行方超时未回填）：拒绝盲重放，让调用方重试
-        raise Busy()
+        row = read_record()
+        if row is not None and row["status"] == "running":
+            if _stale(row):
+                # 疑似崩溃残留：不盲目重放副作用（B02 崩溃窗口）
+                raise OutcomeUnknown(
+                    "idempotent execution likely crashed mid-flight; "
+                    "verify business outcome and reconcile before retrying",
+                    capability=cap.name, key=key)
+            raise Busy()
+        if not claim():
+            raise Busy()
 
     result = cap.handler(principal, arguments)
     with db.formal() as conn:
@@ -425,7 +452,24 @@ def _scan(principal: Principal, a: dict) -> dict:
         raise Forbidden("policy_version mismatch",
                         code="VERSION_CONFLICT",
                         expected=_cfg.POLICY_VERSION, got=pv)
-    return workspace.scan_candidates(principal, a.get("min_idle_days"))
+    cursor = a.get("cursor")
+    if cursor is not None and not (isinstance(cursor, list) and len(cursor) == 2):
+        raise Forbidden("cursor must be [memory_date, memory_id]",
+                        code="INVALID_ARGUMENT")
+    return workspace.scan_candidates(principal, a.get("min_idle_days"),
+                                     cursor=tuple(cursor) if cursor else None)
+
+
+def _withdraw(principal: Principal, a: dict) -> dict:
+    return workspace.withdraw(principal, str(a.get("proposal_id", "")))
+
+
+def _idem_reconcile(principal: Principal, a: dict) -> dict:
+    return maintenance.idempotency_reconcile(
+        principal.principal_id,
+        str(a.get("record_principal", principal.principal_id)),
+        str(a.get("capability", "")), str(a.get("idempotency_key", "")),
+        int(a.get("stale_seconds", 60)))
 
 
 def _revise(principal: Principal, a: dict) -> dict:

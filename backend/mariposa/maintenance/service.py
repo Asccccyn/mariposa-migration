@@ -111,6 +111,55 @@ def reconcile_workspace() -> dict:
     return {"checked": len(res_map), "fixed": fixed}
 
 
+def idempotency_reconcile(principal_id: str, record_principal: str,
+                          capability: str, idempotency_key: str,
+                          stale_seconds: int = 60) -> dict:
+    """崩溃窗口对账（§13.2）：把疑似中途崩溃的 running 幂等记录显式标记 failed。
+
+    只有 failed 之后同 key 重试才能重新占位执行。调用方必须先核实业务结果
+    （副作用可能已发生）；本工具只清除占位，不伪造结果。
+    """
+    from ..errors import NotFound as _NF
+    from datetime import datetime as _dt
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT * FROM idempotency_records WHERE principal_id=? AND"
+            " capability=? AND idempotency_key=?",
+            (record_principal, capability, idempotency_key)).fetchone()
+        if row is None:
+            raise _NF("idempotency record not found",
+                      principal=record_principal, capability=capability,
+                      key=idempotency_key)
+        if row["status"] != "running":
+            return {"reconciled": False, "status": row["status"],
+                    "note": "record is not running; nothing to reconcile"}
+        created = _dt.fromisoformat(row["created_at"])
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - created).total_seconds()
+        if age <= stale_seconds:
+            return {"reconciled": False, "status": "running",
+                    "age_seconds": int(age),
+                    "note": "record still fresh; concurrent execution may be"
+                            " in flight; refuse to reconcile"}
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "UPDATE idempotency_records SET status='failed', result_ref=?"
+                " WHERE principal_id=? AND capability=? AND idempotency_key=?"
+                " AND status='running'",
+                (None, record_principal, capability, idempotency_key))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"reconciled": True, "status": "failed",
+            "age_seconds": int(age),
+            "reconciled_by": principal_id,
+            "note": "占位已清除；副作用是否已发生须由调用方核实业务状态，"
+                    "确认后同 key 重试将重新执行"}
+
+
 def jobs_status() -> dict:
     """维护任务状态总览：outbox 待处理、租约、导入任务。"""
     with db.formal() as conn:

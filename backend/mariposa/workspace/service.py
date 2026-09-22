@@ -26,50 +26,89 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
+def scan_candidates(started_by, min_idle_days: int | None = None,
+                    cursor: tuple[str, str] | None = None,
+                    limit: int | None = None) -> dict:
     """只读正式库筛候选，在工作区落 forget_proposal 草稿；不改正式桶。
 
     候选规则（§7.2 保守默认）：active+full、未 pinned/protected/anchor、
     memory_date 已过冷却期；日期 unknown 暂不自动选。
+
+    B08 防饥饿：游标按 (memory_date, memory_id) 稳定推进。被跳过的行不占用
+    本页名额循环卡死——扫描持续向后推进直到取满 limit 或全表扫尽，
+    前页全是跳过项时后续到期项仍会被发现；next_cursor 供下次续扫。
     """
     idle = min_idle_days if min_idle_days is not None else config.FORGET_IDLE_DAYS
+    batch = limit if limit is not None else config.FORGET_SCAN_BATCH_SIZE
     today_local = datetime.now(ZoneInfo(config.RELATIONSHIP_TIMEZONE)).date()
     created: list[dict] = []
     skipped: list[dict] = []
+    exhausted = False
+    cur_date, cur_id = cursor if cursor else (None, None)
     with db.formal() as fconn:
-        rows = fconn.execute(
-            "SELECT memory_id, current_version_no, memory_date FROM memories"
-            " WHERE visibility='active' AND compression_state='full'"
-            " AND pinned=0 AND protected=0 AND anchor=0"
-            " ORDER BY memory_date LIMIT ?",
-            (config.FORGET_SCAN_BATCH_SIZE,),
-        ).fetchall()
-        for r in rows:
-            if r["memory_date"] is None:
-                skipped.append({"memory_id": r["memory_id"], "reason": "date_unknown"})
-                continue
-            try:
-                d = date.fromisoformat(r["memory_date"])
-            except ValueError:
-                skipped.append({"memory_id": r["memory_id"], "reason": "bad_date"})
-                continue
-            if (today_local - d).days < idle:  # min_idle_days=0 意为无门槛
-                skipped.append({"memory_id": r["memory_id"], "reason": "too_recent"})
-                continue
-            with db.workspace() as wconn:
-                exists = wconn.execute(
-                    "SELECT 1 FROM work_items WHERE target_memory_id=? AND state IN"
-                    " ('draft','submitted','deferred')",
-                    (r["memory_id"],),
-                ).fetchone()
-            if exists:
-                skipped.append({"memory_id": r["memory_id"], "reason": "open_item"})
-                continue
-            if _suppressed(r["memory_id"]):
-                skipped.append({"memory_id": r["memory_id"], "reason": "rejection_cooldown"})
-                continue
-            # §7.2 意义审查：有 meaning 层或活跃关联的桶不进自动候选
-            with db.formal() as fconn:
+        guard = 0
+        while len(created) < batch and not exhausted:
+            guard += 1
+            if guard > 10000:  # 保险：异常状态下退出而不是无限扫描
+                break
+            if cur_date is None and cur_id is None:
+                rows = fconn.execute(
+                    "SELECT memory_id, current_version_no, memory_date FROM memories"
+                    " WHERE visibility='active' AND compression_state='full'"
+                    " AND pinned=0 AND protected=0 AND anchor=0"
+                    " ORDER BY memory_date, memory_id LIMIT ?",
+                    (batch,),
+                ).fetchall()
+            elif cur_date is None:
+                # NULL 日期在 ASC 排序中最前：NULL 段内按 id 推进，其后取全部有日期行
+                rows = fconn.execute(
+                    "SELECT memory_id, current_version_no, memory_date FROM memories"
+                    " WHERE visibility='active' AND compression_state='full'"
+                    " AND pinned=0 AND protected=0 AND anchor=0"
+                    " AND (memory_date IS NOT NULL OR"
+                    "     (memory_date IS NULL AND memory_id > ?))"
+                    " ORDER BY memory_date, memory_id LIMIT ?",
+                    (cur_id, batch),
+                ).fetchall()
+            else:
+                rows = fconn.execute(
+                    "SELECT memory_id, current_version_no, memory_date FROM memories"
+                    " WHERE visibility='active' AND compression_state='full'"
+                    " AND pinned=0 AND protected=0 AND anchor=0"
+                    " AND (memory_date > ? OR (memory_date = ? AND memory_id > ?))"
+                    " ORDER BY memory_date, memory_id LIMIT ?",
+                    (cur_date, cur_date, cur_id, batch),
+                ).fetchall()
+            if not rows:
+                exhausted = True
+                break
+            for r in rows:
+                # 游标记在最后一条已处理的行上：中途取满限额时不跳过未处理行
+                cur_date, cur_id = r["memory_date"], r["memory_id"]
+                if r["memory_date"] is None:
+                    skipped.append({"memory_id": r["memory_id"], "reason": "date_unknown"})
+                    continue
+                try:
+                    d = date.fromisoformat(r["memory_date"])
+                except ValueError:
+                    skipped.append({"memory_id": r["memory_id"], "reason": "bad_date"})
+                    continue
+                if (today_local - d).days < idle:  # min_idle_days=0 意为无门槛
+                    skipped.append({"memory_id": r["memory_id"], "reason": "too_recent"})
+                    continue
+                with db.workspace() as wconn:
+                    exists = wconn.execute(
+                        "SELECT 1 FROM work_items WHERE target_memory_id=? AND state IN"
+                        " ('draft','submitted','deferred')",
+                        (r["memory_id"],),
+                    ).fetchone()
+                if exists:
+                    skipped.append({"memory_id": r["memory_id"], "reason": "open_item"})
+                    continue
+                if _suppressed(r["memory_id"]):
+                    skipped.append({"memory_id": r["memory_id"], "reason": "rejection_cooldown"})
+                    continue
+                # §7.2 意义审查：有 meaning 层或活跃关联的桶不进自动候选
                 has_meaning = fconn.execute(
                     "SELECT 1 FROM memory_meanings WHERE memory_id=?"
                     " AND layer_no<1000 LIMIT 1", (r["memory_id"],)).fetchone()
@@ -77,17 +116,21 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
                     "SELECT 1 FROM memory_relations WHERE (from_memory=? OR"
                     " to_memory=?) AND active=1 LIMIT 1",
                     (r["memory_id"], r["memory_id"])).fetchone()
-            if has_meaning or has_relation:
-                skipped.append({"memory_id": r["memory_id"],
-                                "reason": "has_meaning_or_relations"})
-                continue
-            # §7.3：再提起按证据原时刻判断冷却，不用数据库 created_at
-            last_re = reengagement.last_reengaged_at(r["memory_id"])
-            if last_re and last_re >= (today_local - timedelta(days=idle)).isoformat():
-                skipped.append({"memory_id": r["memory_id"],
-                                "reason": "recently_reengaged"})
-                continue
-            created.append(_create_draft(started_by.principal_id, r["memory_id"]))
+                if has_meaning or has_relation:
+                    skipped.append({"memory_id": r["memory_id"],
+                                    "reason": "has_meaning_or_relations"})
+                    continue
+                # §7.3：再提起按证据原时刻判断冷却，不用数据库 created_at
+                last_re = reengagement.last_reengaged_at(r["memory_id"])
+                if last_re and last_re >= (today_local - timedelta(days=idle)).isoformat():
+                    skipped.append({"memory_id": r["memory_id"],
+                                    "reason": "recently_reengaged"})
+                    continue
+                created.append(_create_draft(started_by.principal_id, r["memory_id"]))
+                if len(created) >= batch:
+                    break
+            if len(rows) < batch:
+                exhausted = True
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     with db.workspace() as wconn:
@@ -107,6 +150,9 @@ def scan_candidates(started_by, min_idle_days: int | None = None) -> dict:
                 "note": "闲置判定基于已收录资料；覆盖不完整时可能遗漏再提及"}
     return {"run_id": run_id, "created": created, "skipped": skipped,
             "coverage": coverage,
+            "cursor_advanced_past": [cur_date, cur_id],
+            "next_cursor": None if exhausted else [cur_date, cur_id],
+            "exhausted": exhausted,
             "policy": {"idle_days": idle, "version": config.POLICY_VERSION}}
 
 
@@ -377,13 +423,16 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
                 "rejected_by_" + principal.principal_id)
 
     with db.workspace() as wconn:
-        if new_state != "deferred":
-            wconn.execute(
-                "UPDATE work_items SET state=?, updated_at=?, resolution_note=? WHERE item_id=?",
-                (new_state, _now(),
-                 json.dumps({"decided_by": principal.principal_id}, ensure_ascii=False),
-                 proposal_id),
-            )
+        # B08：defer 也实际更新状态（此前 defer 不落状态，条目永远停在
+        # submitted，工作区列表无法区分"待审"与"已挂起"）。
+        wconn.execute(
+            "UPDATE work_items SET state=?, updated_at=?, resolution_note=? WHERE item_id=?",
+            (new_state, _now(),
+             json.dumps({"decided_by": principal.principal_id,
+                         "deferred": decision == "defer"},
+                        ensure_ascii=False),
+             proposal_id),
+        )
         wconn.execute(
             "INSERT INTO workspace_audit(event_id, occurred_at, actor, action, item_id, detail)"
             " VALUES(?,?,?,?,?,?)",
@@ -391,6 +440,53 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
              f"proposal.{decision}", proposal_id, ""),
         )
     return result
+
+
+def withdraw(principal, proposal_id: str) -> dict:
+    """撤回已提交提案（§12 workspace.proposals.withdraw）。
+
+    提交者本人可撤回自己未终局的稿；乔生/周家明亦可。
+    撤回不要求 proposal_hash/版本核对（不是生效动作），但要求 envelope 存在
+    且未决；与批准竞争时只产生一个终局（ProposalAlreadyResolved）。
+    """
+    pid = getattr(principal, "principal_id", principal)
+    with db.workspace() as wconn:
+        item = wconn.execute(
+            "SELECT * FROM work_items WHERE item_id=?", (proposal_id,)).fetchone()
+        if item is None:
+            raise NotFound("work item not found", proposal_id=proposal_id)
+        if item["state"] not in ("submitted", "deferred"):
+            raise Forbidden("only submitted/deferred proposals can be withdrawn",
+                            state=item["state"])
+    with db.formal() as fconn:
+        env = fconn.execute(
+            "SELECT submitted_by FROM proposal_envelopes WHERE proposal_id=?",
+            (proposal_id,)).fetchone()
+        if env is None:
+            raise NotFound("proposal envelope not found", proposal_id=proposal_id)
+        if pid not in _APPROVERS and env["submitted_by"] != pid:
+            raise Forbidden("only the submitter or an approver may withdraw",
+                            principal=pid)
+        fconn.execute("BEGIN IMMEDIATE")
+        try:
+            memory.reject_or_withdraw(
+                fconn, proposal_id, "withdrawn", pid,
+                getattr(principal, "binding_id", ""))
+            fconn.execute("COMMIT")
+        except Exception:
+            fconn.execute("ROLLBACK")
+            raise
+    with db.workspace() as wconn:
+        wconn.execute(
+            "UPDATE work_items SET state='withdrawn', updated_at=?, resolution_note=?"
+            " WHERE item_id=?",
+            (_now(), json.dumps({"decided_by": pid}, ensure_ascii=False), proposal_id))
+        wconn.execute(
+            "INSERT INTO workspace_audit(event_id, occurred_at, actor, action, item_id, detail)"
+            " VALUES(?,?,?,?,?,?)",
+            (f"evt_{uuid.uuid4().hex[:16]}", _now(), pid, "proposal.withdrawn",
+             proposal_id, ""))
+    return {"proposal_id": proposal_id, "state": "withdrawn"}
 
 
 def decide_batch(principal: identity.Principal, items: list[dict]) -> dict:

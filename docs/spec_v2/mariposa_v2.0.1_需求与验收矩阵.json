@@ -1,0 +1,1648 @@
+{
+  "document_version": "2.0.1",
+  "date": "2026-09-22",
+  "project": "mariposa",
+  "source_priority": [
+    "S4",
+    "S3",
+    "S2",
+    "S1",
+    "current_code_for_facts_only"
+  ],
+  "historical_code_baseline": "58f7ea884d006fa00a6ae129cfd26f2652ab053d",
+  "this_delivery_runs_tests": false,
+  "this_delivery_changes_project": false,
+  "rules": [
+    {
+      "id": "R01",
+      "topic": "身份",
+      "text": "项目为mariposa；周家明的Chat与CC是同一主体，不分主次。林石见/GLM不是周家明。"
+    },
+    {
+      "id": "R02",
+      "topic": "字段",
+      "text": "事件日期、hold时间、标题、分类、心情文字与标签、事件、我们的话、原文绑定、回忆必须各有明确来源和用途。"
+    },
+    {
+      "id": "R03",
+      "topic": "日期",
+      "text": "事件实际日期用于检索；普通遗忘从首次hold所在的自然日起算，不从事件日期或数据迁移时间起算；按共同业务时区做日期加法，不按累计小时。"
+    },
+    {
+      "id": "R04",
+      "topic": "分类",
+      "text": "八分类平行多选，同一个桶只存一次；多类期限取最长；重大转折/纪念不自动遗忘。"
+    },
+    {
+      "id": "R05",
+      "topic": "心情",
+      "text": "当时心情只在原事件所在窗口hold时写；后来的补记不伪造；心情空白不等于不重要。"
+    },
+    {
+      "id": "R06",
+      "topic": "召回",
+      "text": "心情只索引标签；标题、心情文字、我们的话、原文和回忆均不参与普通召回。"
+    },
+    {
+      "id": "R07",
+      "topic": "事件",
+      "text": "事件是有头有尾、有详有略的闭合记录；不是强制流水账或原文全文复制。"
+    },
+    {
+      "id": "R08",
+      "topic": "我们的话",
+      "text": "桶内双方话语按说话人和顺序保存；概括与原话都允许，来源匹配不自动改写其表达。"
+    },
+    {
+      "id": "R09",
+      "topic": "回忆",
+      "text": "只有乔生/周家明明确打开桶后才能写回忆；搜索预览、后台读取、开窗灌包不算打开。"
+    },
+    {
+      "id": "R10",
+      "topic": "打开",
+      "text": "仅普通记忆桶明确打开后按本次打开所在自然日和分类周期续期；plan详情打开不续期；查看遗忘摘要不自动恢复旧正文。"
+    },
+    {
+      "id": "R11",
+      "topic": "到期",
+      "text": "日常20、伤心30、甜蜜30、做爱20、约会60个自然日；永久类和确定留退出自动遗忘。"
+    },
+    {
+      "id": "R12",
+      "topic": "plan",
+      "text": "待执行/进行中/未完成的plan不自动遗忘；完成/放弃从对应状态变更所在自然日起固定20天，任何详情打开均不续期；只处理计划资源，不连带事件桶。"
+    },
+    {
+      "id": "R13",
+      "topic": "审查",
+      "text": "后台生成摘要+tags；林石见只可改这两项并处理明确到期项；原始记录只读；疑难交你们。"
+    },
+    {
+      "id": "R14",
+      "topic": "保留",
+      "text": "第一次、双方共同话语、标题明确留、回忆有内容为保留线索；共同话语只标疑似，由周家明判留。"
+    },
+    {
+      "id": "R15",
+      "topic": "留终局",
+      "text": "确定留后不再定期复审；仅疑似不能冒充永久保留；不得判某件事“不重要”。"
+    },
+    {
+      "id": "R16",
+      "topic": "摘要",
+      "text": "沿用事件用词、不增评价或伪造说出口；展示带原始标题，索引不含标题前缀；保留原摘要和改动对照。"
+    },
+    {
+      "id": "R17",
+      "topic": "原文",
+      "text": "乔生导入原文；后台用事件与我们的话定位；不连续区间选取、完整源文保留、反查多个桶；自动绑定阈值先评测再定，未定阈值不自动生效。"
+    },
+    {
+      "id": "R18",
+      "topic": "原文展开",
+      "text": "未选部分默认隐藏；额外展开先报范围/预计token并确认，取消则不返回额外正文。"
+    },
+    {
+      "id": "R19",
+      "topic": "I",
+      "text": "乔生提建议、周家明决定落笔；平静时写为自律，不由后台判定心情再准入。"
+    },
+    {
+      "id": "R20",
+      "topic": "开窗",
+      "text": "最近三个自然日的桶只出标题+心情标签+文字，I浮现；临近按提前3个自然日判断，相关计划/纪念日全文浮现；不默认30条原文。"
+    },
+    {
+      "id": "R21",
+      "topic": "候选",
+      "text": "返回多条由周家明选择；分类/标签独立筛选，关键词用于相关排序，不要求唯一答案。"
+    },
+    {
+      "id": "R22",
+      "topic": "旧数据",
+      "text": "保留作者/时间/原文字节；不把旧why/meaning自动改成当时心情或回忆；未明映射待审。"
+    }
+  ],
+  "modules": [
+    {
+      "id": "M01",
+      "name": "业务身份与双入口",
+      "status": "已有基础，需改权限",
+      "existing": "有 qiaosheng / jiaming / worker / system 与 token 绑定；服务端判身份，入口来源另记。",
+      "change": "Chat与CC保持同一个周家明；把后台生成者与林石见受限审查者分开，不能把所有worker升级为审批人。",
+      "add": "审查委托、资源范围、字段白名单及生效/撤销记录。",
+      "evidence": "identity/service.py；capabilities/registry.py"
+    },
+    {
+      "id": "M02",
+      "name": "正式库与工作区",
+      "status": "已有基础，可复用",
+      "existing": "正式库与工作区分开，提案草稿、提交信封、正式决议分层。",
+      "change": "扩展为生成→审查→生效/待裁决；正式区只接收确定结果。",
+      "add": "原摘要/新摘要/原tags/新tags/改动对照与来源版本。",
+      "evidence": "db.py；workspace/service.py；memory/service.py"
+    },
+    {
+      "id": "M03",
+      "name": "记忆桶写入",
+      "status": "旧版已实现，需重构",
+      "existing": "有 hold、事件日期、正文、why_remember、版本。",
+      "change": "拆成标题、事件、当时心情、我们的话、回忆、来源绑定；日期与hold时间分开。",
+      "add": "字段来源、记录模式、同窗口证据与不可代写约束。",
+      "evidence": "memory/service.py；capabilities/registry.py"
+    },
+    {
+      "id": "M04",
+      "name": "八类平行分类",
+      "status": "需增加",
+      "existing": "有通用标签基础，未证明已有这套八分类平行模型。",
+      "change": "分类不是主副关系；同桶可属于多个池，结果去重。",
+      "add": "日常/重大转折/伤心的事/甜蜜/约会/plan/做爱/纪念与分类关联表。",
+      "evidence": "content/service.py；memory/listing.py；旧测试"
+    },
+    {
+      "id": "M05",
+      "name": "当时心情",
+      "status": "需增加并替换旧混合语义",
+      "existing": "有情绪标签、why_remember/meaning等旧字段，不等于当时心情抽屉。",
+      "change": "只在原事件所在窗口hold时写；补记不伪造当时感受；只有标签可检索。",
+      "add": "心情文字、标签、窗口来源；hold后不得以补记方式追加当时心情。",
+      "evidence": "capabilities/registry.py；content/service.py"
+    },
+    {
+      "id": "M06",
+      "name": "我们的话",
+      "status": "需增加",
+      "existing": "有独立“她的话”quotes，不是桶内双方顺序话语。",
+      "change": "桶内按说话人和顺序保留；可概括或原话；不参与召回；不能把复述自动改写成原文。",
+      "add": "speaker/ordinal/text/表达形式/来源证据；原文定位候选。",
+      "evidence": "quotes/service.py；raw/binding.py"
+    },
+    {
+      "id": "M07",
+      "name": "回忆与明确打开",
+      "status": "需增加",
+      "existing": "有读取、历史、再提起记录，但没有这套打开回执与双方回忆约束。",
+      "change": "只有本人明确打开该桶后才可写回忆；回忆不检索；有内容触发疑似保留。",
+      "add": "一次性打开确认、回忆追加/修订历史、反伪造和跨桶防护。",
+      "evidence": "memory/reengagement.py；memory/extras.py"
+    },
+    {
+      "id": "M08",
+      "name": "原文导入",
+      "status": "已有基础，需接新入口",
+      "existing": "导入、按会话/消息读取、同源消息幂等、待绑定基础已存在。",
+      "change": "新版上传发起者是乔生；后台仅执行获准导入/匹配任务；原文不进入普通记忆召回。",
+      "add": "导入作业授权、覆盖说明与原始消息稳定定位。",
+      "evidence": "raw/service.py；capabilities/registry.py"
+    },
+    {
+      "id": "M09",
+      "name": "原文多区间与反查",
+      "status": "旧版部分存在，需扩展",
+      "existing": "有绑定、撤销、低置信审阅与来源待补状态。",
+      "change": "不裁剪源文本；支持不连续选区；同一来源范围可支持不同事件桶，不因同区间一律拒绝。",
+      "add": "区间表、版本hash、隐藏上下文、大量token确认、原文→桶反查、匹配评测；自动阈值先测后定，未定前保持人工/建议。",
+      "evidence": "raw/binding.py；raw/service.py"
+    },
+    {
+      "id": "M10",
+      "name": "召回与搜索投影",
+      "status": "已有基础，必须重构",
+      "existing": "关键词、结构化标签日期、关联和本地语义检索基础；遗忘投影与恢复测试已过。",
+      "change": "未遗忘只索引事件；遗忘只索引事后摘要与新tags；日期/分类/原心情标签仍可筛选；标题、心情文字、对话、回忆、原文均排除。",
+      "add": "分池筛选、BM25相关排序、空查询浏览、命中解释、全路径防旁路测试。",
+      "evidence": "retrieval/projection.py；search.py；semantic.py；rebuild.py"
+    },
+    {
+      "id": "M11",
+      "name": "遗忘期限",
+      "status": "旧规则已实现，需替换",
+      "existing": "按memory_date及统一闲置门槛扫描；保护/关联/meaning等旧排除条件。",
+      "change": "普通桶按首次hold或明确打开所在自然日起算，多分类取最长自然日周期；重大转折、纪念和确定留不自动遗忘。",
+      "add": "retention版本、basis_date/due_date/业务时区、自然日续期、到期队列、分页防饥饿。",
+      "evidence": "workspace/service.py；config.py"
+    },
+    {
+      "id": "M12",
+      "name": "摘要审查与有限执行权",
+      "status": "旧审批基础可用，需重构",
+      "existing": "草稿修订、提交、精确hash/版本审批、跨库对账、恢复。",
+      "change": "后台生成摘要和tags；林石见可审改二者并放行明确到期项；疑难转你们；共同话语只周家明裁决。",
+      "add": "审查角色、保留线索、禁用措辞、对照材料、执行前期限重检、永久保留终局。",
+      "evidence": "workspace/service.py；memory/service.py；maintenance/service.py"
+    },
+    {
+      "id": "M13",
+      "name": "计划与纪念日",
+      "status": "计划已有基础，需改/增",
+      "existing": "计划CRUD、状态、日期、关联和日历聚合；未证明独立纪念日模型已就绪。",
+      "change": "计划与事件分开；进行中/未完成不自动遗忘；完成/放弃日+20自然日固定到期，详情打开不续期；临近3自然日完整浮现。",
+      "add": "完成/放弃时刻、终结自然日和版本、计划自己的摘要状态；阅读不改终结版本；纪念日发生项与重复规则。",
+      "evidence": "plans/service.py；calendar/service.py"
+    },
+    {
+      "id": "M14",
+      "name": "I",
+      "status": "需增加并与旧Self区分",
+      "existing": "有Self/Home/Diary；Self为周家明写、隔日回看。",
+      "change": "I只由周家明落笔；乔生提出建议；不设后台“是否平静”门槛；不把旧Self整段自动改名。",
+      "add": "I正本与版本、编辑入口、完整开窗、明确迁移映射。",
+      "evidence": "content/service.py；bootstrap/service.py"
+    },
+    {
+      "id": "M15",
+      "name": "开窗浮现",
+      "status": "已有基础，需替换内容",
+      "existing": "Chat最近30消息、CC不取原文、近期桶与相关计划、快照分页。",
+      "change": "新默认包为最近三个自然日桶的标题+心情标签+文字、I、临近3自然日的计划/纪念全文；不默认灌事件和30条原文。",
+      "add": "新snapshot指纹、分节分页、未读展开、无续期副作用。",
+      "evidence": "bootstrap/service.py；tests/unit/test_bootstrap_sections.py"
+    },
+    {
+      "id": "M16",
+      "name": "日历与时间感",
+      "status": "已有基础，可复用并改投影",
+      "existing": "日/月/区间视图、待定日期、程序/页面/联系分开、日期变化联动。",
+      "change": "仍按事件日期找桶；日历预览不续期；遗忘桶只展示当前摘要。",
+      "add": "纪念日源、计划终结状态、真实打开与活动记录区分。",
+      "evidence": "calendar/service.py；time_context/service.py"
+    },
+    {
+      "id": "M17",
+      "name": "历史、恢复、保护",
+      "status": "已有基础，可复用",
+      "existing": "版本、恢复、pin/protect/anchor、关联留历史；已有对应测试。",
+      "change": "打开摘要不恢复旧正文；旧内容不删；显式保护继续尊重，不拿重构清掉。",
+      "add": "与新投影/保留状态/打开续期的组合回归。",
+      "evidence": "memory/service.py；extras.py；relations.py"
+    },
+    {
+      "id": "M18",
+      "name": "MCP / HTTP /严格契约",
+      "status": "已有适配，存在阻断缺陷",
+      "existing": "统一Registry、HTTP与MCP基本适配；远程平台未实连。",
+      "change": "修多段名称反解；接真实输入输出schema；对v2做完整能力映射，旧150项不再机械全搬。",
+      "add": "版本路由、双向显式名称表、真实工具调用矩阵、未接通状态。",
+      "evidence": "capabilities/mcp_adapter.py；registry.py；app.py"
+    },
+    {
+      "id": "M19",
+      "name": "幂等、任务、并发",
+      "status": "已有基础，需修可靠性",
+      "existing": "幂等表、outbox、租约、并发审批测试；通用幂等仍先执行后落记录。",
+      "change": "本地副作用与幂等结果同事务；外部调用持久作业及对账；不能把相同键并发执行两次。",
+      "add": "崩溃注入、同键异内容竞争、迟到结果拒绝、双库恢复证据。",
+      "evidence": "capabilities/registry.py；workspace/tasks.py；maintenance/service.py"
+    },
+    {
+      "id": "M20",
+      "name": "Web页面",
+      "status": "已有可运行基础，需新模块",
+      "existing": "React/TS/Vite构建、两个浏览器用例通过；未逐页证明全部业务UI完成。",
+      "change": "新增分栏桶详情、分池检索、回忆、审查、I、选区原文；真实路由与后端。",
+      "add": "手机端适配、展开确认、完整日程、权限与失败状态可见。",
+      "evidence": "apps/web/package.json；apps/web/e2e/forget-loop.spec.ts"
+    },
+    {
+      "id": "M21",
+      "name": "媒体/表情/朋友圈/提醒",
+      "status": "部分后端已有，保留",
+      "existing": "媒体两阶段、表情管理、moments、到期提醒结算工具。",
+      "change": "不能因记忆重构删掉；媒体暂存不能冒充持久化，提醒结算不等于主动唤醒。",
+      "add": "需要时接真实UI/消息链；外部能力仍单独验收。",
+      "evidence": "media/service.py；moments/service.py；reminders/service.py"
+    },
+    {
+      "id": "M22",
+      "name": "CC /外部服务/主动唤醒",
+      "status": "真实联调受阻或未完成",
+      "existing": "未完成真实CC常驻、远程OAuth、Siren/星星/群聊写入、常驻唤醒。",
+      "change": "不以mock宣称接通；缺凭据只阻塞对应链路，不能阻塞纯本地v2开发。",
+      "add": "宿主适配、服务级凭据、真实订阅路径核验、调度与取消/对账。",
+      "evidence": "上轮BLOCKERS与Registry/目录读取"
+    },
+    {
+      "id": "M23",
+      "name": "信件/删除/Home/Diary",
+      "status": "已有基础，保留原行为",
+      "existing": "锁信、删除申请与批准、Home正本、Diary与版本有测试。",
+      "change": "此次记忆新语义不自动授权更改锁信/删除；不得把遗忘改成物理删除。",
+      "add": "只补与新数据模型的兼容回归，不扩普通工具的删除权限。",
+      "evidence": "letters/service.py；content/service.py；旧测试"
+    },
+    {
+      "id": "M24",
+      "name": "迁移、备份、证据",
+      "status": "已有基础，需v2专项",
+      "existing": "快照、dry-run、合成apply/备份测试；真实生产切换未授权。",
+      "change": "旧字段逐条映射，不能猜当时心情/作者/hold时刻；不覆盖原库；旧验收数不当v2通过数。",
+      "add": "v2影子索引、无损迁移、回滚保留新增数据、机器可核验的需求—测试—证据。",
+      "evidence": "migration.py；storage.py；scripts/gen_acceptance_map.py"
+    }
+  ],
+  "engineering_defaults": [
+    {
+      "id": "D01",
+      "topic": "计时精度",
+      "text": "已确认：按共同业务时区的自然日计数，起算日记为第0日，due_date=basis_date+N；到期日在该时区日界起具备候选资格，不是累计N×24小时。保留UTC原时刻供审计。",
+      "source": "S4",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D02",
+      "topic": "共同业务时区",
+      "text": "沿用代码现值Asia/Shanghai作可配置默认；不按VPN、手机定位或执行者电脑时区偷偷改变。",
+      "source": "S1-S3；S4确认其余沿用",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D03",
+      "topic": "最近三天",
+      "text": "其余沿用：最近三天取事件日期的今天及前两天，共三个自然日；补录单独显示“新收录”，不冒充刚发生。",
+      "source": "S1-S3；S4确认其余沿用",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D04",
+      "topic": "多选筛选",
+      "text": "同字段默认any/OR，跨日期/分类/心情维度AND；提供显式all选择；结果按桶ID去重。",
+      "source": "S1-S3；S4确认其余沿用",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D05",
+      "topic": "计划终结与浏览",
+      "text": "已确认：plan完成/放弃所在自然日+20日为固定到期日；打开计划详情或关联事件均不续期，不改terminal_revision。只有明确状态更新为活跃才取消旧终结周期，阅读不是重新执行。",
+      "source": "S4",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D06",
+      "topic": "保留线索",
+      "text": "“第一次”“标题留”“回忆有内容”先暂停自动执行并提交retain候选，不由关键词匹配永久定留；共同话语的终局只由周家明作出。",
+      "source": "S1-S3；S4确认其余沿用",
+      "decision_status": "confirmed"
+    },
+    {
+      "id": "D07",
+      "topic": "自动绑定开关",
+      "text": "已确认：自动绑定阈值测了再定；threshold保持null、status=awaiting_evaluation，未完成评测并确认阈值前只建议/人工绑定，不能预填分数或直接自动生效。",
+      "source": "S4",
+      "decision_status": "confirmed_pending_measurement"
+    },
+    {
+      "id": "D08",
+      "topic": "hold作者兼容",
+      "text": "其余沿用：保留旧qiaosheng合法hold入口并完成新版兼容核验；不得扩权、擅自关闭或代写周家明字段。现场不存在的入口不冒充已实现。",
+      "source": "S1-S3；S4确认其余沿用",
+      "decision_status": "confirmed"
+    }
+  ],
+  "acceptance_summary": {
+    "total": 109,
+    "NOT_EXECUTED": 109,
+    "PASS": 0
+  },
+  "acceptance_cases": [
+    {
+      "id": "V2-REC-01",
+      "module_id": "M03",
+      "priority": "P0",
+      "title": "实际事件日期与hold分开",
+      "expected": "8月事件9月hold，日期检索仍命中8月，期限从9月起。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-02",
+      "module_id": "M04",
+      "priority": "P0",
+      "title": "平行多分类单桶",
+      "expected": "一桶选约会/甜蜜/做爱，各池可见，合并结果只返回同一ID一次。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-03",
+      "module_id": "M05",
+      "priority": "P0",
+      "title": "同窗口心情",
+      "expected": "可信原事件窗口内稍后hold可携带当时心情，不依赖立即记录。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-04",
+      "module_id": "M05",
+      "priority": "P0",
+      "title": "跨窗口补记心情拒绝",
+      "expected": "retrospective补录不能补造当时心情；仍可保存事件和来源待补。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-05",
+      "module_id": "M05",
+      "priority": "P0",
+      "title": "后续追写心情拒绝",
+      "expected": "hold完成后其他接口不能绕过限制补写当时心情。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-06",
+      "module_id": "M05",
+      "priority": "P0",
+      "title": "心情缺失不降级",
+      "expected": "当时心情为空不能直接触发不重要/缩短期限。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-07",
+      "module_id": "M06",
+      "priority": "P0",
+      "title": "我们的话顺序与身份",
+      "expected": "双方话语按speaker/ordinal保留，概括有标记、不伪装逐字原文。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-08",
+      "module_id": "M03",
+      "priority": "P0",
+      "title": "真实事件而非片段丢失",
+      "expected": "事件正文保存调用者给的完整闭合记录，不擅自概括或截断。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-09",
+      "module_id": "M05",
+      "priority": "P0",
+      "title": "乔生不代写周家明心情",
+      "expected": "乔生/worker不能伪装周家明写当时心情或标题；旧hold作者权限另列兼容。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REC-10",
+      "module_id": "M24",
+      "priority": "P0",
+      "title": "迁移不伪造当时来源",
+      "expected": "旧why/meaning缺乏证据时进入legacy保留，不补造成当前新字段。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-01",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "按hold而非事件到期",
+      "expected": "旧事件新hold不会刚写入就到期；起算日期为共同业务时区的首次hold日期。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-02",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "各分类周期",
+      "expected": "冻结时钟核验20/30/60个自然日及永久类；到期看业务日期，不按累计小时。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-03",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "最长周期",
+      "expected": "多分类20+30+60取60个自然日；包含永久类不入自动到期队列。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-04",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "明确打开续期",
+      "expected": "普通桶由乔生/周家明确认打开后，从本次业务日期按分类自然日周期重算；不适用于plan。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-05",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "被动展示不续期",
+      "expected": "搜索、开窗、日历预览、后台审查、预取均不更新续期基点。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-06",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "同次打开去重",
+      "expected": "刷新/重试同一个打开确认键，只产生一次续期事件。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-07",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "不伪造他人打开",
+      "expected": "worker及跨身份/跨binding回执不能给记忆续期。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-08",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "普通桶送审后打开使提案失效",
+      "expected": "普通记忆提案生成后真实打开续期，旧提案不能立即执行遗忘；plan阅读不适用此失效规则。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-09",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "到期扫描分页无饥饿",
+      "expected": "前页存在跳过项时仍能推进游标发现后续到期项。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-10",
+      "module_id": "M17",
+      "priority": "P0",
+      "title": "查看摘要不恢复",
+      "expected": "打开已遗忘桶只读当前表示，不把旧事件重新写入索引。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-11",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "保留终局不反复送审",
+      "expected": "正式retain后多轮扫描和重启均不再自动送审。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-12",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "普通桶并发打开与遗忘",
+      "expected": "普通桶按事务提交顺序保证一致：打开先提交则阻止旧批准，遗忘先提交则打开看到摘要；plan详情阅读不得改变固定期限。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-13",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "自然日到期边界",
+      "expected": "合成20天普通桶在2026-09-21 23:50首次hold，到期日为2026-10-11；10月10日23:59尚未到期，10月11日日界起具备候选资格，不等到23:50；跨日不代表自动跳过审查。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-14",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "跨月跨年和闰日",
+      "expected": "日期加法覆盖2026-12-20+20=2027-01-09、2028-02-20+20=2028-03-11；不得用月内天数取模或固定秒数替代。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-15",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "同自然日打开不按小时后移",
+      "expected": "普通桶同一业务日期的两次真实打开可各有查看证据，但due_date相同；跨到下一业务日期再打开才按新日期重算。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RET-16",
+      "module_id": "M11",
+      "priority": "P0",
+      "title": "时区和夏令时不改变天数语义",
+      "expected": "按配置的共同业务时区推导日期，不受主机/VPN时区影响；在有夏令时的合成时区跨23/25小时日仍以日期差为准，UTC仅为存储/调度表示。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-01",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "生成者不能放行",
+      "expected": "后台API模型可交草稿，无正式写入/执行权限。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-02",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "受限审查者能改新内容",
+      "expected": "林石见仅能修候选summary_body和forget_tags，保留原版。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-03",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "原始字段只读",
+      "expected": "审查者试改日期/分类/心情标签/事件/标题/我们的话一律拒绝。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-04",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "明确项可有限生效",
+      "expected": "到期且无保留线索、源版本一致时，受限审查者可放行，不强制每条再次交两人审批。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-05",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "共同话语只报疑似",
+      "expected": "相同表述或明确接应进入needs_jiaming_decision，普通双方对话不自动永久保留。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-06",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "第一次与标题留线索",
+      "expected": "保留线索必须附字段与位置；否定/含混提及不能靠子串自动定留。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-07",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "已有回忆触发保留线索",
+      "expected": "回忆写入后不能照旧作为普通无疑点项自动遗忘。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-08",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "确定留不等于疑似",
+      "expected": "suggest_retain不等于retained；终局由有权主体落定并记录。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-09",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "禁用概括措辞",
+      "expected": "候选摘要使用用户/AI/助手/角色/扮演/模拟/角色扮演/互动等禁用概括须打回或升级；不修改原文标题。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-10",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "未说不变已说",
+      "expected": "心情中的未出口内容不能写成事件发生或说出口的事实。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-11",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "特殊词原样",
+      "expected": "叽/herat/被子/表达/小纸不自动翻译或纠错。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-12",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "完整交接材料",
+      "expected": "原摘要、新摘要、原标题、心情标签、tags前后对照与diff可同时查看；心情文字可展开。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-13",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "过期来源拒绝执行",
+      "expected": "正文/分类/保留状态/续期版本变化时，旧proposal hash或source_version不能执行。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-REV-14",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "迟到模型结果",
+      "expected": "任务过期、被撤回或源版本改变，迟到摘要不得覆盖新稿或正式数据。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-01",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "只有分类也能浏览",
+      "expected": "query为空且选分类，返回该池可见桶，不要求猜关键词。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-02",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "只有心情标签也能浏览",
+      "expected": "开心标签直接拉列表，不搜心情文字。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-03",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "日期按事件日期",
+      "expected": "筛选事件日期而非hold/读回执/数据库写入时间。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-04",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "过滤在候选排序之前",
+      "expected": "其他池和未授权资源不影响返回、计数或可见排名候选。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-05",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "BM25不是唯一答案",
+      "expected": "池内文本排序可返回多条，合并按memory_id去重。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-06",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "标题独有词不命中",
+      "expected": "独有探针只放标题，关键词与向量均不能因标题命中。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-07",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "心情文字独有词不命中",
+      "expected": "独有探针只放心情文字，普通召回不返回该桶。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-08",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "我们的话独有词不命中",
+      "expected": "话语文本可供明确读取与绑定任务，不进入普通索引。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-09",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "回忆独有词不命中",
+      "expected": "追加回忆后重建/缓存刷新也不能进入召回。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-10",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "原文独有词不命中",
+      "expected": "原文只在来源视图及授权定位中使用，不旁路命中记忆。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-11",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "遗忘后事件独有词失效",
+      "expected": "旧事件FTS/向量/缓存失效，摘要新词和原分类日期心情标签仍可命中。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-12",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "摘要标题前缀不索引",
+      "expected": "UI显示title+summary；索引只有summary_body，不能切显示字符串猜前缀。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-13",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "防tags洗入禁检字段",
+      "expected": "候选tags必须有事件/合法摘要证据，不从标题/心情文字/话语/回忆/原文搬独有词。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-14",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "重建不复活旧索引",
+      "expected": "影子重建和切换只依据当前允许投影及版本。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-15",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "迟到embedding拒绝",
+      "expected": "旧source_version/projection_hash/model版本的向量不能回灌。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-16",
+      "module_id": "M17",
+      "priority": "P0",
+      "title": "显式恢复能恢复事件检索",
+      "expected": "恢复创建新表示版本，原事件允许命中，其他禁检字段仍不索引。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-SEARCH-17",
+      "module_id": "M10",
+      "priority": "P0",
+      "title": "中文短词与专用词",
+      "expected": "烧烤/叽/herat等长短词及标点表达有真实用例；不能只测英文演示。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-01",
+      "module_id": "M08",
+      "priority": "P0",
+      "title": "原文上传发起权限",
+      "expected": "乔生发起导入；后台仅在获准作业范围内解析，不凭worker全局导入任意来源。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-02",
+      "module_id": "M08",
+      "priority": "P0",
+      "title": "重复导入幂等",
+      "expected": "同源消息ID+版本重复无新增；不同消息同文不合并。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-03",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "多区间剔除插话",
+      "expected": "事件分布于前后两段，只绑定相关选区，中间插话不默认展示。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-04",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "源文逐字保留",
+      "expected": "绑定前后原始文件/消息正文hash不变，不物理裁剪。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-05",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "一源多桶反查",
+      "expected": "相同源区间可支持不同事件桶；每个绑定可反查且不复制事件。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-06",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "误匹配可撤销",
+      "expected": "错绑保留历史可撤销/重绑；不修改事件或我们的话。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-07",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "源版本变更失效",
+      "expected": "源hash/版本不一致时binding_stale，不能继续显示错位区间。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-08",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "展开前估算与确认",
+      "expected": "先返回范围和估算token；取消不返回额外正文；确认与实际范围一致。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-09",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "展开票据防扩大范围",
+      "expected": "确认后换会话、范围、版本或身份必须拒绝；单次权限不能无限展开。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-10",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "锁信和其他权限不绕过",
+      "expected": "原文查看、反查和关联均不穿透现有资源权限。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-11",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "语义匹配质量评测",
+      "expected": "先对人工标注多区间测试集评测误绑/漏绑/插话混入和失败样本，再提交阈值方案；本交付不预设阈值数值，评测未完成或阈值未确认不得自动绑定。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-12",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "阈值未定保持人工",
+      "expected": "threshold=null且status=awaiting_evaluation时可生成建议和人工确认，不可直接激活自动绑定；高自报置信分、环境变量或默认常量均不能绕过。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-RAW-13",
+      "module_id": "M09",
+      "priority": "P0",
+      "title": "阈值必须关联实测证据",
+      "expected": "阈值配置必须引用评测报告、样本集/标注版本、模型/提示版本及确认记录；不满足确认后的标准则转人工，模型或匹配流程改变后须重新验证适用性。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-VIEW-01",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "回忆需要明确查看",
+      "expected": "未确认打开就append回忆必须拒绝。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-VIEW-02",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "回忆双人各自署名",
+      "expected": "乔生/周家明均可写本人回忆；worker不能代写。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-VIEW-03",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "回执不能跨桶使用",
+      "expected": "A桶receipt不能写B桶回忆，不能换身份或旧内容版本。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-VIEW-04",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "刷新不自动写读后感",
+      "expected": "页面自动任务不产生任何回忆文本。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-VIEW-05",
+      "module_id": "M07",
+      "priority": "P0",
+      "title": "回忆有版本可追溯",
+      "expected": "修订不抹原话，记录真实作者与写入时间。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-01",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "活跃和未完成不遗忘",
+      "expected": "计划待执行/进行中/未完成即使过期也不自动等同放弃。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-02",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "完成日后20自然日",
+      "expected": "共同业务时区内date(completed_at)+20为固定到期日；不取事件日/创建日、不累计480小时、任何打开都不延期。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-03",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "放弃日后20自然日",
+      "expected": "共同业务时区内date(abandoned_at)+20为固定到期日；任何打开都不延期，放弃不是删除事件。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-04",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "计划事件彼此独立",
+      "expected": "处理计划摘要不改变关联事件桶的正文/分类/期限。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-05",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "明确重启执行使旧提案失效",
+      "expected": "只有显式状态更新把completed/abandoned改回活跃时，才增加terminal_revision并取消旧终结到期任务；点击查看详情不得触发。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-06",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "临近3自然日全文",
+      "expected": "按业务日期差0至3日纳入临近日程，含恰好3日边界，不用滚动72小时；全文过长可分页，不暗截断。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-07",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "纪念日不自动遗忘",
+      "expected": "周期重复发生项不复制原事件；重大转折与纪念的永久规则有效。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-08",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "完成计划打开不续期",
+      "expected": "completed计划在第19天、第20天多次打开、刷新和确认查看，仍维持原completed_at、terminal_date、due_date、terminal_revision；不把状态改为进行中。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-09",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "放弃计划与关联事件打开隔离",
+      "expected": "abandoned计划详情打开不续期；打开其关联普通事件桶只可更新事件自己的期限，不改计划的20自然日到期日。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-10",
+      "module_id": "M12",
+      "priority": "P0",
+      "title": "计划送审后阅读不延后执行",
+      "expected": "已到期计划送审后再被打开，若状态/内容/授权/批准版本未变，阅读本身不使批准失效或移走due_date；不能借共用view_revision无限延后。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-PLAN-11",
+      "module_id": "M13",
+      "priority": "P0",
+      "title": "重复终结状态不重置锚点",
+      "expected": "重复提交同一次completed/abandoned状态或同幂等键，不重写终结时刻/日期；只有明确改回活跃、再实际完成/放弃的新周期才建立新20自然日锚点。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-01",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "三天桶显示正确字段",
+      "expected": "按业务时区事件日期的今天及前两天选三个自然日桶；输出标题+心情标签+文字，不默认事件/话语/原文/回忆。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-02",
+      "module_id": "M14",
+      "priority": "P0",
+      "title": "I完整浮现",
+      "expected": "I由正本版本提供，不被标题化或旧Self的隔日门槛拦截。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-03",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "不默认30消息",
+      "expected": "Chat与CC新基础包均不附旧30条原文；显式取源另外确认。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-04",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "开窗不续期",
+      "expected": "重复开窗不会让所有最近桶永久续期。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-05",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "跨变化snapshot失效",
+      "expected": "I/计划/记忆当前表示更新后旧分页snapshot失效，返回可重取错误。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-06",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "不硬截正文",
+      "expected": "长心情文字、I和日程全文分节分页，有continuation，不偷换标题。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-07",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "最近三天不是滚动72小时",
+      "expected": "以2026-09-22 00:05为业务当前时刻，仅按事件日期选9月20日至22日；9月19日即使距当前不足72小时也不在普通近期桶范围。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-BOOT-08",
+      "module_id": "M15",
+      "priority": "P0",
+      "title": "临近按日期而非小时",
+      "expected": "以2026-09-22 00:05为业务当前时刻，9月25日23:55的日程仍属提前3自然日，应全文浮现；9月26日不属临近池，进行中/逾期计划仍走独立行动状态规则。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-I-01",
+      "module_id": "M14",
+      "priority": "P1",
+      "title": "只有周家明能写I",
+      "expected": "乔生建议不直接覆盖正本；后台与林石见不能代写。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-I-02",
+      "module_id": "M14",
+      "priority": "P1",
+      "title": "无情绪准入审查",
+      "expected": "不根据后台情绪判定拒绝周家明写I；平静是自律提示。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-I-03",
+      "module_id": "M14",
+      "priority": "P1",
+      "title": "旧Self映射不冒充新I",
+      "expected": "无确认的旧Self/Home内容保留旧来源，不自动认作I。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-01",
+      "module_id": "M18",
+      "priority": "P0",
+      "title": "MCP名称全量往返",
+      "expected": "每个已注册多段名称按显式manifest映射；tools/list列出后真实tools/call可达。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-02",
+      "module_id": "M18",
+      "priority": "P0",
+      "title": "严格输入输出schema",
+      "expected": "所有v2能力提供实际schema；非法类型、缺字段、额外actor字段结构化拒绝。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-03",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "同键同内容并发",
+      "expected": "并发相同key只发生一次副作用且最终返回同一结果；不只检验记录条数。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-04",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "同键异内容并发",
+      "expected": "无论哪个请求先到，另一份不同payload不得执行副作用。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-05",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "崩溃后幂等恢复",
+      "expected": "业务提交与幂等结果之间无空窗；外部不明结果进入对账而非盲目重发。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-06",
+      "module_id": "M18",
+      "priority": "P0",
+      "title": "撤销binding失败分支",
+      "expected": "不存在/已撤销凭据返回定义的结构化错误，不出现NotFound未导入的NameError。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-07",
+      "module_id": "M19",
+      "priority": "P0",
+      "title": "测试根目录保险丝",
+      "expected": "pytest/E2E明确新建隔离库，继承MARIPOSA_ROOT指向业务库时拒绝测试。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-08",
+      "module_id": "M20",
+      "priority": "P0",
+      "title": "移动端端到端",
+      "expected": "写桶→分池→打开→回忆→审查→摘要→原文确认→I/日程全链；不能只截截图。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-09",
+      "module_id": "M22",
+      "priority": "P0",
+      "title": "外部状态诚实",
+      "expected": "未配置CC/API/OAuth显示blocked/unavailable，模拟和本地测试不叫verified_live。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-10",
+      "module_id": "M24",
+      "priority": "P0",
+      "title": "迁移影子及回滚",
+      "expected": "真实源不写、影子迁移hash与作者时间核验；回滚不丢v2新增内容。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-11",
+      "module_id": "M24",
+      "priority": "P0",
+      "title": "版本与证据可执行",
+      "expected": "需求ID链接完整pytest nodeid和实际日志，禁止手工PASS常量假通过。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    },
+    {
+      "id": "V2-OPS-12",
+      "module_id": "M24",
+      "priority": "P0",
+      "title": "跨项目边界",
+      "expected": "未授权不改Ombre/Siren/星星/扎西德勒/DevSpace/隧道与生产数据。",
+      "status": "NOT_EXECUTED",
+      "test_nodeids": [],
+      "evidence_paths": [],
+      "implementation_commit": null
+    }
+  ],
+  "confirmation": {
+    "source": "S4",
+    "date": "2026-09-22",
+    "user_text": "天数按自然日，不按小时；plan打开不续期，完成了二十天就二十天；自动绑定的阈值测了再定。剩下的都可以了。",
+    "effect": "三项确认覆盖v2.0对应默认；其余业务与实施约定沿用。不代表代码已实现或生产变更授权。"
+  },
+  "calendar_day_policy": {
+    "unit": "calendar_day",
+    "timezone": "configured_relationship_timezone",
+    "default_timezone": "Asia/Shanghai",
+    "basis_day_offset": 0,
+    "ordinary_basis": "business_date(max(first_held_at,last_confirmed_explicit_open_at))",
+    "ordinary_due_date": "basis_date + max(category_period_days)",
+    "plan_completed_due_date": "business_date(completed_at) + 20",
+    "plan_abandoned_due_date": "business_date(abandoned_at) + 20",
+    "plan_renew_on_view": false,
+    "plan_view_invalidates_approval": false,
+    "eligible_when": "business_today >= due_date and all_existing_review_guards_pass",
+    "date_only_due_is_not_permission_to_apply": true,
+    "recent_bucket_dates": "[business_today - 2, business_today]",
+    "upcoming_event_dates": "[business_today, business_today + 3]",
+    "late_scheduler_behavior": "catch_up_due_candidates_without_shifting_due_date"
+  },
+  "automatic_binding_policy": {
+    "threshold": null,
+    "threshold_status": "awaiting_evaluation",
+    "automatic_apply_enabled": false,
+    "pre_evaluation_modes": [
+      "suggestion",
+      "manual"
+    ],
+    "required_evidence_before_enable": [
+      "evaluation_report",
+      "dataset_and_annotations_version",
+      "model_and_prompt_version",
+      "threshold_confirmation"
+    ],
+    "note": "不预填概率、相似度或误绑率门槛；由真实评测结果决定并确认。"
+  }
+}
