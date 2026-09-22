@@ -2,6 +2,17 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-22 · 执行包 v1.1 完整对照（第二次交付：118 条逐条映射）
+
+工程包原件到位（docs/execution_pack_v1.1/，含 02 验收清单 118 条与 05 连续执行模式）。
+本轮：新机制 8 项（撤回竞争/再提起表/意义审查排除/覆盖诚实/低置信绑定审阅/
+迁移幂等+ID映射+dont_surface/tags_only 语义/bootstrap unchanged 薄响应/待定日期区/
+绑定撤销）；两批评收测试 44 项（每条标注用例 ID）；架构边界测试 4 项（可执行解耦
+检查）；05 交付物 BLOCKERS/DECISIONS/verification。04 U01-U18 逐条对照无行为差异。
+**118 条：106 PASS / 12 BLOCKED / unmapped=0**（docs/acceptance_mapping_v1.1.md）。
+后端 **186** + E2E **2**（含 T-OPS-04 刷新+移动端）全绿。语义检索工程化：
+warmup+限流补算+相对窗+hybrid top-5。scan 门槛语义修正。
+
 ## 2026-09-22 · 复审关卡（林石见 6 项）——全部交付
 
 详见 docs/REVIEW_GATE.md。要点：审计 HEAD 唯一化（6072d76）；验收汇总
