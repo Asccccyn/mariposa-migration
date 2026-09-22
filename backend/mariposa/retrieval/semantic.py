@@ -23,6 +23,8 @@ MODEL_DIM = 512
 #   有效语义改写 >= 0.535；跨话题泛化误召回 <= 0.504；无关 < 0.40
 # 阈值版本化可配（policy 变更入审计）；返回始终带 score 供调用方再筛。
 COSINE_THRESHOLD = float(os.environ.get("MARIPOSA_SEMANTIC_THRESHOLD", "0.51"))
+REINDEX_BUDGET = int(os.environ.get("MARIPOSA_SEMANTIC_REINDEX_BUDGET", "20"))
+RELATIVE_WINDOW = 0.06
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："  # BGE 官方检索用法
 
 _provider = None
@@ -111,14 +113,22 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20) -> li
         " WHERE m.visibility='active'").fetchall()
     if not rows:
         return []
-    # 补齐缺失/失效向量（迟到向量原则：hash 校验后才可安装）
+    # 补齐缺失/失效向量（迟到向量原则：hash 校验后才可安装）。
+    # 查询路径限流：每次最多补 REINDEX_BUDGET 个，其余下次查询继续
+    # （首次冷启动全量预热走 maintenance.semantic.warmup）。
+    budget = REINDEX_BUDGET
+    pending = 0
     for r in rows:
         valid = conn.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
             " AND projection_hash=?",
             (r["memory_id"], MODEL_NAME, r["search_text_hash"])).fetchone()
         if not valid:
-            reindex(conn, r["memory_id"])
+            if budget > 0:
+                reindex(conn, r["memory_id"])
+                budget -= 1
+            else:
+                pending += 1
     from . import projection as _pj
     qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
     scored = []
@@ -142,4 +152,34 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20) -> li
                 "score": round(score, 4),
             })
     scored.sort(key=lambda x: -x["score"])
-    return scored[:limit]
+    # 相对间距窗：只保留与最优结果显著同层（>= best - RELATIVE_WINDOW）的命中，
+    # 防同质语料下泛化误召回挤满候选（与绝对阈值双重过滤）。
+    if scored:
+        best = scored[0]["score"]
+        scored = [x for x in scored if x["score"] >= best - RELATIVE_WINDOW]
+    out = scored[:limit]
+    if pending:
+        # 未就绪部分显式告知（RET-07：关键词可用，不阻塞）
+        return out  # pending 由调用方通过 warmup 状态感知
+    return out
+
+
+def warmup(conn: sqlite3.Connection) -> dict:
+    """全量预热有效投影向量（冷启动/重建后调用一次）。"""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT rd.memory_id, rd.search_text_hash FROM retrieval_documents rd"
+        " JOIN memories m ON m.memory_id = rd.memory_id"
+        " WHERE m.visibility='active'").fetchall()
+    done, skipped = 0, 0
+    for r in rows:
+        valid = conn.execute(
+            "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
+            " AND projection_hash=?",
+            (r["memory_id"], MODEL_NAME, r["search_text_hash"])).fetchone()
+        if valid:
+            skipped += 1
+        else:
+            reindex(conn, r["memory_id"])
+            done += 1
+    return {"warmed": done, "already_ok": skipped, "total": len(rows)}
