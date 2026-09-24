@@ -41,15 +41,25 @@ def replace_pending(conn, target_kind: str, target_id: str,
     enqueue(conn, target_kind, target_id, due_date or "")
 
 
-def due_items(today: str | None = None, limit: int = 50) -> list[dict]:
-    """到期候选（business_today >= due_date），确定排序不饥饿。"""
+def due_items(today: str | None = None, limit: int = 50,
+              after: tuple[str, str] | None = None) -> list[dict]:
+    """到期候选（business_today >= due_date），确定排序不饥饿。
+
+    keyset 分页（RET-09）：`after=(due_date, target_id)` 从上一页最后一行
+    之后继续。消费端对页内跳过项（不合格/已终局）不占名额——必须翻页
+    推进，否则跳过项堆满首页后其后的到期项永远取不到。
+    """
     t = today or retention_mod.business_today().isoformat()
+    where = "status IN ('pending','failed') AND due_date <= ?"
+    params: list = [t]
+    if after:
+        where += (" AND (due_date > ? OR (due_date = ? AND target_id > ?))")
+        params += [after[0], after[0], after[1]]
     with db.formal() as conn:
         rows = conn.execute(
-            "SELECT * FROM forgetting_due_queue"
-            " WHERE status IN ('pending','failed') AND due_date <= ?"
+            f"SELECT * FROM forgetting_due_queue WHERE {where}"
             " ORDER BY due_date, target_id LIMIT ?",
-            (t, limit)).fetchall()
+            (*params, limit)).fetchall()
     return [dict(r) for r in rows]
 
 

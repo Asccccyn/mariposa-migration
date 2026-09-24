@@ -176,12 +176,18 @@ def register_explicit_open(conn, memory_id: str,
 
 def mark_retained(conn, memory_id: str, reason: str,
                   decided_by: str) -> dict:
-    """确定留（R15）：正式终局，不再安排周期复审。"""
+    """确定留（R15）：正式终局，不再安排周期复审。
+
+    RET-11：终局同时必须摘除到期队列待处理行——队列是派生物，真源
+    （本表 status='retained'）定局后残留 pending 行会让后续扫描反复
+    撞上已终局目标。
+    """
     conn.execute(
         "UPDATE memory_retention SET status='retained', due_date=NULL,"
         " next_due_at=NULL, permanent_reason=?,"
         " retention_revision=retention_revision+1 WHERE memory_id=?",
         (f"{reason} (by {decided_by})", memory_id))
+    _sync_queue(conn, memory_id, {"status": "retained"})
     return get(conn, memory_id)
 
 

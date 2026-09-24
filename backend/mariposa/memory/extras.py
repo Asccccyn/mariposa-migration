@@ -78,7 +78,9 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                  memory_date if memory_date is not None else m["memory_date"],
                  date_confidence or m["date_confidence"], now, memory_id))
             projection.upsert(conn, memory_id, new_version, "full",
-                              projection.build_full(new_text or "", new_why))
+                              projection.build_full(new_text or "", new_why),
+                              whitelist_body=projection.normalize_search_text(
+                                  new_text or ""))
             audit.record(conn, "memory.updated", principal_id,
                          resource_id=memory_id, resource_version=new_version)
             conn.execute("COMMIT")

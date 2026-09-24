@@ -54,6 +54,12 @@ def _skip_reason(fconn, row, idle: int, today_local) -> str | None:
     """单行候选资格：返回跳过原因；None = 可建草稿（§7.2/§7.3 保守默认）。"""
     if row["memory_date"] is None:
         return "date_unknown"
+    # v2 分层桶（有 retention 行）由 v2 到期队列与审查闭环管理；
+    # v1 闲置扫描不绕过 v2 保留线索/审查权限（REV 双轨隔离）
+    if fconn.execute(
+            "SELECT 1 FROM memory_retention WHERE memory_id=?",
+            (row["memory_id"],)).fetchone():
+        return "v2_managed"
     try:
         d = date.fromisoformat(row["memory_date"])
     except ValueError:
@@ -268,6 +274,15 @@ def submit(principal, proposal_id: str, revision: int,
                             code="PROPOSAL_HASH_MISMATCH",
                             expected=expected_hash, stored=v["payload_hash"])
         payload = json.loads(v["payload"])
+        # v2 分层桶走 v2 审查闭环；v1 提案通道对其关闭（REV 双轨隔离）
+        with db.formal() as fconn:
+            if fconn.execute(
+                    "SELECT 1 FROM memory_retention WHERE memory_id=?",
+                    (item["target_memory_id"],)).fetchone():
+                raise Forbidden(
+                    "v2 分层桶必须走 v2 审查闭环（workspace.review.*）",
+                    code="V2_MANAGED_TARGET",
+                    memory_id=item["target_memory_id"])
         if not payload.get("compressed_summary"):
             raise Forbidden("compressed_summary required before submit")
         base = payload.get("base_memory_version")
@@ -344,9 +359,9 @@ def decide(principal: identity.Principal, proposal_id: str, proposal_revision: i
     """审批协调：worker 一律拒绝；审批在一个正式库事务内应用后回填工作区。"""
     if decision not in ("approve", "reject", "defer", "withdraw"):
         raise Forbidden("decision must be approve/reject/defer/withdraw")
-    if decision in ("approve", "reject") and principal.principal_id not in _APPROVERS:
-        raise Forbidden("worker principals cannot approve proposals",
-                        principal=principal.principal_id)
+    if decision in ("approve", "reject", "defer") and principal.principal_id not in _APPROVERS:
+        raise Forbidden("worker principals cannot approve, reject or defer"
+                        " proposals", principal=principal.principal_id)
 
     with db.workspace() as wconn:
         v = wconn.execute(
