@@ -408,7 +408,25 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
         if replay is not None:
             return {"ok": True, "data": replay, "idempotent_replay": True}
 
-    result = cap.handler(principal, arguments)
+    try:
+        result = cap.handler(principal, arguments)
+    except MariposaError:
+        # handler 的业务拒绝（参数/权限/状态类）不是崩溃：各写入路径均在
+        # 事务内抛出并回滚。落 failed 允许同 key 修正后重试，而不是把
+        # 干净拒绝伪装成 OUTCOME_UNKNOWN 逼人工对账。
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE idempotency_records SET status='failed'"
+                    " WHERE principal_id=? AND capability=? AND"
+                    " idempotency_key=? AND status='running'",
+                    (principal.principal_id, cap.name, key))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        raise
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:

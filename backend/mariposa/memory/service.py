@@ -15,23 +15,6 @@ from datetime import datetime, timezone
 from .. import audit, db
 from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
 from ..retrieval import projection
-
-_APPROVERS = {"qiaosheng", "jiaming"}  # 工具人无审批权（§6.3）
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def canonical_hash(payload: dict) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
-
-from .. import audit, db
-from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
-from ..retrieval import projection
 from . import categories as categories_mod
 from . import retention as retention_mod
 from . import our_words as our_words_mod
@@ -111,16 +94,23 @@ def _duplicated_by_raw_ref(raw_refs: list[dict] | None) -> str | None:
 
 def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
                       why_remember, memory_date, date_confidence, mode,
-                      original_title, v2: bool, now: str) -> None:
-    """memories + memory_versions(1) + 投影。必须在正式库事务内调用。"""
+                      original_title, v2: bool, now: str,
+                      occurred_start: str | None = None,
+                      occurred_end: str | None = None) -> None:
+    """memories + memory_versions(1) + 投影。必须在正式库事务内调用。
+
+    occurred_start/end 是事件实际发生区间的独立载体（R02），不再静默
+    丢弃；它们参与检索日期筛选，但不改变留存计时（R03 按 hold 起算）。
+    """
     conn.execute(
         "INSERT INTO memories(memory_id, current_version_no, memory_date,"
         " date_confidence, visibility, compression_state, created_at,"
-        " updated_at, held_at, held_at_confidence, creation_mode)"
-        " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?)",
+        " updated_at, held_at, held_at_confidence, creation_mode,"
+        " occurred_start, occurred_end)"
+        " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?, ?, ?)",
         (memory_id, 1, memory_date, date_confidence, now, now,
          now if v2 else None, "exact" if v2 else "unknown",
-         mode or "legacy_unknown"))
+         mode or "legacy_unknown", occurred_start, occurred_end))
     payload = {"representation": "full", "hold_text": text,
                "why_remember": why_remember, "authored_by": principal_id}
     if v2:
@@ -136,7 +126,8 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
              now, original_title, text))
         # v2 投影白名单：只索引事件正文；标题/心情/话语/回忆一律不进
         projection.upsert(conn, memory_id, 1, "full",
-                          projection.build_full(text, None))
+                          projection.build_full(text, None),
+                          whitelist_body=projection.normalize_search_text(text))
     else:
         conn.execute(
             "INSERT INTO memory_versions(memory_id, version_no, representation,"
@@ -146,7 +137,8 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
             (memory_id, text, why_remember, principal_id,
              canonical_hash(payload), now))
         projection.upsert(conn, memory_id, 1, "full",
-                          projection.build_full(text, why_remember))
+                          projection.build_full(text, why_remember),
+                          whitelist_body=projection.normalize_search_text(text))
 
 
 def _insert_layers(conn, *, memory_id: str, principal_id: str,
@@ -241,7 +233,8 @@ def hold(
                 conn, memory_id=memory_id, principal_id=principal.principal_id,
                 text=text, why_remember=why_remember, memory_date=memory_date,
                 date_confidence=date_confidence, mode=mode,
-                original_title=original_title, v2=v2, now=now)
+                original_title=original_title, v2=v2, now=now,
+                occurred_start=occurred_start, occurred_end=occurred_end)
             _insert_layers(
                 conn, memory_id=memory_id, principal_id=principal.principal_id,
                 cats=cats, mood_data=mood_data, our_words=our_words,
@@ -287,6 +280,8 @@ def get(conn, memory_id: str) -> dict:
         "protected": bool(m["protected"]),
         "creation_mode": m["creation_mode"],
         "held_at": m["held_at"],
+        "occurred_start": m["occurred_start"],
+        "occurred_end": m["occurred_end"],
     }
     # v2 分层字段（有则给出；v1 旧桶自然缺省）
     if not is_summary:
@@ -364,6 +359,13 @@ def apply_forget_approval(
     m = conn.execute("SELECT * FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
     if m is None:
         raise NotFound("target memory missing", memory_id=memory_id)
+    if conn.execute(
+            "SELECT 1 FROM memory_retention WHERE memory_id=?",
+            (memory_id,)).fetchone():
+        # v2 分层桶由 v2 审查闭环独占管理（保留线索/受限审查/终裁）；
+        # v1 审批应用对其关闭，防止绕过 REV-05/06/07 的线索防线
+        raise Forbidden("v2 分层桶必须走 v2 审查闭环生效",
+                        code="V2_MANAGED_TARGET", memory_id=memory_id)
     if m["current_version_no"] != expected_memory_version:
         raise ProposalStale(
             "base memory version moved",
@@ -400,6 +402,7 @@ def apply_forget_approval(
     projection.upsert(
         conn, memory_id, new_version, "forgotten_summary",
         projection.build_forgotten(str(summary)),
+        whitelist_body=projection.normalize_search_text(str(summary)),
     )
     conn.execute(
         "INSERT INTO proposal_resolutions(proposal_id, decision, decided_by, decided_binding,"
@@ -509,6 +512,8 @@ def restore(
             projection.upsert(
                 conn, memory_id, new_version, "full",
                 projection.build_full(source["hold_text"] or "", source["why_remember"]),
+                whitelist_body=projection.normalize_search_text(
+                    source["hold_text"] or ""),
             )
             audit.record(
                 conn, "memory.restored", principal.principal_id,

@@ -1,17 +1,25 @@
 # NEXT
 
-> v2.0.1 第一批（P0–P6 后端核心）已交付，289+E2E 全绿。从这里续接。
+> v2.0.1 第一批（P0–P6 后端核心）已交付；2026-09-23 独立审计+修复批
+> 已交付（docs/AUDIT_REPORT_v2_20260923.md：14 项真实缺陷修复、
+> BLOCKERS B8"表已建"更正、313 测试 + E2E 2 全绿）。从这里续接。
 
 ## 立即可做（v2 剩余，按优先级）
 
-1. **P5 原文 v2**（RAW-01..13）：raw_binding_ranges 多区间绑定（code point
-   偏移、插话折叠、一源多桶反查）、raw.context.preview/expand 确认展开
-   （范围/估算/票据）、raw.matching 评测集骨架（threshold=null、
-   awaiting_evaluation、不自动生效）。
+1. **P5 原文 v2**（RAW-01..13）：**从零开始**（2026-09-23 审计更正：
+   raw_binding_ranges/raw_context_grants 两表不存在于任何迁移，B8 原声明
+   不实）。需：新迁移建表（code point 偏移、source_version/hash）、
+   raw.context.preview/expand 确认展开（范围/估算/票据）、
+   raw.matching 评测集骨架（threshold=null、awaiting_evaluation、
+   不自动生效）；同时收口两处自报置信直绑面（binding.py 默认 'high'、
+   memory.hold raw_refs 硬编码 'exact' 且按范围合并旧桶——与 RAW-05
+   一源多桶方向相反）。
 2. **P5 语义 v2 投影**：BGE 通道改读 v2 白名单投影（event_text/
    summary_body+hash），旧向量不回灌（SEARCH-15）；影子索引+原子切换。
 3. **P7 迁移映射**：v1 库→v2 分层字段的逐条映射表（legacy 字段保留、
    日期缺口标 date_gap、author/时间不补造）；合成库 dry-run 全流程。
+   注意：migration.py 目前不写 date_gap retention 行（行为安全但
+   文档承诺未兑现），映射时一并落。
 4. **P6 前端 v2 页面**：分栏桶详情（当时字段 vs 回忆）、召回筛选页
    （分类/心情/日期/关键词）、回忆输入（凭确认）、审查台（原/新摘要+
    tags diff+线索）、原文选区/展开确认、I 编辑、计划固定到期展示；
@@ -20,13 +28,17 @@
    矩阵.json）逐条映射 pytest nodeid + 结果导出脚本（不手写 PASS 常量）。
 6. **v2 契约导出**：contracts/capabilities.v2.json / core_input_schemas.v2
    （V2_INPUT_SCHEMAS 同源导出）+ /api/v2 路由版本协商。
-7. **审查通知/待办入口**：队列非空时的已授权通知通道（未配置时诚实
+7. **MCP 显式 manifest**：正向映射目前是机械下划线替换（202 名实测无
+   碰撞、反解查表）；按规格冻结 manifest 文件。
+8. **OPS-02 渐进补齐**：173 项无 schema 能力（~110 项真实读写）按风险
+   排序补 schema；已修校验器深度（嵌套 required/minItems/minProperties/
+   数值边界，2026-09-23）。
+9. **审查通知/待办入口**：队列非空时的已授权通知通道（未配置时诚实
    显示待审数，不假报送达）。
-
-7. **存量超长函数重构**（651d647 维护性重构后遗留的旧代码热点）：
-   `workspace/service.py::decide`（96行/嵌套5）、`submit`（88行）、
-   `memory/service.py::apply_forget_approval`（95行）、`restore`（75行）。
-   行为敏感且测试密集，留待独立一轮：先补行为测试画像再拆分验证。
+10. **存量超长函数重构**（651d647 后遗留）：`workspace/service.py::
+    decide`（96行/嵌套5）、`submit`（88行）、`memory/service.py::
+    apply_forget_approval`（95行）、`restore`（75行）。行为敏感且测试
+    密集，先补行为测试画像再拆分验证。
 
 ## blocked（解锁条件明确）
 

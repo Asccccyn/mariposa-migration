@@ -174,4 +174,6 @@ def _rebuild_full_projection(conn, memory_id: str) -> None:
     search_text = projection.build_full(
         "\n".join([v["hold_text"] or ""] + layers), v["why_remember"])
     projection.upsert(conn, memory_id, m["current_version_no"], "full",
-                      search_text)
+                      search_text,
+                      whitelist_body=projection.normalize_search_text(
+                          v["hold_text"] or ""))

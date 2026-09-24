@@ -703,6 +703,12 @@ CREATE TABLE anniversary_occurrences(
 );
 CREATE INDEX idx_anniv_occ_date ON anniversary_occurrences(occurrence_date);
 """),
+    (12, """
+ALTER TABLE memories ADD COLUMN occurred_start TEXT;
+ALTER TABLE memories ADD COLUMN occurred_end TEXT;
+ALTER TABLE bootstrap_snapshots ADD COLUMN business_date TEXT;
+ALTER TABLE retrieval_documents ADD COLUMN whitelist_body TEXT;
+"""),
 ]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

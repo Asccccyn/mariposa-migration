@@ -8,6 +8,11 @@ class MariposaError(Exception):
 
     def __init__(self, message: str, **detail):
         super().__init__(message)
+        # 结构化错误码（OPS-02）：显式传入的 code 同时提升为实例属性
+        # （HTTP/MCP 响应与调用方分支拿具体码）并保留在 detail 里
+        # （既有调用方/测试按 detail["code"] 读取）。
+        if detail.get("code"):
+            self.code = detail["code"]
         self.detail = detail
 
 

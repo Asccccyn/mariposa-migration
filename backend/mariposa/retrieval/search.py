@@ -46,12 +46,28 @@ def _pool_where(filters: dict) -> tuple[list[str], list]:
             params += tags
 
     dr = filters.get("event_date") or {}
-    if dr.get("from"):
-        where.append("m.memory_date >= ?")
-        params.append(dr["from"])
-    if dr.get("to"):
-        where.append("m.memory_date <= ?")
-        params.append(dr["to"])
+    if dr.get("from") or dr.get("to"):
+        # SEARCH-03：按事件发生时间筛（memory_date 或 occurred 区间重叠），
+        # 不按 hold/回执/入库时间。occurred 存 ISO 时刻，比较按日期前缀。
+        cond = []
+        cp: list = []
+        if dr.get("from"):
+            cond.append("m.memory_date >= ?")
+            cp.append(dr["from"])
+        if dr.get("to"):
+            cond.append("m.memory_date <= ?")
+            cp.append(dr["to"])
+        base = "(" + " AND ".join(cond) + ")"
+        overlap = ("(m.occurred_start IS NOT NULL AND"
+                   " substr(m.occurred_start,1,10) <= ?")
+        op: list = [dr.get("to", "9999-12-31")]
+        if dr.get("from"):
+            overlap += (" AND (m.occurred_end IS NULL OR"
+                        " substr(m.occurred_end,1,10) >= ?)")
+            op.append(dr["from"])
+        overlap += ")"
+        where.append(f"({base} OR {overlap})")
+        params += cp + op
     return where, params
 
 
@@ -69,12 +85,20 @@ def _hit(row, matched_by: str, matched_fields: list[str]) -> dict:
 
 def _recall_keyword(conn, phrase: str, where: list[str], params: list,
                     filters: dict, limit: int, cursor: list | None) -> dict:
-    """关键词模式：池内 FTS + BM25（升序=更相关，[T1]）；offset 游标。"""
+    """关键词模式：池内 FTS + BM25（升序=更相关，[T1]）；offset 游标。
+
+    matched_fields 如实标注（D17）：v1 旧桶投影含 why/meaning 层（祖父
+    条款），命中未必来自事件正文——用投影自带的 whitelist_body（白名单
+    主字段正文）比对，不在其中的标 legacy_projection，不冒充 event_text。
+    检索层只读投影表，不回读正文版本表。
+    """
     offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
         cursor[0]).isdigit() else 0
+    probe = phrase.strip('"')
     sql = (
         "SELECT m.memory_id, m.memory_date, m.compression_state,"
-        " m.current_version_no, rd.projection_kind, bm25(search_fts) AS rank"
+        " m.current_version_no, rd.projection_kind, bm25(search_fts) AS rank,"
+        " rd.whitelist_body"
         " FROM memories m"
         " JOIN retrieval_documents rd ON rd.memory_id = m.memory_id"
         " JOIN search_fts ON search_fts.memory_id = m.memory_id"
@@ -83,9 +107,23 @@ def _recall_keyword(conn, phrase: str, where: list[str], params: list,
     rows = conn.execute(sql, params + [phrase, limit + 1, offset]).fetchall()
     hits = []
     for r in rows[:limit]:
-        summary = r["compression_state"] == "forgotten_summary"
-        hits.append(_hit(r, "summary_keyword" if summary else "keyword",
-                         ["summary_body"] if summary else ["event_text"]))
+        body = r["whitelist_body"]
+        if r["compression_state"] == "forgotten_summary":
+            matched_by = "summary_keyword"
+            fields = (["summary_body"] if body and probe in body
+                      else ["forget_tags"])
+        elif body is None:
+            matched_by = "keyword"
+            fields = ["projection"]  # 旧投影行未带成分，不冒充字段命中
+        else:
+            matched_by = "keyword"
+            fields = (["event_text"] if probe in body
+                      else ["legacy_projection"])
+        hits.append(_hit(r, matched_by, fields))
+    next_cursor = [str(offset + limit)] if len(rows) > limit else None
+    return {"hits": hits, "query": phrase, "mode": "keyword",
+            "filters_applied": _filters_summary(filters),
+            "next_cursor": next_cursor, "limit": limit}
     next_cursor = [str(offset + limit)] if len(rows) > limit else None
     return {"hits": hits, "query": phrase, "mode": "keyword",
             "filters_applied": _filters_summary(filters),
@@ -151,7 +189,6 @@ def _filters_summary(filters: dict) -> dict:
 def search(conn, query: str, limit: int = 20,
            related_of: str | None = None) -> dict:
     """related_of：按关联找到的桶（matched_by=relation），不依赖文本匹配。"""
-    """related_of：按关联找到的桶（matched_by=relation），不依赖文本匹配。"""
     hits: list[dict] = []
     phrase = projection.compile_query(query)
     if phrase:
@@ -179,7 +216,11 @@ def search(conn, query: str, limit: int = 20,
                 }
             )
     if related_of:
+        # SEARCH-05：合并按 memory_id 去重——关键词已命中的桶不因关联重复出现
+        seen_kw = {h["memory_id"] for h in hits}
         for mid in relations_mod.related_ids(conn, related_of):
+            if mid in seen_kw:
+                continue
             state = conn.execute(
                 "SELECT compression_state, visibility, current_version_no"
                 " FROM memories WHERE memory_id=?", (mid,)).fetchone()
@@ -191,9 +232,10 @@ def search(conn, query: str, limit: int = 20,
                 "projection_kind": state["compression_state"],
                 "memory_version": state["current_version_no"],
             })
-    # 语义路径（§8.3：仅有效投影向量参与；provider 未配置显式 degraded）
+    # 语义路径（§8.3：仅有效投影向量参与；provider 未配置显式 degraded）。
+    # 空 query 走浏览语义，不做语义匹配（避免空向量产生无依据"伪命中"）
     mode = "keyword"
-    if config.SEMANTIC_PROVIDER == "local_bge_zh":
+    if config.SEMANTIC_PROVIDER == "local_bge_zh" and phrase:
         # 语义是补充召回：关键词为主路径，语义命中取 top-5（同质语料防泛化）
         sem = semantic.semantic_search(conn, query, min(5, limit))
         mode = "hybrid"

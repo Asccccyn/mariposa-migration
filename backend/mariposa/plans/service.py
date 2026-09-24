@@ -90,6 +90,11 @@ def create(principal_id: str, title: str, content: str | None = None,
                 conn.execute(
                     "INSERT OR IGNORE INTO plan_memory_links(plan_id, memory_id)"
                     " VALUES(?,?)", (pid, mid))
+            if state in TERMINAL_STATES:
+                # 直建终态计划同样进入到期队列（与 update 终结路径一致）
+                from ..workspace import due_queue
+                due_queue.replace_pending(conn, "plan", pid,
+                                          anchors.get("due_date"))
             audit.record(conn, "plan.changed", principal_id, resource_id=pid,
                          resource_version=1, payload={"action": "create", "state": state})
             conn.execute("COMMIT")
@@ -163,15 +168,17 @@ def update(principal_id: str, plan_id: str, expected_version: int, **changes) ->
             })
         # was_terminal and now_terminal：锚点保持不变（重复保存/换终结原因
         # 都不重写终结时刻；PLAN-11）
-        from ..workspace import due_queue
-        if not was_terminal and now_terminal:
-            due_queue.replace_pending(conn, "plan", plan_id,
-                                      plans_update.get("due_date"))
-        elif was_terminal and not now_terminal:
-            due_queue.replace_pending(conn, "plan", plan_id, None)
         sets = ", ".join(f"{k}=?" for k in plans_update)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # 队列是 plans 锚点的派生物，必须与锚点同事务落库，
+            # 否则 plans 回滚后队列与真源不一致
+            from ..workspace import due_queue
+            if not was_terminal and now_terminal:
+                due_queue.replace_pending(conn, "plan", plan_id,
+                                          plans_update.get("due_date"))
+            elif was_terminal and not now_terminal:
+                due_queue.replace_pending(conn, "plan", plan_id, None)
             conn.execute(
                 "INSERT INTO plan_versions(plan_id, version_no, title, content, state,"
                 " starts_at, due_at, date_start, date_end, timezone, all_day, weight,"

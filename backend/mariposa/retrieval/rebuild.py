@@ -33,7 +33,9 @@ def rebuild_index(actor: str = "system") -> dict:
                     projection.upsert(
                         conn, r["memory_id"], r["current_version_no"],
                         "forgotten_summary",
-                        projection.build_forgotten(v["compressed_summary"] or ""))
+                        projection.build_forgotten(v["compressed_summary"] or ""),
+                        whitelist_body=projection.normalize_search_text(
+                            v["compressed_summary"] or ""))
                     rebuilt["forgotten_summary"] += 1
                 else:
                     layers = [x["content"] for x in conn.execute(
@@ -43,7 +45,9 @@ def rebuild_index(actor: str = "system") -> dict:
                         conn, r["memory_id"], r["current_version_no"], "full",
                         projection.build_full(
                             "\n".join([v["hold_text"] or ""] + layers),
-                            v["why_remember"]))
+                            v["why_remember"]),
+                        whitelist_body=projection.normalize_search_text(
+                            v["hold_text"] or ""))
                     rebuilt["full"] += 1
             audit.record(conn, "retrieval.index.rebuilt", actor,
                          payload=rebuilt)

@@ -35,23 +35,38 @@ _ENTRY_ALLOWED = {
 }
 
 
+BOOT_RULES_VERSION = "boot_rules_v2.1"
+
+
 def _state_hash(conn) -> str:
     """开窗依据资源的状态指纹：任一变化使旧 snapshot 失效（§12.2）。
 
-    v2 覆盖：记忆（含表示版本）、计划、I 正本、纪念日发生项；
-    raw 不再属于开窗包，不参与指纹。
+    v2.1 修正成分缺口：业务日期/时区、规则版本与分页常量、记忆表示
+    版本、纪念日"定义"（改名不改 occurrences 行也要失效）。业务日期入
+    指纹 = 跨自然日旧快照必然 SNAPSHOT_STALE，不会继续吐前一天窗口。
     """
     import hashlib
-    parts = []
+    from ..memory import retention as ret_mod
+    today = ret_mod.business_today().isoformat()
+    parts = [
+        f"rules:{BOOT_RULES_VERSION}:{BOOT_MEMORY_DAYS}:{BOOT_UPCOMING_DAYS}"
+        f":{BOOT_SECTION_LIMIT}",
+        f"tz:{config.RELATIONSHIP_TIMEZONE}",
+        f"business_date:{today}",
+    ]
     for table, time_col, extra in (
             ("memories", "updated_at", ", MAX(representation_state) AS e"),
             ("plans", "updated_at", ""),
             ("i_documents", "updated_at", ""),
+            ("anniversary_definitions", "created_at", ""),
             ("anniversary_occurrences", "occurrence_date", "")):
         row = conn.execute(
             f"SELECT COUNT(*) AS c, MAX({time_col}) AS m {extra} FROM {table}"
         ).fetchone()
-        parts.append(f"{table}:{row['c']}:{row['m']}")
+        part = f"{table}:{row['c']}:{row['m']}"
+        if "e" in row.keys():
+            part += f":{row['e']}"  # 记忆表示版本（表示变化必失效）
+        parts.append(part)
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
 
 
@@ -232,8 +247,9 @@ def get(principal_id: str, entry_source: str, profile: str,
     with db.formal() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO bootstrap_snapshots(snapshot_id, state_hash,"
-            " profile, created_at) VALUES(?,?,?,datetime('now'))",
-            (result["snapshot_id"], current_state, profile))
+            " profile, created_at, business_date) VALUES(?,?,?,datetime('now'),?)",
+            (result["snapshot_id"], current_state, profile,
+             result["time"]["local_date"]))
     return result
 
 
@@ -260,6 +276,13 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
     tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).astimezone(tz).date()
+    snap_day = snap["business_date"] if "business_date" in snap.keys() else None
+    if snap_day and snap_day != today.isoformat():
+        # BOOT-05/07：跨业务日不得续页——旧快照的窗口是前一天的三个自然日
+        raise SnapshotStale(
+            "crossed business day; re-fetch bootstrap for the new window",
+            snapshot_id=snapshot_id, snapshot_day=snap_day,
+            current_day=today.isoformat())
     three_days = [(today - timedelta(days=i)).isoformat()
                   for i in range(BOOT_MEMORY_DAYS)]
 

@@ -82,9 +82,14 @@ async def _json_body(request: Request) -> dict:
         return {}
     try:
         data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as e:
+        # 格式错误的请求不得静默当作空参数执行（OPS-02 结构化拒绝）
+        raise MariposaError(f"request body is not valid JSON: {e}",
+                            code="INVALID_JSON") from e
+    if not isinstance(data, dict):
+        raise MariposaError("request body must be a JSON object",
+                            code="INVALID_JSON_BODY")
+    return data
 
 
 @app.exception_handler(sqlite3.Error)

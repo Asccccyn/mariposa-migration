@@ -47,9 +47,17 @@
 - 遗留：云级 provider（如需）待选型；不做计费变更
 ## B8 · v2 原文区间绑定与自动绑定评测（V2-RAW-01..13）
 - 原因：区间表/确认展开为第二批开发项；自动绑定阈值按 S4 必须先评测
-- 已尝试：表结构已建（raw_binding_ranges/raw_context_grants 迁移 11）
+- ~~已尝试：表结构已建（raw_binding_ranges/raw_context_grants 迁移 11）~~
+  **更正（2026-09-23 独立审计）：上句不实——全仓 grep 与运行库实测，
+  raw_binding_ranges / raw_context_grants 两张表不存在于任何迁移或代码中，
+  当时只有错误类 BindingStale/RawContextConfirmationRequired 预埋未用。
+  现状=13 条全部从零开始（表、code point 偏移、票据、preview/expand、
+  评测关卡均无）。**
 - 影响：多区间/反查/展开确认/自动绑定验收 13 条
 - 解锁：第二批实现 + 标注集评测完成并获确认后配置阈值
+- 附注（审计新增）：现存两处自报置信直绑面需在 RAW 二批收口——
+  `raw/binding.py` confidence 默认 'high'；`memory.hold(raw_refs=...)`
+  硬编码 'exact' 且按范围合并旧桶（与 RAW-05 一源多桶方向相反）。
 
 ## B9 · v2 前端页面与移动端 E2E（V2-OPS-08 等）
 - 原因：本轮交付后端核心+既有页面回归；新 v2 页面未实现

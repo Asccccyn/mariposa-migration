@@ -46,7 +46,11 @@ def _resolve(spec: dict, root: dict) -> dict:
 
 
 def _matches(spec: dict, value, root: dict) -> bool:
-    """字段值是否满足该（已解析 $ref 的）spec；anyOf 任一即可。"""
+    """字段值是否满足该（已解析 $ref 的）spec；anyOf 任一即可。
+
+    深度校验（OPS-02）：嵌套对象 required、数组 minItems/maxItems、
+    数值 minimum/maximum 与字符串长度同等生效。
+    """
     spec = _resolve(spec, root)
     if "anyOf" in spec:
         return any(_matches(sub, value, root) for sub in spec["anyOf"])
@@ -70,15 +74,30 @@ def _matches(spec: dict, value, root: dict) -> bool:
             import re
             if not re.match(spec["pattern"], value):
                 return False
-    if isinstance(value, list) and "items" in spec:
-        if not all(_matches(spec["items"], item, root) for item in value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in spec and value < spec["minimum"]:
+            return False
+        if "maximum" in spec and value > spec["maximum"]:
+            return False
+    if isinstance(value, list):
+        if "minItems" in spec and len(value) < spec["minItems"]:
+            return False
+        if "maxItems" in spec and len(value) > spec["maxItems"]:
+            return False
+        if "items" in spec and not all(
+                _matches(spec["items"], item, root) for item in value):
             return False
     if isinstance(value, dict) and "properties" in spec:
         sub_props = spec.get("properties", {})
+        if "minProperties" in spec and len(value) < spec["minProperties"]:
+            return False
         if spec.get("additionalProperties") is False:
             for k in value:
                 if k not in sub_props:
                     return False
+        for req in spec.get("required", []):
+            if req not in value or value[req] in (None, ""):
+                return False
         for k, sub in sub_props.items():
             if k in value and not _matches(sub, value[k], root):
                 return False
@@ -155,7 +174,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "required": ["memory_id", "words"],
         "additionalProperties": False,
         "properties": {"memory_id": {"type": "string", "minLength": 1},
-                        "words": {"type": "array", "minLength": 1, "items": {
+                        "words": {"type": "array", "minItems": 1, "items": {
                             "type": "object",
                             "required": ["speaker", "text"],
                             "properties": {
@@ -172,7 +191,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {
             "memory_id": {"type": "string", "minLength": 1},
-            "categories": {"type": "array", "minLength": 1, "items": {
+            "categories": {"type": "array", "minItems": 1, "items": {
                 "type": "string", "enum": ["daily", "milestone", "sad", "sweet",
                                             "date", "plan", "sex", "anniversary"]}}},
     },
@@ -244,6 +263,22 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                                      "escalate_jiaming"]},
             "expected_revision": {"type": "integer"},
             "candidate_hash": {"type": "string"},
+        },
+    },
+    "workspace.review.revise": {
+        "type": "object", "required": ["item_id", "changes"],
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string", "minLength": 1},
+            "changes": {
+                "type": "object", "minProperties": 1,
+                "additionalProperties": False,
+                "properties": {
+                    "summary_body": {"type": "string", "minLength": 1},
+                    "forget_tags": {"type": "array",
+                                    "items": {"type": "string"}},
+                },
+            },
         },
     },
     "memory.retention.decide": {

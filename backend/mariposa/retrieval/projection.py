@@ -78,19 +78,27 @@ def upsert(
     memory_version_no: int,
     projection_kind: str,
     search_text: str,
+    whitelist_body: str | None = None,
 ) -> None:
-    """替换该桶的有效投影并同步 FTS。必须在正式库事务内调用。"""
+    """替换该桶的有效投影并同步 FTS。必须在正式库事务内调用。
+
+    whitelist_body：本投影的白名单主字段正文（full=事件正文、
+    forgotten=summary_body），已 normalize。检索层据此如实标注
+    matched_fields（event_text / summary_body / forget_tags /
+    legacy_projection），不必也不允许回读 memory_versions。
+    """
     now = datetime.now(timezone.utc).isoformat()
     conn.execute("DELETE FROM search_fts WHERE memory_id=?", (memory_id,))
     conn.execute("DELETE FROM retrieval_documents WHERE memory_id=?", (memory_id,))
     conn.execute(
         "INSERT INTO retrieval_documents(memory_id, memory_version_no, projection_kind,"
-        " search_text, search_text_hash, projection_revision, policy_version, updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?)",
+        " search_text, search_text_hash, projection_revision, policy_version, updated_at,"
+        " whitelist_body)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
         (
             memory_id, memory_version_no, projection_kind, search_text,
             sha256_text(search_text), config.PROJECTION_REVISION,
-            config.POLICY_VERSION, now,
+            config.POLICY_VERSION, now, whitelist_body,
         ),
     )
     conn.execute(
