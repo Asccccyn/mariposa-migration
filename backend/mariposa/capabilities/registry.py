@@ -15,6 +15,9 @@ from ..identity import Principal
 from ..identity import service as identity
 from ..memory import service as memory
 from ..retrieval import search as retrieval_search
+from ..recall import service as recall_service
+from ..recall import store as recall_store
+from ..retrieval import words as words_mod
 from ..workspace import service as workspace
 from ..raw import service as raw
 from ..quotes import service as quotes
@@ -91,6 +94,28 @@ def _register() -> dict[str, Capability]:
     add("memory.search", _search, _owners(), False, description="关键词检索有效投影")
     add("memory.recall", _recall, _owners(), False,
         description="v2 统一召回：query可空浏览；分类/心情标签/事件日期筛选；any/all；去重分页")
+    # v1.3/v1.4 召回运行时：共享 Recall Session 七动作 + 独立 words 通道。
+    # session 正本只在 Mariposa runtime 库；Chat 与 CC 等权同入口。
+    add("memory.recall.start", _recall_start, _owners(), True,
+        description="新建 Recall Session 并执行首轮检索（0—3 条证据包）")
+    add("memory.recall.refine", _recall_refine, _owners(), True,
+        description="同 session 纠正：改条件/证据需求/继续申请新 burst（revision+1）")
+    add("memory.recall.reject", _recall_reject, _owners(), True,
+        description="session-local 拒绝候选（candidate/event/word/source_selection）")
+    add("memory.recall.accept", _recall_accept, _owners(), True,
+        description="确认目标候选；可选 close 一并解决")
+    add("memory.recall.navigate", _recall_navigate, _owners(), True,
+        description="沿 temporal_axis 导航前后候选（earlier/later）")
+    add("memory.recall.status", _recall_status, _owners(), False,
+        description="当前 session 状态+引用重校验（不重放旧正文）")
+    add("memory.recall.close", _recall_close, _owners(), True,
+        description="显式结束：resolved/cancelled；终止本次自动补查")
+    add("memory.words.recall", _words_recall, _owners(), False,
+        description="独立 words 通道检索（我们的话；不混入 event ranking）")
+    add("memory.words.get", _words_get, _owners(), False,
+        description="按 word_id 读单条话语（当前表示校验；遗忘=disabled）")
+    add("memory.context.validate", _context_validate, _owners(), False,
+        description="装配上下文的资源引用+版本重查（estómago/CC 换窗用）")
     add("memory.versions.read", _versions, _owners(), False,
         description="明确展开历史版本，不自动 restore")
     add("memory.restore", _restore, _owners(), True,
@@ -337,9 +362,25 @@ def invoke(principal: Principal, capability: str, arguments: dict,
 
     # 幂等键由调用方显式给出即生效（与 cap.idempotent hint 无关）：
     # 同 key 同 payload 必须可安全重试（U16/OPS-02；原子 claim 防并发双副作用）
-    if idempotency_key:
+    # 召回运行时能力例外（v1.4 §9.4）：不走 formal 幂等（不把候选包长期
+    # 缓存进正式库）；operation_id 幂等由 runtime 库 recall_operation_keys
+    # 承担，且重放前重检权限与版本。
+    if idempotency_key and not _is_recall_runtime(capability):
         return _idempotent_invoke(principal, cap, arguments, idempotency_key)
     return {"ok": True, "data": cap.handler(principal, arguments)}
+
+
+#: 召回运行时能力集：runtime 幂等隔离（§9.4）
+_RECALL_RUNTIME_CAPS = frozenset({
+    "memory.recall.start", "memory.recall.refine", "memory.recall.reject",
+    "memory.recall.accept", "memory.recall.navigate", "memory.recall.status",
+    "memory.recall.close", "memory.words.recall", "memory.words.get",
+    "memory.context.validate",
+})
+
+
+def _is_recall_runtime(capability: str) -> bool:
+    return capability in _RECALL_RUNTIME_CAPS
 
 
 def _payload_hash(arguments: dict) -> str:
@@ -615,6 +656,58 @@ def _recall(principal: Principal, a: dict) -> dict:
         return retrieval_search.recall(
             conn, str(a.get("query", "")), a.get("filters") or {},
             int(a.get("limit", 20)), a.get("cursor"))
+
+
+# ---------- 召回运行时 handlers（runtime 幂等：operation_id） ----------
+
+def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
+    """RUNTIME-02：同 operation_id 重试不重复建 session/扣预算/排除候选。"""
+    op = a.get("operation_id")
+    if not op:
+        return fn(principal, a)
+    key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
+    return recall_store.claim_operation(principal.principal_id, key,
+                                        lambda: fn(principal, a))
+
+
+def _recall_start(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.start)
+
+
+def _recall_refine(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.refine)
+
+
+def _recall_reject(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.reject)
+
+
+def _recall_accept(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.accept)
+
+
+def _recall_navigate(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.navigate)
+
+
+def _recall_status(principal: Principal, a: dict) -> dict:
+    return recall_service.status(principal, a)
+
+
+def _recall_close(principal: Principal, a: dict) -> dict:
+    return _with_operation_id(principal, a, recall_service.close)
+
+
+def _words_recall(principal: Principal, a: dict) -> dict:
+    return recall_service.words_recall(principal, a)
+
+
+def _words_get(principal: Principal, a: dict) -> dict:
+    return words_mod.get_word(str(a.get("word_id", "")))
+
+
+def _context_validate(principal: Principal, a: dict) -> dict:
+    return recall_service.validate_context(principal, a)
 
 
 def _restore(principal: Principal, a: dict) -> dict:

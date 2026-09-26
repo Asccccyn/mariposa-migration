@@ -105,16 +105,28 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     return True
 
 
-def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[dict]:
-    """在有效投影集合上做精确余弦 top-k；返回带 matched_by 的命中。"""
+def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
+                    extra_where: list[str] | None = None,
+                    extra_params: list | None = None) -> list[dict]:
+    """在有效投影集合上做精确余弦 top-k；返回带 matched_by 的命中。
+
+    v1.4 §5.2：extra_where/extra_params 让调用方把权限、日期、分类与
+    session 排除等过滤**前置**到候选池与评分阶段——不允许先全库 Top-K
+    再过滤（范围内正确候选可能已被别的池挤掉）。不传时行为与旧接口
+    一致（兼容 memory.search）。
+    """
     if config.SEMANTIC_PROVIDER != "local_bge_zh":
         return []
     ensure_schema(conn)
-    rows = conn.execute(
-        "SELECT rd.memory_id, rd.search_text, rd.search_text_hash,"
-        " rd.projection_kind, m.compression_state FROM retrieval_documents rd"
-        " JOIN memories m ON m.memory_id = rd.memory_id"
-        " WHERE m.visibility='active'").fetchall()
+    scope = list(extra_where or [])
+    sp = list(extra_params or [])
+    pool_sql = ("SELECT rd.memory_id, rd.search_text, rd.search_text_hash,"
+                " rd.projection_kind, m.compression_state FROM retrieval_documents rd"
+                " JOIN memories m ON m.memory_id = rd.memory_id"
+                " WHERE m.visibility='active'")
+    if scope:
+        pool_sql += " AND " + " AND ".join(scope)
+    rows = conn.execute(pool_sql, sp).fetchall()
     if not rows:
         return []
     # 补齐缺失/失效向量（迟到向量原则：hash 校验后才可安装）。
@@ -137,14 +149,15 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20) -> li
     np = _np()
     qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
     scored = []
-    for r in conn.execute(
-            "SELECT e.memory_id, e.vector, e.projection_hash, rd.search_text_hash,"
-            " rd.projection_kind, m.compression_state FROM memory_embeddings e"
-            " JOIN retrieval_documents rd ON rd.memory_id = e.memory_id"
-            " JOIN memories m ON m.memory_id = e.memory_id"
-            " WHERE e.model=? AND m.visibility='active'"
-            " AND e.projection_hash = rd.search_text_hash",  # 仅有效投影向量
-            (MODEL_NAME,)):
+    score_sql = ("SELECT e.memory_id, e.vector, e.projection_hash, rd.search_text_hash,"
+                 " rd.projection_kind, m.compression_state FROM memory_embeddings e"
+                 " JOIN retrieval_documents rd ON rd.memory_id = e.memory_id"
+                 " JOIN memories m ON m.memory_id = e.memory_id"
+                 " WHERE e.model=? AND m.visibility='active'"
+                 " AND e.projection_hash = rd.search_text_hash")  # 仅有效投影向量
+    if scope:
+        score_sql += " AND " + " AND ".join(scope)
+    for r in conn.execute(score_sql, [MODEL_NAME] + sp):
         v = np.frombuffer(r["vector"], dtype=np.float32)
         score = float(qvec @ v / (np.linalg.norm(qvec) * np.linalg.norm(v)))
         if score >= COSINE_THRESHOLD:

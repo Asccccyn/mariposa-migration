@@ -142,6 +142,10 @@ def search(query: str, limit: int = 20) -> dict:
                 "role": r["role"], "body": r["body"],
                 "occurred_at": r["occurred_at"], "source_channel": r["source_channel"],
                 "matched_by": "raw_keyword", "source": "raw",
+                # raw 原文也是资料：SAFE-02（system 字样不改变身份/权限）
+                "content_role": "retrieved_memory",
+                "instruction_authority": "none",
+                "evidence_kind": "raw_verbatim",
             })
             if len(hits) >= limit:
                 break

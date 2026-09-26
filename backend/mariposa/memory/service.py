@@ -274,6 +274,9 @@ def get(conn, memory_id: str) -> dict:
         "date_confidence": m["date_confidence"],
         "visibility": m["visibility"],
         "representation": v["representation"],
+        # 检索内容统一无指令权限（v1.3 §10）：正文里的指令只是历史数据
+        "content_role": "retrieved_memory",
+        "instruction_authority": "none",
         "text": body,
         "why_remember": v["why_remember"] if not is_summary else None,
         "pinned": bool(m["pinned"]),
