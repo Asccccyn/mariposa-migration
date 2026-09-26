@@ -153,9 +153,10 @@ class TestEvidenceMapIntegrity:
         import re as _re
         import subprocess as _sp
         import collections as _cc
+        import sys as _sys
         m = _json.load(open("docs/verification/acceptance_map_v1.1.json",
                             encoding="utf-8"))
-        out = _sp.run([r".venv\Scripts\python", "-m", "pytest",
+        out = _sp.run([_sys.executable, "-m", "pytest",
                        "--collect-only", "-q", "tests"],
                       capture_output=True, text=True).stdout
         idx = set()

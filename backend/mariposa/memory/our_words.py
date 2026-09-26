@@ -79,7 +79,9 @@ def list_for(memory_id: str) -> list[dict]:
             "SELECT word_id, ordinal, speaker, text, expression_kind,"
             " source_ref, created_by, created_at FROM memory_our_words"
             " WHERE memory_id=? ORDER BY ordinal", (memory_id,)).fetchall()
-    return [dict(r) for r in rows]
+    # 话语正文属检索内容：content_role/instruction_authority（v1.3 §10）
+    return [dict(r, content_role="retrieved_memory",
+                 instruction_authority="none") for r in rows]
 
 
 def has_shared_expression(rows: list[dict]) -> list[dict]:

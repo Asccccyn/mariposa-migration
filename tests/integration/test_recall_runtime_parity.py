@@ -1,0 +1,114 @@
+"""召回运行时 MCP/HTTP 等权（SESSION-01/02 / §2）。
+
+Chat 与 CC 同一套 MCP / HTTP 领域契约；相同主体相同请求得到相同语义。
+"""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from mariposa.app import app
+from mariposa.memory import service as memory
+from tests.conftest import TOKENS, reset_all
+
+
+@pytest.fixture()
+def c(actors):
+    with TestClient(app) as client:
+        yield client
+
+
+def rpc(c, method, pid, params=None, msg_id=1):
+    return c.post("/mcp", json={"jsonrpc": "2.0", "id": msg_id,
+                                "method": method, "params": params or {}},
+                  headers={"Authorization": f"Bearer {TOKENS[pid]}"})
+
+
+def tool(c, pid, name, arguments, msg_id=1):
+    r = rpc(c, "tools/call", pid, {"name": name, "arguments": arguments},
+            msg_id)
+    result = r.json()["result"]
+    assert result["isError"] is False, result
+    return result["structuredContent"]["data"]
+
+
+@pytest.fixture()
+def seeded(actors):
+    memory.hold(actors["jiaming"], text="八月搬家事件", memory_date="2026-08-10",
+                date_confidence="exact", original_title="t",
+                categories=["daily"], creation_mode="contemporaneous",
+                raw_pending=False,
+                our_words=[{"speaker": "qiaosheng", "text": "搬家说好一起挑窗帘",
+                            "expression_kind": "verbatim"}])
+    memory.hold(actors["jiaming"], text="九月搬家事件", memory_date="2026-09-10",
+                date_confidence="exact", original_title="t2",
+                categories=["daily"], creation_mode="contemporaneous",
+                raw_pending=False)
+    memory.hold(actors["jiaming"], text="七月更早事件", memory_date="2026-07-15",
+                date_confidence="exact", original_title="t3",
+                categories=["daily"], creation_mode="contemporaneous",
+                raw_pending=False)
+
+
+def test_session01_mcp_full_loop(c, seeded):
+    """SESSION-01：Chat 通过 MCP 独立完成 start→reject→refine→navigate→
+    evidence→close，不依赖 estómago。"""
+    packet = tool(c, "jiaming", "mariposa_memory_recall_start", {
+        "query_plan": {"original_request": "找搬家的事",
+                       "channels": ["event"],
+                       "lexical_terms": ["搬家"]}})
+    sid = packet["recall_session_id"]
+    assert packet["candidates"]
+    newest = max(packet["candidates"], key=lambda x: x.get("memory_date")
+                 or "")
+    tool(c, "jiaming", "mariposa_memory_recall_reject", {
+        "session_id": sid, "resource_ref": newest["resource_ref"],
+        "reject_target": "event"})
+    p2 = tool(c, "jiaming", "mariposa_memory_recall_refine", {
+        "session_id": sid,
+        "query_plan": {"original_request": "再找八月的搬家",
+                       "channels": ["event"], "lexical_terms": ["搬家"],
+                       "explicit_constraints": {
+                           "event_date": {"from": "2026-08-01",
+                                          "to": "2026-08-31"}}}})
+    assert newest["resource_ref"] not in [x["resource_ref"]
+                                          for x in p2["candidates"]]
+    nav = tool(c, "jiaming", "mariposa_memory_recall_navigate", {
+        "session_id": sid, "direction": "earlier"})
+    assert nav["candidates"]
+    st = tool(c, "jiaming", "mariposa_memory_recall_status",
+              {"session_id": sid})
+    assert st["receipts_revalidated"]["checked"] >= 1
+    closed = tool(c, "jiaming", "mariposa_memory_recall_close", {
+        "session_id": sid, "outcome": "resolved"})
+    assert closed["status"] == "RESOLVED"
+
+
+def test_session02_http_mcp_same_semantics(c, seeded):
+    """SESSION-02：HTTP 与 MCP 同能力同结果（等权入口）。"""
+    args = {"query": "搬家"}
+    http = c.post("/api/capability/memory.words.recall",
+                  json={"arguments": args},
+                  headers={"Authorization": f"Bearer {TOKENS['jiaming']}"}
+                  ).json()["data"]
+    mcp = tool(c, "jiaming", "mariposa_memory_words_recall", args)
+    assert http["hits"] == mcp["hits"]
+    assert http["instruction_authority"] == "none"
+    # words 通道能找到话语，event-only 找不到（隔离在两个入口一致）
+    ev = tool(c, "jiaming", "mariposa_memory_recall_start", {
+        "query_plan": {"original_request": "窗帘", "channels": ["event"],
+                       "lexical_terms": ["窗帘"]}})
+    assert ev["candidates"] == []
+
+
+def test_worker_cannot_use_recall_runtime(c, actors):
+    """召回运行时对 worker 关闭（主体权限等权不等于全员开放）。"""
+    r = rpc(c, "tools/call", "worker", {
+        "name": "mariposa_memory_recall_start",
+        "arguments": {"query_plan": {
+            "original_request": "x", "channels": ["event"],
+            "lexical_terms": ["x"]}}})
+    body = r.json()
+    # worker 无业务 profile 绑定：传输层拒绝或工具错误，二选一都算拒绝
+    assert body.get("error", {}).get("code") == -32002 or \
+        body.get("result", {}).get("isError") is True

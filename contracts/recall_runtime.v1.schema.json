@@ -1,0 +1,116 @@
+{
+  "contract_version": "recall_runtime.v1",
+  "generated_from": "backend/mariposa/recall/ + backend/mariposa/retrieval/",
+  "policy_version": "recall-v1.4-eval-1",
+  "source_of_truth": "Mariposa_记忆运行语义正本_v1.3 + 分层混合召回实现路径_v1.4",
+  "session_statuses": ["ACTIVE", "AMBIGUOUS", "CONFLICT", "DEGRADED",
+    "BUDGET_EXHAUSTED", "RESOLVED", "CANCELLED", "EXPIRED",
+    "STALE_RETRY_REQUIRED"],
+  "search_statuses": ["FOUND", "AMBIGUOUS", "CONFLICT",
+    "NO_MATCH_OBSERVED", "DEGRADED", "BUDGET_EXHAUSTED",
+    "STALE_RETRY_REQUIRED", "UNAVAILABLE"],
+  "evidence_kinds": ["authored_event", "approved_summary", "structured_fact",
+    "word_verbatim", "word_paraphrase", "word_unverified", "raw_verbatim",
+    "relation_reference"],
+  "channels": ["event", "words"],
+  "temporal_axes": ["event_time", "source_conversation_time", "hold_time",
+    "plan_time", "retention_time"],
+  "content_role_banner": {
+    "content_role": "retrieved_memory",
+    "instruction_authority": "none",
+    "content_class": "data"
+  },
+  "capabilities": {
+    "memory.recall.start": {
+      "input": {"query_plan": "object (服务端校验)", "conversation_scope": "string?",
+                "operation_id": "string?"},
+      "output": "evidence_packet"
+    },
+    "memory.recall.refine": {
+      "input": {"session_id": "string", "query_plan": "object",
+                "expected_revision": "integer?",
+                "continue_request_ref": "string?",
+                "conversation_scope": "string?", "operation_id": "string?"},
+      "output": "evidence_packet"
+    },
+    "memory.recall.reject": {
+      "input": {"session_id": "string", "candidate_ref": "string?",
+                "resource_ref": "string?",
+                "reject_target": "candidate|event|word|source_selection"},
+      "effect": "session-local 排除；不改正式记忆；不影响新独立 session"
+    },
+    "memory.recall.accept": {
+      "input": {"session_id": "string", "candidate_ref": "string?",
+                "close": "boolean?"},
+      "effect": "记录接受；close=true 一并 RESOLVED；无自动打开副作用"
+    },
+    "memory.recall.navigate": {
+      "input": {"session_id": "string", "direction": "earlier|later",
+                "anchor_candidate_ref": "string?"},
+      "output": {"axis": "string", "candidates": "candidate[]"}
+    },
+    "memory.recall.status": {
+      "input": {"session_id": "string", "conversation_scope": "string?"},
+      "effect": "读时重校验回执；失效引用不重放旧正文"
+    },
+    "memory.recall.close": {
+      "input": {"session_id": "string", "outcome": "resolved|cancelled"},
+      "effect": "终止本次自动补查；不删除正式资料"
+    },
+    "memory.words.recall": {
+      "input": {"query": "string?", "lexical_terms": "string[]?",
+                "exact_phrases": "string[]?",
+                "explicit_constraints": "object?", "limit": "integer?"},
+      "output": {"hits": "word_candidate[]", "forgotten_recall": "disabled",
+                 "forgotten_decision_state": "PENDING_OWNER_DECISION"}
+    },
+    "memory.words.get": {
+      "input": {"word_id": "string"},
+      "errors": {"WORDS_FORGOTTEN_DISABLED": "所属记忆已遗忘；显式检索保持 disabled"}
+    },
+    "memory.context.validate": {
+      "input": {"resource_refs": "string[]"},
+      "output": {"validated": [{"resource_ref": "string", "valid": "boolean",
+                                "current_version": "string|null"}]}
+    }
+  },
+  "evidence_packet": {
+    "recall_session_id": "string", "revision": "integer", "status": "string",
+    "search_status": "string", "delivery_action":
+      "no_candidates|needs_validation|deliver",
+    "instruction_authority": "none", "content_role": "retrieved_memory",
+    "coverage": {"event": "string?", "dense_event": "string?",
+                 "words_lexical": "string?", "raw": "string?",
+                 "judge": "string?", "truncated": "boolean"},
+    "candidates": "candidate[]", "missing": "string[]",
+    "conflicts": "string[]", "degraded_reasons": "string[]",
+    "continuation": "object|null", "budget": "object",
+    "token_count": "unavailable"
+  },
+  "candidate": {
+    "resource_ref": "memory:<id> | our_word:<id> | raw_msg:<id>",
+    "channel": "event|words|raw", "representation": "string",
+    "content_version": "string?", "representation_version": "string?",
+    "projection_version": "string?", "matched_by": "string[]",
+    "matched_fields": "string[]", "excerpt": "string?", "truncated": "boolean",
+    "evidence": [{"evidence_kind": "string",
+                   "content_role": "retrieved_memory",
+                   "instruction_authority": "none", "field": "string",
+                   "snippet|structured_value": "string", "source_ref": "string",
+                   "source_version": "string?", "truncated": "boolean"}],
+    "evidence_requirement_met": "boolean", "version_receipt": "string?"
+  },
+  "budget_defaults": {"burst_rounds": 3, "session_bursts_max": 3,
+    "alternate_queries_per_burst": 2, "relation_hops": 1,
+    "delivery_limit": 3, "lexical_k": 20, "dense_k": 20,
+    "candidate_union_cap": 60, "judge_candidate_cap": 40,
+    "rrf_k": 60, "excerpt_chars": 600, "packet_text_chars": 4000,
+    "packet_bytes_max": 24576},
+  "feature_flags_default": {
+    "MARIPOSA_RECALL_ENABLED": "false",
+    "MARIPOSA_WORDS_RECALL_ENABLED": "false",
+    "MARIPOSA_RAW_FALLBACK_ENABLED": "false",
+    "MARIPOSA_RECALL_JUDGE_PROVIDER": "disabled",
+    "forgotten_words_recall": "disabled / PENDING_OWNER_DECISION"
+  }
+}

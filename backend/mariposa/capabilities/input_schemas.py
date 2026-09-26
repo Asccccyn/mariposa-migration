@@ -234,6 +234,102 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                                  "from": {"type": "string"},
                                                  "to": {"type": "string"}}}}}},
     },
+    # ---------- v1.3/v1.4 召回运行时（Recall Session + words 通道） ----------
+    # query_plan 为自由对象：字段级校验（通道白名单/枚举/冲突检测）由
+    # recall.models.validate_query_plan 在服务端执行。
+    "memory.recall.start": {
+        "type": "object", "required": ["query_plan"],
+        "additionalProperties": False,
+        "properties": {
+            "query_plan": {"type": "object"},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.refine": {
+        "type": "object", "required": ["session_id", "query_plan"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "query_plan": {"type": "object"},
+            "expected_revision": {"type": "integer"},
+            "continue_request_ref": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.reject": {
+        "type": "object", "required": ["session_id"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "candidate_ref": {"type": "string"},
+            "resource_ref": {"type": "string"},
+            "reject_target": {"type": "string",
+                               "enum": ["candidate", "event", "word",
+                                         "source_selection"]},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.accept": {
+        "type": "object", "required": ["session_id"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "candidate_ref": {"type": "string"},
+            "close": {"type": "boolean"},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.navigate": {
+        "type": "object", "required": ["session_id", "direction"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "direction": {"type": "string",
+                           "enum": ["earlier", "later"]},
+            "anchor_candidate_ref": {"type": "string"},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.status": {
+        "type": "object", "required": ["session_id"],
+        "additionalProperties": False,
+        "properties": {"session_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.recall.close": {
+        "type": "object", "required": ["session_id"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "outcome": {"type": "string",
+                         "enum": ["resolved", "cancelled"]},
+            "conversation_scope": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.words.recall": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "query": {"type": "string"},
+            "original_request": {"type": "string"},
+            "lexical_terms": {"type": "array",
+                               "items": {"type": "string", "minLength": 1}},
+            "exact_phrases": {"type": "array",
+                               "items": {"type": "string", "minLength": 1}},
+            "explicit_constraints": {"type": "object"},
+            "explicit_negative_constraints": {"type": "object"},
+            "limit": {"type": "integer"}},
+    },
+    "memory.words.get": {
+        "type": "object", "required": ["word_id"],
+        "additionalProperties": False,
+        "properties": {"word_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.context.validate": {
+        "type": "object", "required": ["resource_refs"],
+        "additionalProperties": False,
+        "properties": {"resource_refs": {"type": "array", "minItems": 1,
+                                          "items": {"type": "string",
+                                                     "minLength": 1}}},
+    },
     # v1.1 包 schema 曾要求 policy_version 必填，与处理器"缺省=按当前策略"
     # 的行为不符且打断既有调用点；v2 层对齐处理器语义（提供则校验）。
     "workspace.forgetting.scan": {
