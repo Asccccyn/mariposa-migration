@@ -2,6 +2,45 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-09-26 · 召回运行时 v1.3/v1.4 全量落地（P0–P6）
+
+依据 Mariposa_记忆运行语义正本_v1.3 + 分层混合召回实现路径_v1.4
+（林石见 2026-09-26）。现行唯一召回说明：docs/memory_runtime/CURRENT.md；
+路径映射：PATH_MAP.md；基线核对：BASELINE.md；64 条验收证据：
+ACCEPTANCE.json（v13 18 条 + v14 46 条全部真实执行，其中 5 条
+PASS_preliminary=Mariposa 侧契约已验、外部依赖分层留待）。
+
+- **新增召回运行时**：Recall Session 七动作（start/refine/reject/
+  accept/navigate/status/close）+ 九状态机 + burst 预算（3×3，显式
+  continue_request_ref 才可申请新 burst）+ runtime 库持久化
+  （runtime/recall/recall.sqlite3，重启恢复、TTL 惰性清理、CAS、
+  operation_id 幂等隔离于 formal 幂等框架）。
+- **查询分层**：explicit/negative constraints（通道白名单，未知字段
+  拒绝；冲突返回 CONFLICT）、inferred_hints 仅软提示、alternate/
+  unknowns 保留不造事实；terms/phrase 双模式安全编译（FTS 注入消毒）。
+- **混合检索**：作用域内词频统计词法检索（HYBRID-06 隔离：scope 外
+  语料不影响本 scope 排名/计数，不只结果过滤）+ scoped 向量接口
+  （provider 未配置诚实 unavailable）+ RRF 融合（1-based、族内去重
+  不叠票）+ 0—3 条交付（多样性/冲突披露/needs_validation/截断标记）。
+- **words 通道**：独立派生索引（fingerprint 读取时校验+重建）、
+  speaker/日期/原话等级过滤、verbatim/paraphrase/unspecified→
+  word_verbatim/word_paraphrase/word_unverified 分级；遗忘后 disabled/
+  PENDING_OWNER_DECISION 全链路无旁路（WORD-01..05/EVID-02/03/RAWX-05）。
+- **raw 专项补查**：scope resolver + 分批游标全历史扫描（超最近 500
+  条可查、partial/continuation 不冒充"从未说过"）+ 有限片段 +
+  speaker 不猜测（RAWX-01..07）；raw.search 命中补数据角色标注。
+- **证据与安全**：八类 evidence_kind 全链路 content_role=
+  retrieved_memory/instruction_authority=none（SAFE-01/02）；读时
+  回执重校验（正式修订/遗忘→STALE_RETRY_REQUIRED，不重放旧正文）。
+- **JudgeProvider**：协议+DisabledJudge+typesafe_jev 适配器（默认
+  disabled；无授权策略/无 key 构造即拒绝；Noul 无 confidence）。
+- **运维**：MARIPOSA_ROOT 非 Windows fail-fast + MARIPOSA_ALLOW_CREATE
+  建库闸（OPS-RECALL-01/02）；库身份 meta 章；contracts 重导出
+  （212 项）+ recall_runtime.v1.schema.json；verify_recall_runtime.py
+  自检 9/9；eval_recall.py A/B 评测入口（C 组未授权保留）。
+- **测试**：新增 122 条（单元 51/集成 7/验收 63）全绿；存量 313 条
+  回归全绿（435 collected）。开关生产默认全关，分项启用。
+
 ## 2026-09-22 · v2.0.1 新语义实施·第一批（P0–P6 后端核心）
 
 依据 docs/spec_v2/（v2.0.1 交付包已归档）。两段提交：

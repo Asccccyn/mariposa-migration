@@ -29,3 +29,7 @@
 | D21 | 遗忘后的投影=summary_body+审查后 forget_tags（标题永不入索引） | §3.1 forget_tags 正式审查后参与；SEARCH-12/13 约束在测试钉住 | 仅 summary_body（tags 无法关键词命中） |
 | D22 | 静态资源（backend/mariposa/web、apps/web/dist）按代码树定位，不随 MARIPOSA_ROOT | MARIPOSA_ROOT 是数据根；隔离测试根下无构建产物 | 复制 dist 到隔离根（拒绝） |
 | D23 | v2 工具 schema 以代码内 V2_INPUT_SCHEMAS 为同源（优先于 v1.1 包 schema），后续导出 contracts v2 JSON | 包 schema 是 v1.1 历史契约；v2 字段直接改包会篡改历史 | 双文件手工同步（拒绝：漂移） |
+| D24 | 召回运行时开关生产默认全关（recall/words/raw_fallback/judge）；隔离验收靠 conftest 显式开启 | v1.4 §15.1 分项启用原则；避免一次翻开全部 | 默认全开（拒绝） |
+| D25 | 无 raw 绑定的 verbatim 话语=word_verbatim（正式话语记录本身即逐字声明）；有 source_ref 时按来源有效性校验、失效降级 word_unverified | 否则 hold 手写话语通道基本废掉；EVID-03 语义（来源失效不冒充）仍完整保留 | 一律要求 raw 绑定才算 verbatim（拒绝：过严且无正本依据） |
+| D26 | 词法检索用作用域内 Python 词频统计（scoped_lexical_search），不复用全局 FTS5 bm25() 排名 | HYBRID-06 要求 scope 外语料不影响可见排名；FTS5 IDF 是全库统计 | WHERE 后置过滤 bm25（拒绝：排名仍受全库词频影响） |
+| D27 | 证据等级不足不淘汰候选（交付时标 evidence_requirement_met=false 并触发 raw 补查判定），硬门只管权限/表示/版本/明确约束/rejected | RAWX-01：paraphrase 命中"不因非空而停止" | 硬过滤掉不达标候选（拒绝：丢线索且违背补查语义） |
