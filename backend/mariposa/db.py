@@ -36,3 +36,17 @@ def workspace():
         yield conn
     finally:
         conn.close()
+
+
+@contextmanager
+def recall_runtime():
+    """Recall Session 运行库（短期状态、跨重启持久；与正式库互不干扰）。
+
+    不在此库保存任何长期记忆正文；网络调用期间不得持有其写锁
+    （v1.4 §9.4/§10.2）。
+    """
+    conn = _connect(config.RECALL_DB)
+    try:
+        yield conn
+    finally:
+        conn.close()

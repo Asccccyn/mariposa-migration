@@ -66,6 +66,14 @@ _TEST_ROOT = os.environ.setdefault(
     "MARIPOSA_ROOT", os.path.join(tempfile.mkdtemp(prefix="mariposa-test-"))
 )
 
+# 测试根已过保险丝校验：显式允许在隔离根建库（OPS-RECALL-01 生产侧仍
+# fail-closed），并打开召回运行时各通道开关（§15.1 生产默认关闭，隔离
+# 验收在测试中显式启用；judge 保持 disabled——JEV-05 默认态不联网）。
+os.environ.setdefault("MARIPOSA_ALLOW_CREATE", "1")
+os.environ.setdefault("MARIPOSA_RECALL_ENABLED", "1")
+os.environ.setdefault("MARIPOSA_WORDS_RECALL_ENABLED", "1")
+os.environ.setdefault("MARIPOSA_RAW_FALLBACK_ENABLED", "1")
+
 import pytest  # noqa: E402
 
 from mariposa import db, schema  # noqa: E402
@@ -84,7 +92,8 @@ FORMAL_TABLES = [
     "forgetting_due_queue",
     "anniversary_occurrences", "anniversary_definitions",
     "audit_events", "events_outbox", "idempotency_records", "proposal_resolutions",
-    "proposal_envelopes", "search_fts", "retrieval_documents", "memory_versions",
+    "proposal_envelopes", "words_fts", "words_search_docs", "search_fts",
+    "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",
     "raw_messages", "raw_conversations",
     "quote_versions", "quotes",
@@ -119,6 +128,9 @@ def reset_all() -> None:
         for t in WORKSPACE_TABLES:
             c.execute(f"DELETE FROM {t}")
         c.execute("PRAGMA foreign_keys=ON")
+    schema.migrate_runtime()
+    from mariposa.recall import store as recall_store
+    recall_store.reset_for_tests()
     identity.seed(TOKENS)
 
 

@@ -30,6 +30,7 @@ WEB_DIR = _SOURCE_ROOT / "backend" / "mariposa" / "web"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     schema.migrate()
+    schema.migrate_runtime()
     v1_compat.register_v1_compat()
     yield
 

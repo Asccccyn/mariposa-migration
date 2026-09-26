@@ -709,7 +709,28 @@ ALTER TABLE memories ADD COLUMN occurred_end TEXT;
 ALTER TABLE bootstrap_snapshots ADD COLUMN business_date TEXT;
 ALTER TABLE retrieval_documents ADD COLUMN whitelist_body TEXT;
 """),
-]
+    (13, """
+CREATE TABLE mariposa_db_meta(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- words 派生索引（v1.4 §7.3/§10.3）：可重建的检索辅助表，不是正式正文。
+-- 绑定 word 正文版本与所属 memory 当前表示；遗忘/restore/话语变更/撤权
+-- 由读取时校验兜底（words.retrieval 读取前重查当前表示），派生行过期
+-- 即失效，不承担正式语义。
+CREATE TABLE words_search_docs(
+  word_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL,
+  memory_version_no INTEGER NOT NULL,
+  memory_compression_state TEXT NOT NULL,
+  text_norm TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  projection_version TEXT NOT NULL,
+  built_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE words_fts USING fts5(word_id UNINDEXED, text_norm);
+"""),]
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
     (2, """
@@ -802,15 +823,167 @@ CREATE TABLE v2_proposal_versions(
   PRIMARY KEY(item_id, revision)
 );
 """),
+
 ]
 
 
 def migrate() -> None:
     config.ensure_dirs()
     with db.formal() as conn:
+        _require_identity(conn, "formal_v1")
         _apply(conn, FORMAL_MIGRATIONS)
+        _stamp_identity(conn, "formal_v1")
     with db.workspace() as conn:
+        _require_identity(conn, "workspace_v1")
         _apply(conn, WORKSPACE_MIGRATIONS)
+        _stamp_identity(conn, "workspace_v1")
+
+
+def _require_identity(conn, expected: str) -> None:
+    """启动身份校验（v1.4 §10.1 / OPS-RECALL-01）。
+
+    - 全新空库：必须显式 MARIPOSA_ALLOW_CREATE=1（测试根由 conftest 打开；
+      生产首建/换根走显式允许），否则启动失败，不静默建空正式库；
+    - 已有库：mariposa_db_meta.identity 不匹配时拒绝（防错误文件冒名）。
+      迁移 13 之前的旧库无 meta 行，视为待补章的既有正式库，放行补章。
+    """
+    fresh = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'"
+    ).fetchone() is None and conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'"
+    ).fetchone() is None
+    has_meta = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table'"
+        " AND name='mariposa_db_meta'").fetchone()
+    if has_meta:
+        row = conn.execute(
+            "SELECT value FROM mariposa_db_meta WHERE key='identity'").fetchone()
+        if row is not None:
+            if row["value"] != expected:
+                raise RuntimeError(
+                    f"数据库身份不匹配：期望 {expected}，实际 {row['value']}"
+                    "（可能指向了错误的库文件；拒绝启动）。")
+            return
+    if fresh and not config.ALLOW_DB_CREATE:
+        raise RuntimeError(
+            "目标路径下没有既有数据库且未显式 MARIPOSA_ALLOW_CREATE=1："
+            "拒绝静默创建新的正式/工作区库（OPS-RECALL-01）。生产首次"
+            "建库或迁移到新数据根时请显式设置该变量并在完成后关闭。")
+
+
+def _stamp_identity(conn, identity: str) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS mariposa_db_meta("
+        " key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute(
+        "INSERT OR IGNORE INTO mariposa_db_meta(key, value)"
+        " VALUES('identity', ?)", (identity,))
+
+
+RUNTIME_MIGRATIONS: list[tuple[int, str]] = [
+    (1, """
+CREATE TABLE recall_sessions(
+  session_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  conversation_scope TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK(status IN
+    ('ACTIVE','AMBIGUOUS','CONFLICT','DEGRADED','BUDGET_EXHAUSTED',
+     'RESOLVED','CANCELLED','EXPIRED','STALE_RETRY_REQUIRED')),
+  current_revision INTEGER NOT NULL DEFAULT 0,
+  current_burst INTEGER NOT NULL DEFAULT 1,
+  rounds_used INTEGER NOT NULL DEFAULT 0,
+  bursts_used INTEGER NOT NULL DEFAULT 1,
+  policy_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX idx_recall_sessions_expiry ON recall_sessions(expires_at, status);
+
+CREATE TABLE recall_query_revisions(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  revision INTEGER NOT NULL,
+  request_ref TEXT,
+  query_plan TEXT NOT NULL,
+  change_reason TEXT,
+  burst_no INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, revision)
+);
+
+CREATE TABLE recall_candidates(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  candidate_ref TEXT NOT NULL,
+  resource_ref TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  representation TEXT NOT NULL,
+  content_version TEXT,
+  representation_version TEXT,
+  state TEXT NOT NULL CHECK(state IN
+    ('seen','rejected','accepted','deferred')),
+  score_ref TEXT,
+  reject_target TEXT,
+  first_seen_revision INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, candidate_ref)
+);
+CREATE INDEX idx_recall_candidates_resource ON recall_candidates(session_id, resource_ref);
+
+CREATE TABLE recall_attempts(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  operation_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  burst_no INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN
+    ('reserved','running','completed','failed','cancelled')),
+  budget_snapshot TEXT,
+  provider_versions TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, operation_id)
+);
+
+CREATE TABLE recall_receipts(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  receipt_id TEXT PRIMARY KEY,
+  resource_ref TEXT NOT NULL,
+  content_version TEXT,
+  representation_version TEXT,
+  permission_version TEXT,
+  valid_at TEXT NOT NULL,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_recall_receipts_resource
+  ON recall_receipts(session_id, resource_ref);
+
+CREATE TABLE recall_operation_keys(
+  principal_id TEXT NOT NULL,
+  operation_key TEXT NOT NULL,
+  result_ref TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id, operation_key)
+);
+"""),
+]
+
+
+def migrate_runtime() -> None:
+    """Recall Session 运行库（runtime/recall/recall.sqlite3）。
+
+    与正式库身份校验同一原则：运行库可随隔离根新建（测试根必然新建），
+    但生产数据根未显式 ALLOW_CREATE 时不在此处新建文件。
+    """
+    config.RECALL_DB.parent.mkdir(parents=True, exist_ok=True)
+    with db.recall_runtime() as conn:
+        if not config.ALLOW_DB_CREATE and not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table'"
+                " AND name='recall_sessions'").fetchone() and conn.execute(
+                "SELECT 1 FROM sqlite_master LIMIT 1").fetchone():
+            raise RuntimeError("recall 运行库文件已存在但结构不可识别；拒绝复用。")
+        _apply(conn, RUNTIME_MIGRATIONS)
 
 
 def _apply(conn, migrations: list[tuple[int, str]]) -> None:
