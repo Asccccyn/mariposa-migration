@@ -68,3 +68,17 @@
 - 原因：BGE 通道仍读 v1 投影；需切 v2 白名单投影+hash 校验+影子切换
 - 影响：语义召回对 v2 桶的合规性验收
 - 解锁：第二批 retrieval/semantic v2 化
+
+## B11 · 真实 Jev / dense provider / 外发评测（C 组、HYBRID-01/08 真测、JEV-07 provider 级）
+- 原因：外部 provider 与数据外发未获授权（v1.4 §6.4/§14）
+- 已尝试：mock 契约全绿（JEV-01..10）；适配器默认 disabled 且无授权
+  策略时构造即拒绝；dense 未配置时诚实 unavailable（HYBRID-07）
+- 影响：C 组对照、真实模型质量结论、"自动高置信单条"校准（保持关闭）
+- 解锁：乔生明确外发数据范围与 provider/key；或选择仅本地 dense
+
+## B12 · estómago 换窗 live（SESSION-03 后半）
+- 原因：estómago 工程不在本仓库（宿主缺失）
+- 已尝试：Mariposa 侧契约已验（session ref + memory.context.validate +
+  receipts + SCOPE_MISMATCH 防泄漏）
+- 影响：SESSION-03 标 PASS_preliminary 的 live 部分
+- 解锁：estómago 工程实施换窗携带 ref/receipt 的客户端改动
