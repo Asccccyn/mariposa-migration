@@ -2,7 +2,21 @@
 
 > v2.0.1 第一批（P0–P6 后端核心）已交付；2026-09-23 独立审计+修复批
 > 已交付（docs/AUDIT_REPORT_v2_20260923.md：14 项真实缺陷修复、
-> BLOCKERS B8"表已建"更正、313 测试 + E2E 2 全绿）。从这里续接。
+> BLOCKERS B8"表已建"更正、313 测试 + E2E 2 全绿）。
+> 2026-09-26 召回运行时 v1.3/v1.4 全量落地（docs/memory_runtime/）；
+> 435 测试全绿。从这里续接。
+
+## 召回运行时后续（v1.4 框架内，待授权）
+
+- **评测执行**：构造合成标注评测集跑 A/B（scripts/eval_recall.py，
+  入口就绪）；真实私人样本不入 fixtures/Git（EVALUATION.md）。
+- **dense 通道启用**：模型缓存已在仓库根（bge-small-zh 91MB，
+  字面 D:\mariposa 目录待迁移 derived/）；启用=生产授权项。
+- **Jev 授权链**：外发数据范围→key→合成样本→C 组对照；JEV-07 的
+  provider 级迟到安装真测随此补。
+- **estómago 换窗 live**：宿主工程实施后接 SESSION-03 后半。
+- **Mac test-guard**：常驻资源保险丝（当前以 AGENTS.md 前台约束替代）。
+- **主体级 session 配额**（v1.4 §9.3 后半，未做）。
 
 ## 立即可做（v2 剩余，按优先级）
 
