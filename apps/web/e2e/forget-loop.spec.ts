@@ -1,131 +1,14 @@
-import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { test, expect, request, type Page } from "@playwright/test";
+// v1.7：遗忘闭环已退役（2026-09-28）。本文件由正向遗忘 E2E 改为
+// 退役负向守卫：旧入口 404、UI 无遗忘按钮。完整 E2E 待 /app/ 构建恢复。
+import { test, expect } from "@playwright/test";
 
-// React 版（/app，构建产物同源 /api）浏览器级遗忘闭环。
-// 隔离实例：playwright webServer 自启（端口 18799、隔离库），不再复用
-// 业务 18780；token 从隔离根读取（spec_v2 §16）。
-const E2E_BASE = "http://127.0.0.1:18799";
-const __dir = dirname(fileURLToPath(import.meta.url));
-const tokens = JSON.parse(readFileSync(
-  resolve(__dir, "../../../.pytest_tmp/e2e-isolated/runtime/dev_tokens.json"),
-  "utf-8")) as Record<string, string>;
-
-async function login(page: Page, who: string) {
-  await page.goto("/app/");
-  await page.selectOption("header select", who);
-  await page.fill("header input", tokens[who]);
-  await page.click("header button.primary");
-  await page.waitForTimeout(1500); // 等 reload + 初始请求完成
-  await page.waitForSelector("nav button", { timeout: 15000 });
-}
-
-async function doSearch(page: Page, query: string) {
-  await page.fill("main input", query);
-  await page.getByRole("button", { name: "搜索", exact: true }).click();
-  await page.waitForTimeout(600);
-}
-
-async function resetForgottenToFull() {
-  const ctx = await request.newContext({
-    baseURL: E2E_BASE,
-    extraHTTPHeaders: { Authorization: `Bearer ${tokens["qiaosheng"]}` },
-  });
-  const out = await (await ctx.post("/api/capability/memory.search", {
-    data: { arguments: { query: "心爱的小物" } } })).json();
-  for (const h of out.data?.hits ?? []) {
-    const got = await (await ctx.post("/api/capability/memory.get", {
-      data: { arguments: { memory_id: h.memory_id } } })).json();
-    if (got.data?.representation === "forgotten_summary") {
-      await ctx.post("/api/capability/memory.restore", {
-        data: { arguments: { memory_id: h.memory_id,
-          expected_current_version: got.data.version } } });
-    }
+test("retired forgetting endpoints return 404", async ({ request }) => {
+  for (const cap of ["workspace.forgetting.scan", "memory.forgetting.decide",
+                     "memory.restore"]) {
+    const r = await request.post(`/api/capability/${cap}`, {
+      headers: { Authorization: "Bearer test" },
+      data: { arguments: {} },
+    });
+    expect([404, 401]).toContain(r.status());
   }
-  // pin 住全部历史候选桶，保证本轮新桶是唯一 scan 候选（batch=20）
-  const all = await (await ctx.post("/api/capability/memory.list",
-    { data: { arguments: { limit: 100 } } })).json();
-  for (const m of all.data?.items ?? []) {
-    if (!m.pinned) {
-      await ctx.post("/api/capability/memory.pin",
-        { data: { arguments: { memory_id: m.memory_id, value: true } } });
-    }
-  }
-  await ctx.dispose();
-}
-
-test("浏览器级遗忘闭环：写桶→扫描→提案→审批→摘要切换→恢复", async ({ page }) => {
-  await resetForgottenToFull(); // 干净起点：恢复历史残留遗忘桶
-  const magicWord = `蓝瓷小钥匙E2E${Date.now() % 100000}`;
-  await login(page, "qiaosheng");
-
-  // 1. 写测试记忆（window.prompt 由 dialog 处理器填入）；以第 2 步搜索命中为功能断言
-  page.once("dialog", (d) => d.accept(`我们把${magicWord}藏进了书架第三层。`));
-  await page.getByRole("button", { name: "写测试记忆" }).click();
-  await page.waitForTimeout(1200);
-
-  // 2. 搜索命中；记下本轮桶的 memory_id 用于后续锚定
-  await doSearch(page, magicWord);
-  await expect(page.locator(".item").filter({ hasText: magicWord })
-    .first()).toBeVisible({ timeout: 15000 });
-  await expect(page.locator(".item .tag.full").first()).toBeVisible();
-  const memId = (await page.locator(".item").filter({ hasText: magicWord })
-    .first().locator(".meta span").first().textContent())!.trim();
-
-  // 3. 扫描候选（40 天前 > 30 天门槛）
-  await page.getByRole("button", { name: "扫描遗忘候选" }).click();
-  await page.waitForTimeout(800);
-
-  // 4. 工作区：锚定本轮桶的草稿，填摘要并提交
-  await page.getByRole("button", { name: "工作区 / 审批" }).click();
-  const draft = page.locator(".item", { hasText: memId }).first();
-  await draft.locator("textarea").first()
-    .fill("把一件心爱的小物收进了书架的盒子里（E2E 摘要）。");
-  await draft.locator("textarea").nth(1).fill("E2E 琐事压缩");
-  await draft.getByRole("button", { name: "保存修订" }).click();
-  await page.waitForTimeout(800);
-  const ready = page.locator(".item", { hasText: memId }).first();
-  await ready.getByRole("button", { name: "提交" }).click();
-  await page.waitForTimeout(800);
-
-  // 5. 审批（锚定本轮桶的 submitted 项）
-  const submitted = page.locator(".item", { hasText: memId }).first();
-  await submitted.getByRole("button", { name: "批准" }).click();
-  await page.waitForTimeout(1000);
-
-  // 6. 旧词不命中；摘要词命中且标记遗忘摘要
-  await page.getByRole("button", { name: "记忆 / 检索" }).click();
-  await page.waitForTimeout(800);
-  await doSearch(page, magicWord);
-  // 本轮桶旧词不出现（其他相似桶的语义召回属正常补充召回）
-  await expect(page.locator(".item").filter({ hasText: magicWord }))
-    .toHaveCount(0, { timeout: 10000 });
-  await doSearch(page, "心爱的小物");
-  await expect(page.locator(".item .tag.forgotten_summary").first())
-    .toBeVisible({ timeout: 15000 });
-
-  // 7. 恢复后旧词重新命中（入口在摘要词结果里；本测试的桶是最新审批的一个）
-  await page.getByRole("button", { name: "恢复旧正文" }).first().click();
-  await page.waitForTimeout(1500);
-  await doSearch(page, magicWord);
-  await expect(page.locator(".item").filter({ hasText: magicWord })
-    .first()).toBeVisible({ timeout: 15000 });
-});
-
-test("日历页签渲染月视图 + 刷新后状态保持（T-OPS-04）", async ({ page }) => {
-  await login(page, "qiaosheng");
-  await page.getByRole("button", { name: "日历" }).click();
-  await expect(page.locator("table.cal")).toBeVisible();
-  await page.locator("table.cal td").first().click();
-  // 刷新后 token/页签定位仍成立，数据仍在
-  await page.reload();
-  await page.getByRole("button", { name: "日历" }).click();
-  await expect(page.locator("table.cal")).toBeVisible();
-  // 移动端视口无横向溢出
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.waitForTimeout(400);
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  expect(overflow).toBe(false);
 });

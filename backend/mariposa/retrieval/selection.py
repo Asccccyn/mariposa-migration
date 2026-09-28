@@ -17,10 +17,6 @@ def _hard_gate(c: dict, plan: dict, rejected: set[str]) -> bool:
     # 用户明确 rejected：本 session 内不再作为普通候选正文返回
     if ref in rejected:
         return False
-    # reject_target=event：排除该事件资源的全部重复表示
-    if any(r.startswith("memory:") and ref.startswith("memory:") and
-           r == ref for r in rejected):
-        return False
     # 证据等级不满足不是淘汰条件（RAWX-01：paraphrase 候选仍作为线索
     # 交付并标 evidence_requirement_met=false，触发后续 raw 补查判定）；
     # 硬门只管权限/表示/版本/明确约束/用户 rejected。

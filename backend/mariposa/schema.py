@@ -74,26 +74,6 @@ CREATE INDEX idx_retrieval_version ON retrieval_documents(memory_id, memory_vers
 
 CREATE VIRTUAL TABLE search_fts USING fts5(memory_id UNINDEXED, search_text);
 
-CREATE TABLE proposal_envelopes(
-  proposal_id TEXT PRIMARY KEY,
-  proposal_revision INTEGER NOT NULL,
-  proposal_hash TEXT NOT NULL,
-  proposal_type TEXT NOT NULL,
-  target_memory_id TEXT NOT NULL,
-  base_memory_version INTEGER NOT NULL,
-  submitted_by TEXT NOT NULL,
-  submitted_at TEXT NOT NULL
-);
-
-CREATE TABLE proposal_resolutions(
-  proposal_id TEXT PRIMARY KEY REFERENCES proposal_envelopes(proposal_id),
-  decision TEXT NOT NULL CHECK(decision IN ('approved','rejected','withdrawn')),
-  decided_by TEXT NOT NULL,
-  decided_binding TEXT NOT NULL,
-  applied_memory_version INTEGER,
-  decided_at TEXT NOT NULL
-);
-
 CREATE TABLE idempotency_records(
   principal_id TEXT NOT NULL,
   capability TEXT NOT NULL,
@@ -890,6 +870,12 @@ UPDATE source_messages SET published=1
  WHERE published=0 AND import_batch_id IN (
    SELECT batch_id FROM source_import_batches WHERE status='completed');
 """),
+    (21, """
+-- ===== v1.7 F9：死表清理（遗忘提案流孤儿结构）=====
+DROP TABLE IF EXISTS proposal_resolutions;
+DROP TABLE IF EXISTS proposal_envelopes;
+DROP TABLE IF EXISTS workspace_audit;
+"""),
 ]
 
 
@@ -942,13 +928,71 @@ CREATE TABLE worker_runs(
   stats TEXT
 );
 
-CREATE TABLE workspace_audit(
-  event_id TEXT PRIMARY KEY,
-  occurred_at TEXT NOT NULL,
-  actor TEXT NOT NULL,
-  action TEXT NOT NULL,
-  item_id TEXT,
-  detail TEXT
+CREATE TABLE recall_query_revisions(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  revision INTEGER NOT NULL,
+  request_ref TEXT,
+  query_plan TEXT NOT NULL,
+  change_reason TEXT,
+  burst_no INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, revision)
+);
+
+CREATE TABLE recall_candidates(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  candidate_ref TEXT NOT NULL,
+  resource_ref TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  representation TEXT NOT NULL,
+  content_version TEXT,
+  representation_version TEXT,
+  state TEXT NOT NULL CHECK(state IN
+    ('seen','rejected','accepted','deferred')),
+  score_ref TEXT,
+  reject_target TEXT,
+  first_seen_revision INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, candidate_ref)
+);
+CREATE INDEX idx_recall_candidates_resource ON recall_candidates(session_id, resource_ref);
+
+CREATE TABLE recall_attempts(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  operation_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  burst_no INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN
+    ('reserved','running','completed','failed','cancelled')),
+  budget_snapshot TEXT,
+  provider_versions TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, operation_id)
+);
+
+CREATE TABLE recall_receipts(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  receipt_id TEXT PRIMARY KEY,
+  resource_ref TEXT NOT NULL,
+  content_version TEXT,
+  representation_version TEXT,
+  permission_version TEXT,
+  valid_at TEXT NOT NULL,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_recall_receipts_resource
+  ON recall_receipts(session_id, resource_ref);
+
+CREATE TABLE recall_operation_keys(
+  principal_id TEXT NOT NULL,
+  operation_key TEXT NOT NULL,
+  result_ref TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id, operation_key)
 );
 """),
 ]

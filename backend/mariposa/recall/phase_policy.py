@@ -284,3 +284,55 @@ def phase_of(memory_id: str, *, now: datetime | None = None,
         last_explicit_open_at=facts["last_explicit_open_at"],
         active_keep_owners=facts["active_keep_owners"],
         resource_kind=resource_kind, plan_status=plan_status)
+
+
+def facts_for_many(conn, memory_ids: list[str]) -> dict[str, dict]:
+    """批量装载 compute_phase 事实（单连接三次查询，替代逐桶 phase_of
+    的 N+1；F12）。返回 {memory_id: facts}。"""
+    if not memory_ids:
+        return {}
+    marks = ",".join("?" * len(memory_ids))
+    facts: dict[str, dict] = {mid: {
+        "first_held_at": None, "last_explicit_open_at": None,
+        "categories": [], "active_keep_owners": []} for mid in memory_ids}
+
+    def _dt(raw):
+        if not raw:
+            return None
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt
+
+    for r in conn.execute(
+            f"SELECT memory_id, held_at, last_explicit_open_at FROM"
+            f" memories WHERE memory_id IN ({marks})", memory_ids):
+        f = facts.get(r["memory_id"])
+        if f:
+            f["first_held_at"] = _dt(r["held_at"])
+            f["last_explicit_open_at"] = _dt(r["last_explicit_open_at"])
+    for r in conn.execute(
+            f"SELECT memory_id, category FROM memory_categories WHERE"
+            f" memory_id IN ({marks})", memory_ids):
+        f = facts.get(r["memory_id"])
+        if f:
+            f["categories"].append(r["category"])
+    for r in conn.execute(
+            f"SELECT memory_id, owner FROM memory_keeps WHERE"
+            f" memory_id IN ({marks}) AND revoked_at IS NULL", memory_ids):
+        f = facts.get(r["memory_id"])
+        if f:
+            f["active_keep_owners"].append(r["owner"])
+    return facts
+
+
+def phase_from_facts(facts: dict, *, now: datetime,
+                     **kw) -> PhaseResult:
+    """用 facts_for_many 的结果直接计算阶段。"""
+    return compute_phase(now=now,
+                         first_held_at=facts["first_held_at"],
+                         categories=facts["categories"],
+                         last_explicit_open_at=facts[
+                             "last_explicit_open_at"],
+                         active_keep_owners=facts["active_keep_owners"],
+                         **kw)

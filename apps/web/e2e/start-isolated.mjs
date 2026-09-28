@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 const __dir = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(__dir, "../../..");
 const isoRoot = join(repo, ".pytest_tmp", "e2e-isolated");
-const py = join(repo, ".venv", "Scripts", "python.exe");
+const py = join(repo, process.platform === "win32"
+  ? join(".venv", "Scripts", "python.exe")
+  : join(".venv", "bin", "python"));
 const PORT = 18799;
 
 // 清理上次异常退口的监听（pidfile 记录 uvicorn 子进程）
