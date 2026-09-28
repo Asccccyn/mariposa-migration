@@ -730,6 +730,11 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
 
 
 def _find_words(principal: Principal, a: dict) -> dict:
+    from .. import config as _cfg
+    from ..errors import Forbidden as _FW
+    if not _cfg.RECALL_WORDS_ENABLED:
+        raise _FW("find_words 受 MARIPOSA_WORDS_RECALL_ENABLED 控制（默认关）",
+                  code="WORDS_CHANNEL_DISABLED")
     from ..recall import pipeline as pl
     from .. import db
     plan = dict(a.get("query_plan") or {})
@@ -748,15 +753,16 @@ def _recall_round2(principal: Principal, a: dict) -> dict:
     sid = str(a.get("session_id", ""))
     session = recall_store.require_session(sid)
     revision = int(a.get("query_revision", session["current_revision"]))
+    # F3 修复：judge/授权/预算全部取服务端事实，客户端布尔不再采信
+    facts = pl.round2_server_facts(session)
     gate = pl.round2_gate(
         session, revision, str(a.get("reason", "")),
-        str(a.get("judge_status", "")),
-        bool(a.get("raw_search_authorized", False)),
-        bool(a.get("budget_available", True)))
+        facts["judge_status"], facts["raw_search_authorized"],
+        facts["budget_available"])
     if not gate["allowed"]:
         raise _F("Round 2 gate 未满足（§6.4）",
                  code="ROUND2_GATE_DENIED", gate=gate["gate"])
-    return {"gate": gate,
+    return {"gate": gate, "server_facts": facts,
             **pl.raw_deep_search(principal, dict(a.get("query_plan") or {}),
                                  int(a.get("limit", 20)))}
 

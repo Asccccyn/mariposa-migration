@@ -101,21 +101,20 @@ class TestRound2Gate:
             "lexical_terms": ["gate"]}})
         return packet
 
-    def test_gate_blocks_without_round1_receipt(self, actors):
+    def test_round1_receipt_auto_issued_by_start(self, actors):
+        """A05：首轮真实执行完成自动签发 ROUND1_COMPLETE（不再依赖手工）。"""
         from mariposa.recall import store as st
         packet = self._session(actors)
         sess = st.require_session(packet["recall_session_id"])
         gate = pl.round2_gate(sess, sess["current_revision"],
                               "EVIDENCE_INSUFFICIENT", "complete",
                               True, True)
-        assert gate["allowed"] is False
-        assert gate["gate"]["round1_complete_receipt"] is False
+        assert gate["gate"]["round1_complete_receipt"] is True
 
     def test_gate_allows_with_full_conditions(self, actors):
         from mariposa.recall import store as st
         packet = self._session(actors)
         sid = packet["recall_session_id"]
-        pl.mark_round1_complete(sid)
         sess = st.require_session(sid)
         gate = pl.round2_gate(sess, sess["current_revision"],
                               "EVIDENCE_INSUFFICIENT", "complete",
@@ -126,7 +125,6 @@ class TestRound2Gate:
         from mariposa.recall import store as st
         packet = self._session(actors)
         sid = packet["recall_session_id"]
-        pl.mark_round1_complete(sid)
         sess = st.require_session(sid)
         gate = pl.round2_gate(sess, sess["current_revision"],
                               "JUDGE_UNAVAILABLE", "complete", True, True)

@@ -206,14 +206,13 @@ class TestV13Session:
 
 class TestV13Word:
     def test_word01(self, actors):
-        hold(actors, "事件正文", "2026-08-10",
-             our_words=[{"speaker": "qiaosheng", "text": "独有词咕咕",
-                         "expression_kind": "verbatim"}])
+        """v1.7 REPLACE：WIDE 阶段 event 通道含 our_words 字段 → 命中。"""
+        h = hold(actors, "事件正文", "2026-08-10",
+                 our_words=[{"speaker": "qiaosheng", "text": "独有词咕咕",
+                             "expression_kind": "verbatim"}])
         p = start(actors, lexical_terms=["咕咕"])
-        assert p["candidates"] == []
-        with db.formal() as conn:
-            from mariposa.retrieval import search as rs
-            assert rs.recall(conn, "咕咕")["hits"] == []
+        assert p["candidates"] and \
+            p["candidates"][0]["memory_id"] == h["memory_id"]
 
     def test_word02(self, actors):
         hold(actors, "事件正文", "2026-08-10",

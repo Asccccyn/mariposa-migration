@@ -863,6 +863,24 @@ CREATE TABLE field_search_docs(
 CREATE VIRTUAL TABLE field_fts USING fts5(
   memory_id UNINDEXED, field_kind UNINDEXED, text_norm);
 """),
+    (19, """
+-- ===== v1.7 A08：九分类 CHECK 增量迁移（旧库升级路径）=====
+-- migration 11 的 DDL 只影响 fresh 库；已有安装需重建 memory_categories
+-- 以启用 reloplay。数据逐行保留。
+CREATE TABLE memory_categories_new(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  category TEXT NOT NULL CHECK(category IN
+    ('daily','milestone','sad','sweet','date','plan','sex','anniversary',
+     'reloplay')),
+  added_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, category)
+);
+INSERT INTO memory_categories_new SELECT * FROM memory_categories;
+DROP TABLE memory_categories;
+ALTER TABLE memory_categories_new RENAME TO memory_categories;
+CREATE INDEX idx_categories_category ON memory_categories(category);
+"""),
 ]
 
 
