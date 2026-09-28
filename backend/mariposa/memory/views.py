@@ -1,11 +1,10 @@
-"""明确打开与查看回执（spec_v2 §6 / R09 / R10）。
+"""明确打开与查看回执（v1.7：明开回温事实，无遗忘续期）。
 
 `memory.open` 准备当前内容及查看票据；`memory.view.confirm` 确认这次
-明确查看。票据只证明一次内容交付确认，不代表心理理解；不跨桶、不跨
-身份、不跨 binding、不跨表示版本复用。确认事务对普通桶按自然日续期；
-plan 阅读不在此路径内（计划阅读永不续期，见 plans/service.py）。
-
-预加载、搜索 preview、自动刷新、bootstrap 不得调用 confirm。
+明确查看并记录 last_explicit_open_at（服务端确认时刻，取 max 防乱序
+旧确认倒退）。阶段由查询时以该事实现算（v1.7 §5.4）：
+命中/Jev/hydrate/bootstrap/预览/accept 均不算打开；同一票据幂等重放
+不刷新时间。票据不跨桶/身份/表示版本复用。
 """
 from __future__ import annotations
 
@@ -13,8 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from .. import audit, db
-from ..errors import Forbidden, NotFound, ViewReceiptInvalid
-from . import retention as retention_mod
+from ..errors import Forbidden, ViewReceiptInvalid
 from . import service as memory
 
 _CONFIRM_TTL_SECONDS = 15 * 60  # 打开后未确认的票据有效期
@@ -30,7 +28,7 @@ def open_memory(principal, memory_id: str) -> dict:
         raise Forbidden("only the two owners may open a memory",
                         principal=principal.principal_id)
     with db.formal() as conn:
-        content = memory.get(conn, memory_id)  # 尊重当前表示：遗忘桶只给摘要
+        content = memory.get(conn, memory_id)
         version = memory.representation_version(conn, memory_id)
         receipt_id = f"vr_{uuid.uuid4().hex[:16]}"
         now = _now()
@@ -55,10 +53,9 @@ def open_memory(principal, memory_id: str) -> dict:
 
 def confirm_view(principal, memory_id: str, receipt_id: str,
                  confirm_key: str | None = None) -> dict:
-    """确认这次明确查看：核验回执 → 续期（普通桶）→ 幂等落审计。
+    """确认这次明确查看：核验回执 → 记录明开事实（v1.7 回温）→ 幂等审计。
 
-    同一 confirm_key 只产生一次续期事件（RET-06）；同自然日多次真实打开
-    due_date 相同（RET-15）。
+    同一票据幂等重放返回首次成功确认的时间，不刷新 last_explicit_open_at。
     """
     if principal.principal_id not in ("jiaming", "qiaosheng"):
         raise Forbidden("only the two owners may confirm a view",
@@ -82,7 +79,7 @@ def confirm_view(principal, memory_id: str, receipt_id: str,
                     "view receipt cannot be used across memories",
                     receipt_id=receipt_id)
             if r["confirmed_at"] is not None:
-                # 幂等重放：同票据重复确认返回同一结果，不二次续期
+                # 幂等重放：同票据重复确认返回同一结果，不刷新明开时间
                 conn.execute("COMMIT")
                 return {"memory_id": memory_id, "receipt_id": receipt_id,
                         "confirmed_at": r["confirmed_at"],
@@ -96,15 +93,14 @@ def confirm_view(principal, memory_id: str, receipt_id: str,
                     current=current_version)
             now = _now()
             _check_ttl(r["issued_at"], now)
-            # 续期只作用于 v2 普通记忆桶（retention.status='active'）；
-            # 旧 v1 桶无 retention 行：确认本身仍成立，只是不产生 v2 续期
-            try:
-                renewal = retention_mod.register_explicit_open(
-                    conn, memory_id, now)
-                retention_mod.bump_view_revision(conn, memory_id)
-            except NotFound:
-                renewal = {"renewed": False,
-                           "reason": "legacy_memory_without_retention_row"}
+            # v1.7 明开回温：记录服务端确认事实时刻（取 max，防乱序旧确认
+            # 让 basis 倒退）；不做任何遗忘续期（已退役）。
+            conn.execute(
+                "UPDATE memories SET last_explicit_open_at="
+                "CASE WHEN last_explicit_open_at IS NULL OR"
+                " last_explicit_open_at < ? THEN ? ELSE last_explicit_open_at"
+                " END, updated_at=updated_at WHERE memory_id=?",
+                (now, now, memory_id))
             conn.execute(
                 "UPDATE memory_view_receipts SET confirmed_at=?"
                 " WHERE receipt_id=? AND confirmed_at IS NULL",
@@ -112,16 +108,13 @@ def confirm_view(principal, memory_id: str, receipt_id: str,
             audit.record(conn, "memory.view.confirmed",
                          principal.principal_id, resource_id=memory_id,
                          payload={"receipt_id": receipt_id,
-                                  "renewed": bool(renewal.get("renewed")),
-                                  "due_date": renewal.get("due_date")})
+                                  "explicit_open_at": now})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return {"memory_id": memory_id, "receipt_id": receipt_id,
-            "confirmed_at": now, "renewed": bool(renewal.get("renewed")),
-            "due_date": renewal.get("due_date"),
-            "same_day": renewal.get("same_day")}
+            "confirmed_at": now, "explicit_open_at": now}
 
 
 def _check_ttl(issued_at: str, now: str) -> None:

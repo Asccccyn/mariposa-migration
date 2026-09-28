@@ -27,14 +27,13 @@ def test_initialize_and_tools_list(c):
     r = rpc(c, "/mcp", "tools/list", "jiaming")
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert "mariposa_memory_search" in names
-    assert "mariposa_memory_forgetting_decide" in names
-    assert "mariposa_workspace_proposals_submit" in names
+    assert "mariposa_memory_forgetting_decide" not in names  # v1.7 已退役
+    assert "mariposa_workspace_proposals_submit" not in names
 
 
 def test_tools_list_filtered_by_principal(c):
     r = rpc(c, "/mcp/maintenance", "tools/list", "worker")
     names = {t["name"] for t in r.json()["result"]["tools"]}
-    assert "mariposa_workspace_proposals_submit" in names
     assert "mariposa_memory_search" not in names  # 工具人无正式检索
     assert "mariposa_memory_forgetting_decide" not in names
 
@@ -53,7 +52,8 @@ def test_tools_call_same_handler_as_http(c):
     r = rpc(c, "/mcp", "tools/call", "jiaming", {
         "name": "mariposa_memory_hold",
         "arguments": {"text": "MCP 与 HTTP 共用 handler 的验证桶",
-                      "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False},
+                      "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False,
+                      "categories": ["daily"]},
     })
     out = r.json()["result"]
     assert out["isError"] is False

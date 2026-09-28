@@ -19,7 +19,8 @@ from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden, NotFound, ViewReceiptInvalid
 from mariposa.identity import service as identity
-from mariposa.memory import (categories as cats_mod, retention as ret_mod,
+from mariposa.memory import (categories as cats_mod,
+
                              service as memory)
 from mariposa.memory import recollections as rec_mod
 from mariposa.memory import views as views_mod
@@ -54,14 +55,11 @@ class TestV2HoldLayered:
         with db.formal() as conn:
             m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
                              (out["memory_id"],)).fetchone()
-            r = ret_mod.get(conn, out["memory_id"])
         assert m["memory_date"] == "2026-08-15"
         assert m["held_at"] is not None
         assert m["creation_mode"] == "contemporaneous"
-        # 期限从 hold 日期起算（RET-01）：不因事件久远立即到期
-        assert r["basis_date"] is not None and r["basis_date"] >= "2026-09"
-        assert r["due_date"] == (datetime.fromisoformat(r["basis_date"]).date()
-                                 + timedelta(days=20)).isoformat()
+        # v1.7：阶段由 held_at/last_explicit_open_at 现算（P2 阶段策略测试
+        # 承载 RET-01 语义；这里仅断言事实分离）
 
     def test_parallel_categories_single_bucket_rec02(self, actors):
         out = hold_v2(actors, cats=["date", "sweet", "sex"])
@@ -89,10 +87,8 @@ class TestV2HoldLayered:
         out = hold_v2(actors, mood=None)
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])
-            r = ret_mod.get(conn, out["memory_id"])
         assert "mood" not in got
-        assert r["status"] == "active"  # 心情空白不缩短期限、不判不重要
-        assert r["due_date"]  # 正常周期
+        # v1.7：心情空白不缩短期限——阶段现算，无 retention 行可断言
 
     def test_qiaosheng_cannot_write_mood_rec09(self, actors):
         with pytest.raises(Forbidden) as e:
@@ -121,131 +117,6 @@ class TestV2HoldLayered:
         for ch in "青鸾独语":
             assert ch not in doc["search_text"], ch
         assert "普" in doc["search_text"] and "通" in doc["search_text"]
-
-
-class TestNaturalDayRetention:
-    def test_period_per_category_ret02(self, actors):
-        cases = {"daily": 20, "sad": 30, "sweet": 30, "sex": 20, "date": 60}
-        for cat, days in cases.items():
-            out = hold_v2(actors, text=f"{cat}事", cats=[cat])
-            with db.formal() as conn:
-                r = ret_mod.get(conn, out["memory_id"])
-            assert r["due_date"] == (
-                datetime.fromisoformat(r["basis_date"]).date()
-                + timedelta(days=days)).isoformat(), cat
-
-    def test_permanent_categories_excluded_ret02(self, actors):
-        for cat in ("milestone", "anniversary"):
-            out = hold_v2(actors, text=f"{cat}事", cats=[cat])
-            with db.formal() as conn:
-                r = ret_mod.get(conn, out["memory_id"])
-            assert r["status"] == "excluded" and r["due_date"] is None, cat
-
-    def test_max_period_ret03(self, actors):
-        out = hold_v2(actors, cats=["daily", "sad", "date"])  # 20+30+60 → 60
-        with db.formal() as conn:
-            r = ret_mod.get(conn, out["memory_id"])
-        assert (datetime.fromisoformat(r["due_date"])
-                - datetime.fromisoformat(r["basis_date"])).days == 60
-        out2 = hold_v2(actors, cats=["milestone", "date"])  # 永久类压制
-        with db.formal() as conn:
-            r2 = ret_mod.get(conn, out2["memory_id"])
-        assert r2["status"] == "excluded" and r2["due_date"] is None
-
-    def test_natural_day_boundary_ret13(self, actors):
-        # 2026-09-21 23:50（Asia/Shanghai）首次 hold 的 20 天桶 → 10-11 到期；
-        # 到期从日界起算而非当天 23:50（纯函数级验证，冻结时间）
-        held = "2026-09-21T15:50:00+00:00"  # = 上海 23:50
-        row = ret_mod.compute_row(["daily"], held, "Asia/Shanghai")
-        assert row["basis_date"] == "2026-09-21"
-        assert row["due_date"] == "2026-10-11"
-        # next_due_at = 10-11 上海日界的 UTC 时刻（=10-10 16:00Z）
-        assert row["next_due_at"].startswith("2026-10-10T16:00:00")
-        # 10-10 23:59 尚未到期；10-11 00:00 起具备候选资格
-        from datetime import date as _d
-        assert _d(2026, 10, 10) < _d.fromisoformat(row["due_date"])
-        assert ret_mod.local_date("2026-10-10T15:59:00+00:00",
-                                  "Asia/Shanghai") < _d.fromisoformat(row["due_date"])
-        assert ret_mod.local_date("2026-10-10T16:00:00+00:00",
-                                  "Asia/Shanghai") == _d.fromisoformat(row["due_date"])
-
-    def test_date_arithmetic_cross_month_leap_ret14(self, actors):
-        assert ret_mod.due_from_basis(
-            __import__("datetime").date(2026, 12, 20), 20).isoformat() == "2027-01-09"
-        assert ret_mod.due_from_basis(
-            __import__("datetime").date(2028, 2, 20), 20).isoformat() == "2028-03-11"
-
-    def test_explicit_open_renews_ret04(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        opened = views_mod.open_memory(actors["qiaosheng"], out["memory_id"])
-        got = views_mod.confirm_view(actors["qiaosheng"], out["memory_id"],
-                                     opened["view_receipt"])
-        assert got["renewed"] is True
-        with db.formal() as conn:
-            r = ret_mod.get(conn, out["memory_id"])
-        assert r["last_explicit_open_at"] is not None
-        assert r["due_date"] == (
-            datetime.fromisoformat(r["basis_date"]).date()
-            + timedelta(days=20)).isoformat()  # basis 已移到打开日
-        assert r["retention_revision"] >= 1
-
-    def test_passive_reads_do_not_renew_ret05(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        with db.formal() as conn:
-            before = ret_mod.get(conn, out["memory_id"])
-            memory.get(conn, out["memory_id"])  # 读不续期
-            memory.search(conn, "散步") if hasattr(memory, "search") else None
-            from mariposa.retrieval import search as rsearch
-            rsearch.search(conn, "散步")
-            after = ret_mod.get(conn, out["memory_id"])
-        assert before == after
-
-    def test_same_receipt_idempotent_ret06(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        opened = views_mod.open_memory(actors["jiaming"], out["memory_id"])
-        r1 = views_mod.confirm_view(actors["jiaming"], out["memory_id"],
-                                    opened["view_receipt"])
-        r2 = views_mod.confirm_view(actors["jiaming"], out["memory_id"],
-                                    opened["view_receipt"])
-        assert r2.get("idempotent_replay") is True
-        with db.formal() as conn:
-            rev = conn.execute(
-                "SELECT retention_revision FROM memory_retention WHERE memory_id=?",
-                (out["memory_id"],)).fetchone()["retention_revision"]
-        assert rev == 1  # 只续期一次
-
-    def test_worker_cannot_open_or_renew(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        with pytest.raises(Forbidden):
-            views_mod.open_memory(actors["worker"], out["memory_id"])
-
-    def test_same_day_reopen_no_hour_shift_ret15(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        with db.formal() as conn:
-            before = ret_mod.get(conn, out["memory_id"])
-        o1 = views_mod.open_memory(actors["jiaming"], out["memory_id"])
-        views_mod.confirm_view(actors["jiaming"], out["memory_id"],
-                               o1["view_receipt"])
-        o2 = views_mod.open_memory(actors["jiaming"], out["memory_id"])
-        got = views_mod.confirm_view(actors["jiaming"], out["memory_id"],
-                                     o2["view_receipt"])
-        with db.formal() as conn:
-            after = ret_mod.get(conn, out["memory_id"])
-        assert after["due_date"] == before["due_date"]  # 同日 due 相同
-        assert got.get("same_day") is True
-
-    def test_receipt_not_reusable_across_version(self, actors):
-        out = hold_v2(actors, cats=["daily"])
-        opened = views_mod.open_memory(actors["jiaming"], out["memory_id"])
-        # 造成表示变化：遗忘→恢复会 bump representation_state；
-        # 直接改 representation_state 模拟表示推进
-        with db.formal() as conn:
-            conn.execute(
-                "UPDATE memories SET representation_state=representation_state+1"
-                " WHERE memory_id=?", (out["memory_id"],))
-        with pytest.raises(ViewReceiptInvalid):
-            views_mod.confirm_view(actors["jiaming"], out["memory_id"],
-                                   opened["view_receipt"])
 
 
 class TestRecollections:
@@ -283,14 +154,6 @@ class TestRecollections:
         receipt = self._confirmed(actors, a["memory_id"])
         with pytest.raises(ViewReceiptInvalid):
             rec_mod.append(actors["jiaming"], b["memory_id"], receipt, "跨桶")
-
-    def test_recollection_triggers_retain_hint_rev07(self, actors):
-        out = hold_v2(actors)
-        rec_mod.append(actors["jiaming"], out["memory_id"],
-                       self._confirmed(actors, out["memory_id"]), "后来想起")
-        with db.formal() as conn:
-            r = ret_mod.get(conn, out["memory_id"])
-        assert r["retain_hint"] == "has_recollections"
 
     def test_revision_keeps_history_view05(self, actors):
         out = hold_v2(actors)

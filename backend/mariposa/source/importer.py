@@ -1,0 +1,789 @@
+"""Claude Export 导入管线（复核 v1.1 定点补修版）。
+
+关键不变量（对应复核缺口）：
+- SL-02 一次固定快照：输入先复制到受控暂存并原子发布为归档 payload；
+  provider 检测与解析只读这份固定字节，绝不重开可变原始路径。
+- SL-01 completed 门禁：parse_failures>0、完整性问题、归档 hash 不符都
+  阻断 completed（批次 failed，结构化返回，不静默成功）。
+- SL-10 失败数据隔离：消息默认 published=0；批次完整校验通过才发布
+  （published=1）。检索/列表/绑定默认只见已发布数据。
+- SL-07 消息版本：同 UUID 不同内容保留不可变第二版本（版本表），
+  当前行不覆盖；sequence 只在会话快照内解释，跨快照序号冲突显式计数。
+- 并发认领：running 批次有租约；新鲜租约冲突 409，过期可接管。
+
+内存上界：json_stream 单元素 + 1MB 块；查重集合限单会话预取。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import uuid as _uuid
+import zipfile
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from .. import audit, config, db
+from ..errors import MariposaError, NotFound
+from ..retrieval import projection
+from . import adapters, archive, json_stream
+from .adapters import claude as claude_adapter
+from .adapters.base import NormalizedMessage
+
+PARSER_VERSION = "source_claude_v2"
+
+_INSERT_MSG_SQL = (
+    "INSERT INTO source_messages(id, conversation_id, provider,"
+    " provider_conversation_id, provider_message_id, id_synthetic,"
+    " parent_provider_message_id, raw_sender, normalized_sender, speaker,"
+    " created_at, updated_at, occurred_date, text, content_json,"
+    " attachments, has_thinking, has_tool_content, sequence,"
+    " import_batch_id, published, content_hash)"
+    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@contextmanager
+def open_element_stream(path: Path):
+    """打开归档 payload（.json 或导出 .zip）为二进制元素流（带 zip 限额）。"""
+    if zipfile.is_zipfile(path):
+        zf = zipfile.ZipFile(path)
+        try:
+            infos = zf.infolist()
+            if len(infos) > config.SOURCE_MAX_ZIP_MEMBERS:
+                raise MariposaError(
+                    f"zip member 数超限（{len(infos)} > "
+                    f"{config.SOURCE_MAX_ZIP_MEMBERS}）",
+                    code="SOURCE_ARCHIVE_LIMIT")
+            total = sum(i.file_size for i in infos)
+            if total > config.SOURCE_MAX_ZIP_TOTAL_BYTES:
+                raise MariposaError("zip 累计解压字节超限",
+                                    code="SOURCE_ARCHIVE_LIMIT")
+            member, ambiguity = _find_conversations_member(zf)
+            if ambiguity:
+                raise MariposaError(
+                    "zip 中存在多个 conversations.json 候选，无法确定母本",
+                    code="SOURCE_AMBIGUOUS_ARCHIVE", members=ambiguity)
+            if member is None:
+                raise MariposaError(
+                    "zip 中未找到 conversations.json（Claude 导出格式不符）",
+                    code="SOURCE_FORMAT_UNKNOWN")
+            info = zf.getinfo(member)
+            if info.file_size > config.SOURCE_MAX_ZIP_MEMBER_BYTES:
+                raise MariposaError("zip 单 member 超限",
+                                    code="SOURCE_ARCHIVE_LIMIT")
+            with zf.open(member) as f:
+                yield f
+        finally:
+            zf.close()
+    else:
+        with open(path, "rb") as f:
+            yield f
+
+
+def _find_conversations_member(zf: zipfile.ZipFile):
+    """精确根路径优先；多个 endswith 候选返回歧义清单。"""
+    names = zf.namelist()
+    if "conversations.json" in names:
+        return "conversations.json", None
+    candidates = [n for n in names if n.endswith("conversations.json")]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        return None, candidates[:10]
+    return None, None
+
+
+def import_file(principal_id: str, path: str,
+                filename: str | None = None) -> dict:
+    src = Path(path).expanduser().resolve()
+    if not src.is_file():
+        raise NotFound("source file not found", path=str(src))
+
+    # ---- 1) 一次固定快照（SL-02）：复制到受控暂存，此后不再读原路径 ----
+    staged = archive.stage_input(src)
+    try:
+        return _import_staged(principal_id, src, staged, filename)
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _import_staged(principal_id: str, src: Path, staged: Path,
+                   filename: str | None) -> dict:
+    sha256, size = archive.sha256_file(staged)
+    original_name = filename or src.name
+
+    # ---- 2) provider 检测：从固定快照读 ----
+    try:
+        with open_element_stream(staged) as f:
+            first, _ = json_stream.peek_first_element(f)
+        if first is json_stream.EMPTY_ARRAY:
+            # 空数组：合法输入，0 会话（无数据不建批次）
+            staged.unlink(missing_ok=True)
+            return {"batch_id": None, "provider": "unknown",
+                    "status": "completed", "stats": _new_stats(),
+                    "note": "空数组：无可导入会话",
+                    "raw_path": None}
+        provider = adapters.detect_provider(first)
+    except json_stream.JsonStreamError as e:
+        _record_failed_import(principal_id, staged, "unknown",
+                              f"bad json: {e}", filename)
+        raise MariposaError(f"文件不是合法的顶层 JSON 数组: {e}",
+                            code=e.code) from e
+    except MariposaError:
+        _record_failed_import(principal_id, staged, "unknown",
+                              "unreadable archive", filename)
+        raise
+    if provider is None:
+        _record_failed_import(principal_id, staged, "unknown",
+                              "unrecognized export format", filename)
+        raise MariposaError(
+            "无法识别导出格式（本轮支持 Claude conversations 导出）",
+            code="SOURCE_FORMAT_UNKNOWN")
+
+    # ---- 3) 幂等与并发认领（租约） ----
+    batch_id, reused = _claim_batch(provider, sha256, staged, principal_id,
+                                    original_name)
+    if batch_id is None:  # already_imported
+        return _already_result(provider, sha256)
+    if batch_id is False:  # 新鲜 running 冲突
+        raise MariposaError(
+            "同源导入正在进行（running 批次租约内）；请稍后重试或等待"
+            "租约过期", code="SOURCE_IMPORT_IN_PROGRESS", sha256=sha256)
+
+    # ---- 4) 原子发布归档；解析/复核只读归档 payload（SL-02） ----
+    existing_payload = _existing_payload_if_consistent(provider, batch_id,
+                                                       sha256)
+    if existing_payload is not None:
+        staged.unlink(missing_ok=True)
+        archived = existing_payload
+    else:
+        archived = archive.publish_snapshot(
+            provider, batch_id, staged, sha256, size, original_name,
+            principal_id)
+    _set_raw_path(batch_id, str(archived), original_name)
+
+    stats = _new_stats()
+    try:
+        # ---- 5) 解析归档 payload（绝不碰原始路径） ----
+        try:
+            _parse_all(archived, provider, batch_id, stats)
+        except json_stream.JsonStreamError as e:
+            # 检测通过但流中后段不合规（如尾随垃圾）：同源码严格拒绝
+            _fail_batch(batch_id, provider, f"bad json: {e}", stats)
+            raise MariposaError(f"文件不是合法的顶层 JSON 数组: {e}",
+                                code=e.code) from e
+        _refresh_conversation_aggregates(batch_id, published_only=False)
+        verification = _verify_integrity(provider, batch_id)
+        archive_check = archive.verify_archived(provider, batch_id, sha256)
+        problems = list(verification["problems"])
+        if not archive_check.get("ok"):
+            problems.append({"check": "raw_archive",
+                             **{k: v for k, v in archive_check.items()
+                                if k != "ok"}})
+        stats["verify_problems"] = problems
+
+        # ---- 6) completed 门禁（SL-01）：真实校验结果决定状态 ----
+        blocking = []
+        if stats["parse_failures"] > 0:
+            blocking.append(
+                {"check": "parse_failures",
+                 "count": stats["parse_failures"]})
+        if problems:
+            blocking += problems
+        if blocking:
+            stats["blocking"] = blocking
+            _fail_batch(batch_id, provider,
+                        "导入未通过完整性门禁：" + json.dumps(
+                            blocking, ensure_ascii=False)[:1500], stats)
+            return {"batch_id": batch_id, "provider": provider,
+                    "status": "failed", "stats": stats,
+                    "error": "integrity gate", "raw_path": str(archived)}
+
+        # ---- 7) 发布可见性（SL-10）：仅本批新增消息置 published=1 ----
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                published = conn.execute(
+                    "UPDATE source_messages SET published=1"
+                    " WHERE import_batch_id=? AND published=0",
+                    (batch_id,)).rowcount
+                conn.execute(
+                    "UPDATE source_import_batches SET status='completed',"
+                    " import_finished_at=?, stats=?, error=NULL"
+                    " WHERE batch_id=?",
+                    (_now(), json.dumps(stats, ensure_ascii=False), batch_id))
+                audit.record(conn, "source.import.completed", principal_id,
+                             resource_id=batch_id,
+                             payload={"provider": provider,
+                                      "conversations":
+                                          stats["conversations_total"],
+                                      "messages_new": stats["messages_new"],
+                                      "published": published})
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        archive.write_metadata(provider, batch_id, {
+            "status": "completed", "stats": stats,
+            "verification": verification})
+        return {"batch_id": batch_id, "provider": provider,
+                "status": "completed", "stats": stats,
+                "verification": {**verification, "archive": archive_check},
+                "raw_path": str(archived)}
+    except Exception as e:  # noqa: BLE001 —— 未预期异常必须留失败痕迹
+        _fail_batch(batch_id, provider, f"{type(e).__name__}: {e}", stats)
+        raise
+
+
+def _claim_batch(provider: str, sha256: str, staged: Path,
+                 principal_id: str, original_name: str):
+    """返回 (batch_id, reused)；None=已导入幂等返回；False=租约冲突。"""
+    now = datetime.now(timezone.utc)
+    lease_cutoff = now - timedelta(minutes=config.SOURCE_IMPORT_LEASE_MINUTES)
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = conn.execute(
+                "SELECT * FROM source_import_batches WHERE provider=?"
+                " AND sha256=?", (provider, sha256)).fetchone()
+            if existing:
+                if existing["status"] == "completed":
+                    conn.execute("COMMIT")
+                    return None, False
+                started_raw = existing["import_started_at"] or ""
+                started_dt = _parse_ts(started_raw)
+                if (existing["status"] == "running" and started_dt is not None
+                        and started_dt > lease_cutoff):
+                    conn.execute("COMMIT")
+                    return False, False
+                batch_id = existing["batch_id"]  # failed / stale running
+                conn.execute(
+                    "UPDATE source_import_batches SET status='running',"
+                    " error=NULL, imported_by=?, import_started_at=?"
+                    " WHERE batch_id=?", (principal_id, now.isoformat(),
+                                          batch_id))
+                conn.execute("COMMIT")
+                return batch_id, True
+            batch_id = f"sib_{_uuid.uuid4().hex[:12]}"
+            conn.execute(
+                "INSERT INTO source_import_batches(batch_id, provider,"
+                " status, original_filename, original_bytes, sha256,"
+                " raw_path, parser_version, import_started_at, imported_by)"
+                " VALUES(?,?, 'running', ?,?,?,?,?,?,?)",
+                (batch_id, provider, original_name, staged.stat().st_size,
+                 sha256, "", PARSER_VERSION, now.isoformat(), principal_id))
+            conn.execute("COMMIT")
+            return batch_id, False
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _parse_ts(raw: str):
+    """容忍 ISO 与 SQLite datetime('now') 两种格式；失败返回 None。"""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _existing_payload_if_consistent(provider: str, batch_id: str,
+                                    sha256: str) -> Path | None:
+    """接管批次时：既有归档存在且 hash 一致则复用，不一致拒绝。"""
+    check = archive.verify_archived(provider, batch_id, sha256)
+    if check.get("ok"):
+        return archive.batch_dir(provider, batch_id) / check["archived_as"]
+    if check.get("issue") in ("sha256_mismatch",):
+        raise MariposaError(
+            "既有归档与本次输入 hash 不一致；拒绝覆盖，需人工处理",
+            code="SOURCE_ARCHIVE_MISMATCH", batch_id=batch_id)
+    return None  # 无归档（新批次/上次归档前失败）→ 正常发布
+
+
+def _already_result(provider: str, sha256: str) -> dict:
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT * FROM source_import_batches WHERE provider=?"
+            " AND sha256=?", (provider, sha256)).fetchone()
+    return {"batch_id": row["batch_id"], "provider": provider,
+            "status": "already_imported",
+            "stats": json.loads(row["stats"] or "{}"),
+            "raw_path": row["raw_path"]}
+
+
+def batch_status(batch_id: str) -> dict:
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT * FROM source_import_batches WHERE batch_id=?",
+            (batch_id,)).fetchone()
+    if row is None:
+        raise NotFound("source import batch not found", batch_id=batch_id)
+    out = dict(row)
+    out["stats"] = json.loads(out.get("stats") or "{}")
+    return out
+
+
+def batches_list(limit: int = 50) -> list[dict]:
+    with db.formal() as conn:
+        rows = conn.execute(
+            "SELECT batch_id, provider, status, original_filename,"
+            " original_bytes, sha256, import_started_at, import_finished_at,"
+            " error FROM source_import_batches"
+            " ORDER BY import_started_at DESC LIMIT ?",
+            (max(1, min(int(limit), 200)),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------- 解析
+
+def _new_stats() -> dict:
+    return {
+        "conversations_total": 0, "conversations_new": 0,
+        "conversations_existing": 0, "conversations_empty": 0,
+        "parse_failures": 0,
+        "messages_total": 0, "messages_new": 0,
+        "messages_skipped_existing": 0, "messages_duplicate_in_file": 0,
+        "messages_missing_uuid": 0,
+        "sender_human": 0, "sender_assistant": 0, "sender_system": 0,
+        "sender_tool": 0, "sender_unknown": 0,
+        "messages_with_text": 0, "messages_with_thinking": 0,
+        "messages_with_tool_content": 0, "messages_with_attachments": 0,
+        "min_created_at": None, "max_created_at": None,
+        "version_conflicts": 0, "sequence_conflicts": 0,
+        "verify_problems": [],
+    }
+
+
+def _parse_all(payload: Path, provider: str, batch_id: str,
+               stats: dict) -> None:
+    with open_element_stream(payload) as f:
+        first, it = json_stream.peek_first_element(f)
+        idx = 0
+        if first is not None:
+            _consume_element(first, provider, batch_id, idx, stats)
+            idx += 1
+            for element in it:
+                _consume_element(element, provider, batch_id, idx, stats)
+                idx += 1
+    stats["conversations_total"] = idx
+
+
+def _consume_element(element: Any, provider: str, batch_id: str,
+                     index: int, stats: dict) -> None:
+    mod = adapters.module_for(provider)
+    # 元素级 schema 校验（SL-09/01）：42/字符串/null/异构 dict 都不许伪装
+    try:
+        if not mod.detect(element):
+            raise ValueError(f"element {index} is not a {provider} conversation")
+        draft = mod.normalize_conversation(element)
+    except Exception:
+        stats["parse_failures"] += 1
+        return
+    if draft.id_synthetic:
+        draft.provider_conversation_id = mod.synthetic_conversation_id(
+            batch_id, index)
+    if not draft.messages:
+        stats["conversations_empty"] += 1
+
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conv_row_id = _ensure_conversation(conn, provider, batch_id,
+                                               draft, stats, index)
+            if conv_row_id is None:
+                stats["parse_failures"] += 1
+                conn.execute("COMMIT")
+                return
+            snapshot_id = _ensure_snapshot(conn, batch_id, conv_row_id,
+                                           draft)
+            prev_seq_map = _latest_published_snapshot_members(
+                conn, conv_row_id, exclude_batch=batch_id)
+            existing = {
+                r["provider_message_id"]: r["content_hash"] for r in conn.execute(
+                    "SELECT provider_message_id, content_hash FROM"
+                    " source_messages WHERE provider=? AND"
+                    " provider_conversation_id=?",
+                    (provider, draft.provider_conversation_id))}
+            local_members: dict[int, str] = {}
+            local_pids: set[str] = set()  # 本会话内已处理（有界：单会话）
+            try:
+                for msg in mod.normalize_messages(draft, batch_id):
+                    stats["messages_total"] += 1
+                    stats[f"sender_{msg.normalized_sender}"] += 1
+                    if msg.id_synthetic:
+                        stats["messages_missing_uuid"] += 1
+                    if msg.text:
+                        stats["messages_with_text"] += 1
+                    if msg.has_thinking:
+                        stats["messages_with_thinking"] += 1
+                    if msg.has_tool_content:
+                        stats["messages_with_tool_content"] += 1
+                    if msg.attachments:
+                        stats["messages_with_attachments"] += 1
+                    _track_time_bounds(msg, stats)
+
+                    chash = _content_hash(msg)
+                    pid = msg.provider_message_id
+                    # sequence 只在本快照内解释；重复序号映射不同消息、
+                    # 或与最近成功快照同序号不同消息 → 显式计冲突（SL-07）
+                    if msg.sequence in local_members and \
+                            local_members[msg.sequence] != pid:
+                        stats["sequence_conflicts"] += 1
+                    local_members[msg.sequence] = pid
+                    if msg.sequence in prev_seq_map and \
+                            prev_seq_map[msg.sequence] != pid:
+                        stats["sequence_conflicts"] += 1
+                    conn.execute(
+                        "INSERT OR REPLACE INTO source_snapshot_members"
+                        "(snapshot_id, provider_message_id, sequence,"
+                        " content_hash) VALUES(?,?,?,?)",
+                        (snapshot_id, pid, msg.sequence, chash))
+
+                    if pid in local_pids:
+                        # 同一文件内同 UUID 已出现过：保留首个（母本可查）
+                        stats["messages_duplicate_in_file"] += 1
+                        if existing.get(pid) != chash:
+                            stats["version_conflicts"] += 1
+                            _record_version(conn, provider, pid, chash,
+                                            batch_id)
+                        continue
+                    if pid in existing:
+                        if existing[pid] == chash:
+                            stats["messages_skipped_existing"] += 1
+                        else:
+                            # SL-07：同 UUID 新内容 → 不可变版本留档，
+                            # 当前行不覆盖、不静默跳过
+                            stats["version_conflicts"] += 1
+                            _record_version(conn, provider, pid, chash,
+                                            batch_id)
+                        local_pids.add(pid)
+                        continue
+                    try:
+                        _insert_message(conn, provider, conv_row_id,
+                                        batch_id, msg, chash)
+                    except sqlite3.IntegrityError:
+                        stats["messages_duplicate_in_file"] += 1
+                        continue
+                    existing[pid] = chash
+                    local_pids.add(pid)
+                    _record_version(conn, provider, pid, chash, batch_id)
+                    stats["messages_new"] += 1
+            except ValueError as e:
+                # 消息级违规（非对象/超限）：计 parse failure，中止本会话
+                stats["parse_failures"] += 1
+                _note_parse_failure(conn, batch_id, index, str(e)[:200])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _note_parse_failure(conn, batch_id: str, index: int, reason: str) -> None:
+    """元素级失败位置留痕（audit 事件；不含正文内容）。"""
+    audit.record(conn, "source.parse.failure", "system",
+                 resource_id=batch_id,
+                 payload={"conversation_index": index,
+                          "reason": reason[:200]})
+
+
+def _ensure_conversation(conn, provider: str, batch_id: str, draft,
+                         stats: dict, index: int) -> str | None:
+    row = conn.execute(
+        "SELECT id FROM source_conversations"
+        " WHERE provider=? AND provider_conversation_id=?",
+        (provider, draft.provider_conversation_id)).fetchone()
+    if row:
+        stats["conversations_existing"] += 1
+        conn.execute(
+            "UPDATE source_conversations SET last_import_batch_id=?"
+            " WHERE id=?", (batch_id, row["id"]))
+        return row["id"]
+    stats["conversations_new"] += 1
+    conv_id = f"sc_{_uuid.uuid4().hex[:14]}"
+    conn.execute(
+        "INSERT INTO source_conversations(id, provider,"
+        " provider_conversation_id, title, created_at, updated_at,"
+        " first_import_batch_id, last_import_batch_id) VALUES(?,?,?,?,?,?,?,?)",
+        (conv_id, provider, draft.provider_conversation_id, draft.title,
+         draft.created_at, draft.updated_at, batch_id, batch_id))
+    return conv_id
+
+
+def _ensure_snapshot(conn, batch_id: str, conv_row_id: str,
+                     draft) -> str:
+    """会话快照：每次导入一个观察（title/时间元数据不再永久停留首见）。"""
+    row = conn.execute(
+        "SELECT snapshot_id FROM source_conversation_snapshots"
+        " WHERE conversation_id=? AND batch_id=?",
+        (conv_row_id, batch_id)).fetchone()
+    if row:
+        return row["snapshot_id"]
+    snapshot_id = f"snap_{_uuid.uuid4().hex[:12]}"
+    conn.execute(
+        "INSERT INTO source_conversation_snapshots(snapshot_id,"
+        " conversation_id, batch_id, title, observed_created_at,"
+        " observed_updated_at, message_count, created_at)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (snapshot_id, conv_row_id, batch_id, draft.title,
+         draft.created_at, draft.updated_at, len(draft.messages), _now()))
+    return snapshot_id
+
+
+def _latest_published_snapshot_members(conn, conv_row_id: str,
+                                       exclude_batch: str) -> dict[int, str]:
+    """最近一次成功批次的快照成员 {sequence: provider_message_id}。"""
+    snap = conn.execute(
+        "SELECT s.snapshot_id FROM source_conversation_snapshots s"
+        " JOIN source_import_batches b ON b.batch_id=s.batch_id"
+        " WHERE s.conversation_id=? AND b.status='completed'"
+        " AND s.batch_id<>? ORDER BY s.created_at DESC LIMIT 1",
+        (conv_row_id, exclude_batch)).fetchone()
+    if snap is None:
+        return {}
+    return {r["sequence"]: r["provider_message_id"] for r in conn.execute(
+        "SELECT provider_message_id, sequence FROM source_snapshot_members"
+        " WHERE snapshot_id=?", (snap["snapshot_id"],))}
+
+
+def _content_hash(msg: NormalizedMessage) -> str:
+    """规范化内容身份（SL-07 判定同 UUID 内容是否变化）。"""
+    basis = json.dumps({
+        "raw_sender": msg.raw_sender,
+        "normalized_sender": msg.normalized_sender,
+        "created_at": msg.created_at, "updated_at": msg.updated_at,
+        "parent": msg.parent_provider_message_id,
+        "text": msg.text, "content": msg.content_json,
+        "attachments": msg.attachments,
+        "has_thinking": msg.has_thinking,
+        "has_tool_content": msg.has_tool_content,
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+def _record_version(conn, provider: str, pid: str, chash: str,
+                    batch_id: str) -> None:
+    vid = "smv_" + hashlib.sha256(
+        (provider + pid + chash).encode()).hexdigest()[:20]
+    conn.execute(
+        "INSERT OR IGNORE INTO source_message_versions(version_id, provider,"
+        " provider_message_id, content_hash, observed_batch_id, observed_at)"
+        " VALUES(?,?,?,?,?,?)",
+        (vid, provider, pid, chash, batch_id, _now()))
+
+
+def _insert_message(conn, provider: str, conv_row_id: str, batch_id: str,
+                    msg: NormalizedMessage, chash: str) -> None:
+    speaker = claude_adapter.speaker_of(msg.normalized_sender)
+    msg_row_id = f"sm_{_uuid.uuid4().hex[:16]}"
+    conn.execute(_INSERT_MSG_SQL, (
+        msg_row_id, conv_row_id, provider,
+        msg.provider_conversation_id, msg.provider_message_id,
+        1 if msg.id_synthetic else 0, msg.parent_provider_message_id,
+        msg.raw_sender, msg.normalized_sender, speaker,
+        msg.created_at, msg.updated_at, msg.occurred_date,
+        msg.text, msg.content_json,
+        json.dumps(msg.attachments, ensure_ascii=False),
+        1 if msg.has_thinking else 0, 1 if msg.has_tool_content else 0,
+        msg.sequence, batch_id, chash))
+    if msg.text and msg.normalized_sender in ("human", "assistant"):
+        text_norm = projection.normalize_search_text(msg.text)
+        conn.execute(
+            "INSERT INTO source_search_docs(message_id, provider_message_id,"
+            " text_norm, text_hash, projection_version, built_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (msg_row_id, msg.provider_message_id, text_norm,
+             hashlib.sha256(msg.text.encode()).hexdigest(),
+             config.SOURCE_PROJECTION_VERSION, _now()))
+        conn.execute(
+            "INSERT INTO source_fts(message_id, text_norm) VALUES(?,?)",
+            (msg_row_id, text_norm))
+
+
+def _track_time_bounds(msg, stats: dict) -> None:
+    dt = claude_adapter.parse_created_at(msg.created_at)
+    if dt is None:
+        return
+    iso = dt.isoformat()
+    if stats["min_created_at"] is None or iso < stats["min_created_at"]:
+        stats["min_created_at"] = iso
+    if stats["max_created_at"] is None or iso > stats["max_created_at"]:
+        stats["max_created_at"] = iso
+
+
+def _refresh_conversation_aggregates(batch_id: str,
+                                     published_only: bool = True) -> None:
+    flt = " AND m.published=1" if published_only else ""
+    with db.formal() as conn:
+        conn.execute(
+            "UPDATE source_conversations SET"
+            f" message_count=(SELECT COUNT(*) FROM source_messages m"
+            f"  WHERE m.conversation_id=source_conversations.id{flt}),"
+            f" first_message_at=(SELECT MIN(created_at) FROM"
+            f"  source_messages m WHERE"
+            f"  m.conversation_id=source_conversations.id{flt}),"
+            f" last_message_at=(SELECT MAX(created_at) FROM"
+            f"  source_messages m WHERE"
+            f"  m.conversation_id=source_conversations.id{flt})"
+            " WHERE last_import_batch_id=?", (batch_id,))
+
+
+# ---------------------------------------------------------------- 校验
+
+def _verify_integrity(provider: str, batch_id: str) -> dict:
+    """导入后完整性校验（SL-01/11）：问题真实计算并阻断 completed。"""
+    problems: list[dict] = []
+    with db.formal() as conn:
+        # SL-11：speaker NULL 必须检出（IS NOT 对 NULL 语义正确）
+        bad_speaker = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND ("
+            " (normalized_sender='human' AND speaker IS NOT 'qiaosheng') OR"
+            " (normalized_sender='assistant' AND speaker IS NOT 'jiaming')"
+            " OR (normalized_sender NOT IN ('human','assistant')"
+            "  AND speaker IS NOT NULL))", (provider,)).fetchone()["c"]
+        if bad_speaker:
+            problems.append({"check": "speaker_mapping",
+                             "violations": bad_speaker})
+
+        text_no_sender = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            " text<>'' AND normalized_sender NOT IN ('human','assistant')",
+            (provider,)).fetchone()["c"]
+        if text_no_sender:
+            problems.append({"check": "text_only_for_human_assistant",
+                             "violations": text_no_sender})
+
+        dup_ids = conn.execute(
+            "SELECT COUNT(*) AS c FROM (SELECT provider_message_id"
+            " FROM source_messages WHERE provider=? GROUP BY"
+            " provider_message_id HAVING COUNT(*)>1)",
+            (provider,)).fetchone()["c"]
+        if dup_ids:
+            problems.append({"check": "duplicate_provider_message_id",
+                             "violations": dup_ids})
+
+        fts_docs = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_search_docs d"
+            " JOIN source_messages m ON m.id=d.message_id"
+            " WHERE m.provider=? AND m.text<>''", (provider,)).fetchone()["c"]
+        texts = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages"
+            " WHERE provider=? AND text<>''", (provider,)).fetchone()["c"]
+        if fts_docs != texts:
+            problems.append({"check": "search_docs_coverage",
+                             "docs": fts_docs, "texts": texts})
+
+        bad_dates = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            " occurred_date IS NULL AND created_at IS NOT NULL",
+            (provider,)).fetchone()["c"]
+        if bad_dates:
+            problems.append({"check": "occurred_date_coverage",
+                             "violations": bad_dates})
+
+        # 投影 hash 抽样（真实校验，非写死断言）
+        sample = conn.execute(
+            "SELECT d.text_hash, m.text FROM source_search_docs d"
+            " JOIN source_messages m ON m.id=d.message_id"
+            " WHERE m.provider=? ORDER BY d.built_at DESC LIMIT 50",
+            (provider,)).fetchall()
+        bad_hash = sum(
+            1 for r in sample
+            if hashlib.sha256((r["text"] or "").encode()).hexdigest()
+            != r["text_hash"])
+        if bad_hash:
+            problems.append({"check": "projection_hash",
+                             "violations": bad_hash, "sampled": len(sample)})
+
+        # 已发布消息必须属于 completed 批次（当前批次除外：接管中的
+        # running 批次本批消息保持 published=1 是合法中间态）
+        orphan_published = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages m LEFT JOIN"
+            " source_import_batches b ON b.batch_id=m.import_batch_id"
+            " WHERE m.published=1 AND m.import_batch_id<>? AND"
+            " (b.batch_id IS NULL OR b.status<>'completed')",
+            (batch_id,)).fetchone()["c"]
+        if orphan_published:
+            problems.append({"check": "published_batch_consistency",
+                             "violations": orphan_published})
+
+        parent_kept = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            " parent_provider_message_id IS NOT NULL",
+            (provider,)).fetchone()["c"]
+        unknown_with_speaker = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            " normalized_sender='unknown' AND speaker IS NOT NULL",
+            (provider,)).fetchone()["c"]
+        human_speaker_null = conn.execute(
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            " normalized_sender='human' AND speaker IS NULL",
+            (provider,)).fetchone()["c"]
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "parent_messages_kept": parent_kept,
+        "sample_checks": {
+            "human_speaker_null": human_speaker_null,
+            "unknown_with_speaker": unknown_with_speaker,
+            "projection_hash_sampled": len(sample),
+        },
+    }
+
+
+# ---------------------------------------------------------------- 批次簿记
+
+def _set_raw_path(batch_id: str, raw_path: str, original_name: str) -> None:
+    with db.formal() as conn:
+        conn.execute(
+            "UPDATE source_import_batches SET raw_path=?, original_filename=?"
+            " WHERE batch_id=?", (raw_path, original_name, batch_id))
+
+
+def _fail_batch(batch_id: str, provider: str, error: str,
+                stats: dict | None = None) -> None:
+    with db.formal() as conn:
+        conn.execute(
+            "UPDATE source_import_batches SET status='failed', error=?,"
+            " stats=COALESCE(?, stats), import_finished_at=?"
+            " WHERE batch_id=?",
+            (error[:2000],
+             json.dumps(stats, ensure_ascii=False) if stats else None,
+             _now(), batch_id))
+    archive.write_metadata(provider, batch_id, {
+        "status": "failed", "error": error[:2000],
+        **({"stats": stats} if stats else {})})
+
+
+def _record_failed_import(principal_id: str, staged: Path, provider: str,
+                          reason: str, filename: str | None) -> None:
+    """格式识别失败也要留痕：failed 批次（provider=unknown）。"""
+    try:
+        sha256, size = archive.sha256_file(staged)
+    except OSError:
+        sha256, size = "", 0
+    batch_id = f"sib_{_uuid.uuid4().hex[:12]}"
+    with db.formal() as conn:
+        conn.execute(
+            "INSERT INTO source_import_batches(batch_id, provider, status,"
+            " original_filename, original_bytes, sha256, raw_path,"
+            " parser_version, import_started_at, import_finished_at,"
+            " error, imported_by)"
+            " VALUES(?,?,'failed',?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(provider, sha256) DO UPDATE SET"
+            " error=excluded.error, imported_by=excluded.imported_by,"
+            " import_started_at=excluded.import_started_at,"
+            " import_finished_at=excluded.import_finished_at",
+            (batch_id, provider, filename or "", size, sha256, "",
+             PARSER_VERSION, _now(), _now(), reason[:2000], principal_id))

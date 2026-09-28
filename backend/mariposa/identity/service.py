@@ -17,7 +17,6 @@ PRINCIPALS = [
     ("qiaosheng", "江乔生", "human"),
     ("jiaming", "周家明", "agent"),
     ("worker", "维护工具人", "agent"),
-    ("linshijian", "林石见", "agent"),  # v2：受限审查者（只可改候选摘要/tags）
     ("system", "系统", "system"),
 ]
 
@@ -38,27 +37,37 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def seed(tokens: dict[str, str]) -> None:
-    """按 principal_id -> 明文 token 建立绑定。token 明文不落库。"""
+def seed(tokens: dict[str, str]) -> dict[str, str]:
+    """按 principal_id -> 明文 token 建立绑定（A09：不复活、不覆盖）。
+
+    只在绑定**不存在**时插入；已存在的绑定（含已撤销 revoked=1 或已
+    更换 token）一律不动——重复 seed 不能覆盖撤销状态或替换 owner
+    token。token 明文不落库。返回 {pid: "inserted"|"kept"}。
+    """
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            known = {p[0] for p in PRINCIPALS}
             for pid, name, kind in PRINCIPALS:
                 conn.execute(
                     "INSERT OR IGNORE INTO principals(principal_id, display_name, kind)"
                     " VALUES(?,?,?)",
                     (pid, name, kind),
                 )
+            result: dict[str, str] = {}
             for pid, token in tokens.items():
-                if pid not in {p[0] for p in PRINCIPALS}:
+                if pid not in known:
                     raise ValueError(f"unknown principal: {pid}")
-                conn.execute(
-                    "INSERT OR REPLACE INTO client_bindings"
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO client_bindings"
                     "(binding_id, token_hash, principal_id, entry_source, created_at)"
                     " VALUES(?,?,?,?,datetime('now'))",
-                    (f"binding_{pid}", _hash_token(token), pid, _entry_source(pid)),
+                    (f"binding_{pid}", _hash_token(token), pid,
+                     _entry_source(pid)),
                 )
+                result[pid] = "inserted" if cur.rowcount else "kept"
             conn.execute("COMMIT")
+            return result
         except Exception:
             conn.execute("ROLLBACK")
             raise
@@ -69,7 +78,6 @@ def _entry_source(pid: str) -> str:
         "qiaosheng": "web",
         "jiaming": "claude_chat",
         "worker": "gpt_chat",
-        "linshijian": "review_mcp",
         "system": "scheduler",
     }[pid]
 

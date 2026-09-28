@@ -16,7 +16,6 @@ from .. import audit, db
 from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
 from ..retrieval import projection
 from . import categories as categories_mod
-from . import retention as retention_mod
 from . import our_words as our_words_mod
 
 _APPROVERS = {"qiaosheng", "jiaming"}  # 工具人无审批权（§6.3）
@@ -168,9 +167,9 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
                 (f"ow_{uuid.uuid4().hex[:12]}", memory_id, i,
                  w["speaker"], w["text"], w["expression_kind"],
                  w["source_ref"], principal_id, now))
-    if v2:
-        # R03/D01：期限从首次 hold 时刻起算，不用事件日期/迁移时间
-        retention_mod.create_for_memory(conn, memory_id, cats or [], now)
+    # v1.7 P3：分层写入后建分字段投影（title/event/words）
+    from ..retrieval import field_projection as _fp
+    _fp.build_for_memory(conn, memory_id)
 
 
 def _insert_raw_refs(conn, memory_id: str, raw_refs: list[dict],
@@ -211,7 +210,14 @@ def hold(
     v2 = any(v is not None for v in (original_title, categories, mood,
                                      our_words, creation_mode,
                                      occurred_start, occurred_end))
-    cats = categories_mod.validate(categories) if categories else None
+    # v1.7 §3.2：分类必填——没有未分类默认值，不为通过测试自动补"日常"
+    from ..errors import Forbidden as _F
+    if not categories:
+        raise _F("CATEGORY_REQUIRED：至少一项合法分类（九分类，v1.7）",
+                 code="CATEGORY_REQUIRED",
+                 allowed=sorted(("daily", "milestone", "sad", "sweet", "date",
+                                 "plan", "sex", "anniversary", "reloplay")))
+    cats = categories_mod.validate(categories)
     mode = creation_mode or ("contemporaneous" if v2 else None)
     if mode is not None and mode not in ("contemporaneous", "retrospective"):
         raise Forbidden("creation_mode must be contemporaneous/retrospective",
@@ -322,209 +328,3 @@ def versions_read(conn, memory_id: str) -> list[dict]:
     if not rows:
         raise NotFound("memory not found", memory_id=memory_id)
     return [dict(r) for r in rows]
-
-
-def apply_forget_approval(
-    conn,
-    *,
-    proposal_id: str,
-    proposal_revision: int,
-    proposal_hash: str,
-    expected_memory_version: int,
-    decided_by: str,
-    decided_binding: str,
-    payload: dict,
-) -> dict:
-    """在正式库事务内应用遗忘审批（§6.4 第 3-4 步）。conn 由调用方开启事务。"""
-    envelope = conn.execute(
-        "SELECT * FROM proposal_envelopes WHERE proposal_id=?", (proposal_id,)
-    ).fetchone()
-    if envelope is None:
-        raise NotFound("proposal envelope not found", proposal_id=proposal_id)
-    if envelope["proposal_hash"] != proposal_hash:
-        raise ProposalHashMismatch(
-            "proposal hash differs from submitted revision",
-            submitted=envelope["proposal_hash"], provided=proposal_hash,
-        )
-    if conn.execute(
-        "SELECT 1 FROM proposal_resolutions WHERE proposal_id=?", (proposal_id,)
-    ).fetchone():
-        raise ProposalAlreadyResolved("proposal already resolved", proposal_id=proposal_id)
-
-    recomputed = canonical_hash(payload)
-    if recomputed != proposal_hash:
-        raise ProposalHashMismatch(
-            "workspace payload no longer matches frozen hash",
-            expected=proposal_hash, recomputed=recomputed,
-        )
-
-    memory_id = envelope["target_memory_id"]
-    m = conn.execute("SELECT * FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
-    if m is None:
-        raise NotFound("target memory missing", memory_id=memory_id)
-    if conn.execute(
-            "SELECT 1 FROM memory_retention WHERE memory_id=?",
-            (memory_id,)).fetchone():
-        # v2 分层桶由 v2 审查闭环独占管理（保留线索/受限审查/终裁）；
-        # v1 审批应用对其关闭，防止绕过 REV-05/06/07 的线索防线
-        raise Forbidden("v2 分层桶必须走 v2 审查闭环生效",
-                        code="V2_MANAGED_TARGET", memory_id=memory_id)
-    if m["current_version_no"] != expected_memory_version:
-        raise ProposalStale(
-            "base memory version moved",
-            expected=expected_memory_version,
-            current=m["current_version_no"],
-        )
-    if m["pinned"] or m["protected"] or m["anchor"]:
-        raise Forbidden("memory is pinned/protected/anchor", memory_id=memory_id)
-
-    summary = payload.get("compressed_summary")
-    if not summary or not str(summary).strip():
-        raise Forbidden("compressed_summary required")
-
-    new_version = m["current_version_no"] + 1
-    now = _now()
-    version_payload = {
-        "representation": "forgotten_summary",
-        "compressed_summary": summary,
-        "origin": "forget_approval",
-        "proposal_id": proposal_id,
-    }
-    conn.execute(
-        "INSERT INTO memory_versions(memory_id, version_no, representation, hold_text,"
-        " compressed_summary, why_remember, authored_by, confirmed_by, origin_kind,"
-        " payload_hash, created_at)"
-        " VALUES(?,?, 'forgotten_summary', NULL, ?, NULL, 'worker', ?, 'forget_approval', ?, ?)",
-        (memory_id, new_version, summary, decided_by, canonical_hash(version_payload), now),
-    )
-    conn.execute(
-        "UPDATE memories SET current_version_no=?, compression_state='forgotten_summary',"
-        " representation_state=representation_state+1, updated_at=? WHERE memory_id=?",
-        (new_version, now, memory_id),
-    )
-    projection.upsert(
-        conn, memory_id, new_version, "forgotten_summary",
-        projection.build_forgotten(str(summary)),
-        whitelist_body=projection.normalize_search_text(str(summary)),
-    )
-    conn.execute(
-        "INSERT INTO proposal_resolutions(proposal_id, decision, decided_by, decided_binding,"
-        " applied_memory_version, decided_at) VALUES(?, 'approved', ?, ?, ?, ?)",
-        (proposal_id, decided_by, decided_binding, new_version, now),
-    )
-    audit.record(
-        conn, "workspace.proposal.resolved", decided_by,
-        resource_id=proposal_id,
-        payload={"decision": "approved", "memory": memory_id})
-    audit.record(
-        conn, "memory.forgotten", decided_by,
-        resource_id=memory_id, resource_version=new_version,
-        initiated_by=envelope["submitted_by"],
-        payload={
-            "proposal_id": proposal_id,
-            "representation": "forgotten_summary",
-            "reversible": True,
-        },
-    )
-    return {"memory_id": memory_id, "new_version": new_version}
-
-
-def reject_or_withdraw(
-    conn, proposal_id: str, decision: str, decided_by: str, decided_binding: str
-) -> None:
-    if conn.execute(
-        "SELECT 1 FROM proposal_resolutions WHERE proposal_id=?", (proposal_id,)
-    ).fetchone():
-        raise ProposalAlreadyResolved("proposal already resolved", proposal_id=proposal_id)
-    conn.execute(
-        "INSERT INTO proposal_resolutions(proposal_id, decision, decided_by, decided_binding,"
-        " applied_memory_version, decided_at) VALUES(?,?,?, ?,NULL,?)",
-        (proposal_id, decision, decided_by, decided_binding, _now()),
-    )
-    audit.record(
-        conn, "workspace.proposal.resolved", decided_by,
-        resource_id=proposal_id, payload={"decision": decision})
-    audit.record(
-        conn, f"workspace.proposal.{decision}", decided_by,
-        resource_id=proposal_id,
-        payload={"decision": decision},
-    )
-
-
-def restore(
-    principal,
-    memory_id: str,
-    expected_current_version: int,
-    target_history_version: int | None = None,
-) -> dict:
-    """恢复：默认回到最近一次压缩前的 full 版本；新版本号，不改写旧笔迹。"""
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            m = conn.execute("SELECT * FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
-            if m is None:
-                raise NotFound("memory not found", memory_id=memory_id)
-            if m["current_version_no"] != expected_current_version:
-                raise VersionConflict(
-                    "memory version moved",
-                    expected=expected_current_version, current=m["current_version_no"]
-                )
-            rows = conn.execute(
-                "SELECT * FROM memory_versions WHERE memory_id=? ORDER BY version_no",
-                (memory_id,),
-            ).fetchall()
-            source = None
-            if target_history_version is not None:
-                source = next(
-                    (r for r in rows if r["version_no"] == target_history_version), None
-                )
-                if source is None:
-                    raise NotFound("target history version not found",
-                                   memory_id=memory_id, version=target_history_version)
-            else:
-                source = next(
-                    (r for r in reversed(rows) if r["representation"] == "full"), None
-                )
-            if source is None:
-                raise NotFound("no full version to restore to", memory_id=memory_id)
-
-            new_version = m["current_version_no"] + 1
-            now = _now()
-            payload = {
-                "representation": "full",
-                "hold_text": source["hold_text"],
-                "why_remember": source["why_remember"],
-                "restored_from_version": source["version_no"],
-            }
-            conn.execute(
-                "INSERT INTO memory_versions(memory_id, version_no, representation,"
-                " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
-                " origin_kind, payload_hash, created_at)"
-                " VALUES(?,?,'full',?,NULL,?,? ,?,'restore',?,?)",
-                (
-                    memory_id, new_version, source["hold_text"], source["why_remember"],
-                    source["authored_by"], principal.principal_id, canonical_hash(payload), now,
-                ),
-            )
-            conn.execute(
-                "UPDATE memories SET current_version_no=?, compression_state='full',"
-                " representation_state=representation_state+1, updated_at=?"
-                " WHERE memory_id=?",
-                (new_version, now, memory_id),
-            )
-            projection.upsert(
-                conn, memory_id, new_version, "full",
-                projection.build_full(source["hold_text"] or "", source["why_remember"]),
-                whitelist_body=projection.normalize_search_text(
-                    source["hold_text"] or ""),
-            )
-            audit.record(
-                conn, "memory.restored", principal.principal_id,
-                resource_id=memory_id, resource_version=new_version,
-                payload={"restored_from_version": source["version_no"]},
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"memory_id": memory_id, "new_version": new_version}

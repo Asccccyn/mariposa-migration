@@ -57,6 +57,28 @@
   table.cal td.selected { outline:2px solid var(--accent); }
   table.cal td.other { color:#4a4f57; }
   .day-items { margin-top:12px; }
+  /* ── 原文 Source Layer ── */
+  .src-conv { cursor:pointer; }
+  .src-msg { display:flex; flex-direction:column; margin:8px 0; align-items:flex-start; }
+  .src-msg.human { align-items:flex-end; }
+  .src-meta { font-size:11px; color:var(--dim); display:flex; gap:8px; align-items:center; margin-bottom:3px; }
+  .src-bubble { max-width:82%; border-radius:12px; padding:8px 12px; border:1px solid var(--line);
+                background:#111318; white-space:pre-wrap; word-break:break-word; font-size:13px; }
+  .src-msg.human .src-bubble { background:#1d2b30; border-color:#2c4a4a; }
+  .src-badge { display:inline-block; padding:0 7px; border-radius:10px; font-size:10px;
+               border:1px solid var(--line); color:var(--dim); }
+  .src-badge.think { color:var(--warn); border-color:var(--warn); }
+  .src-badge.tool { color:#8fa8d9; border-color:#415a8a; }
+  .src-evidence { max-width:82%; }
+  .src-evidence details { border:1px dashed var(--line); border-radius:8px; padding:4px 8px;
+                          margin-top:3px; font-size:11px; color:var(--dim); }
+  .src-evidence pre { white-space:pre-wrap; word-break:break-all; max-height:220px; overflow:auto;
+                      font-size:11px; }
+  .src-md p { margin:.3em 0; } .src-md h1,.src-md h2,.src-md h3 { font-size:1em; margin:.4em 0 .2em; }
+  .src-md code { background:#0c0e12; padding:0 4px; border-radius:3px; }
+  .src-md pre { background:#0c0e12; padding:8px; border-radius:6px; overflow-x:auto; margin:.4em 0; }
+  .src-md pre code { background:transparent; padding:0; }
+  .src-md ul,.src-md ol { padding-left:1.4em; margin:.3em 0; }
 </style>
 </head>
 <body>
@@ -76,10 +98,10 @@
 
 <nav>
   <button data-page="memSec" class="active">记忆 / 检索</button>
-  <button data-page="wsSec">工作区 / 审批</button>
   <button data-page="calSec">日历</button>
   <button data-page="planSec">计划</button>
   <button data-page="quoteSec">她的话</button>
+  <button data-page="srcSec">原文</button>
   <button data-page="delSec">删除申请</button>
 </nav>
 
@@ -89,15 +111,9 @@
     <div class="row">
       <input id="q" placeholder="关键词，例如：蓝瓷小钥匙" style="flex:1" />
       <button id="searchBtn" class="primary">搜索</button>
-      <button id="scanBtn">扫描遗忘候选</button>
       <button id="newHoldBtn">写测试记忆</button>
     </div>
     <div id="memResults"></div>
-  </section>
-
-  <!-- 工作区 -->
-  <section class="page" id="wsSec">
-    <div id="wsList"></div>
   </section>
 
   <!-- 日历 -->
@@ -139,6 +155,36 @@
       <button id="quoteSearch">搜索</button>
     </div>
     <div id="quoteList"></div>
+  </section>
+
+  <!-- 原文 Source Layer -->
+  <section class="page" id="srcSec">
+    <div class="row">
+      <input type="file" id="srcFile" accept=".json,.zip" />
+      <button id="srcUploadBtn" class="primary">上传并导入</button>
+      <span class="empty" id="srcUploadNote">Claude conversations.json / 导出 zip；母本入 Raw Archive</span>
+    </div>
+    <div class="row">
+      <input id="srcPath" placeholder="或输入宿主本地路径 /path/to/conversations.json" style="flex:1" />
+      <button id="srcImportPathBtn">从路径导入</button>
+      <button id="srcBatchesBtn">导入批次</button>
+    </div>
+    <div id="srcBatches"></div>
+    <div class="row" style="margin-top:12px">
+      <input id="srcQ" placeholder="全文关键词（只查双方正文；专项检索，不是记忆召回）" style="flex:2" />
+      <select id="srcSender">
+        <option value="">双方正文（默认）</option>
+        <option value="human">只她的（human）</option>
+        <option value="assistant">只他的（assistant）</option>
+        <option value="system,tool,unknown">系统/工具/未知（证据面）</option>
+      </select>
+      <input type="date" id="srcDateFrom" />
+      <input type="date" id="srcDateTo" />
+      <button id="srcSearchBtn" class="primary">搜原文</button>
+    </div>
+    <div id="srcResults"></div>
+    <div id="srcConvView"></div>
+    <div id="srcConvList"></div>
   </section>
 
   <!-- 删除申请 -->
@@ -199,6 +245,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (btn.dataset.page === 'calSec') renderCalendar();
     if (btn.dataset.page === 'planSec') loadPlans();
     if (btn.dataset.page === 'quoteSec') loadQuotes();
+    if (btn.dataset.page === 'srcSec') loadSourceConvs();
     if (btn.dataset.page === 'delSec') loadDeletions();
   };
 });
@@ -209,17 +256,10 @@ $('saveToken').onclick = () => {
   state.who = $('who').value;
   localStorage.setItem('mariposa_token', state.token);
   localStorage.setItem('mariposa_who', state.who);
-  searchMemories(''); loadWorkspace();
+  searchMemories('');
 };
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
-$('scanBtn').onclick = async () => {
-  try {
-    const d = await api('workspace.forgetting.scan', {});
-    setStatus(`扫描完成：新建草稿 ${d.created.length}，跳过 ${d.skipped.length}`);
-    loadWorkspace();
-  } catch (e) { setStatus(e.message, true); }
-};
 $('newHoldBtn').onclick = async () => {
   const text = prompt('记忆正文（合成测试数据）', '');
   if (!text) return;
@@ -246,11 +286,10 @@ async function searchMemories(q) {
       div.className = 'item';
       div.innerHTML =
         `<div class="meta"><span>${esc(mem.memory_id)}</span>` +
-        `<span class="tag ${esc(mem.representation)}">${mem.representation === 'forgotten_summary' ? '遗忘摘要' : 'full'}</span>` +
+        `<span class="tag ${esc(mem.representation)}">${mem.representation === 'full' ? 'full' : '旧表示(' + mem.representation + ')'}</span>` +
         `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span></div>` +
         `<div class="mem-detail">${esc(mem.text)}</div>` +
-        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span>` +
-        `<button data-restore="${esc(mem.memory_id)}" data-ver="${mem.version}" data-rep="${esc(mem.representation)}">恢复旧正文</button></div>`;
+        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span></div>`;
       box.appendChild(div);
     }
     if (d.degraded) setStatus('语义检索未配置：' + d.degraded);
@@ -268,83 +307,6 @@ $('memResults').addEventListener('click', async (e) => {
     setStatus('已恢复到 v' + d.new_version);
     searchMemories($('q').value);
   } catch (err) { setStatus(err.message, true); }
-});
-
-// ---------- 工作区 ----------
-async function loadWorkspace() {
-  const box = $('wsList');
-  try {
-    const d = await api('workspace.proposals.list', {});
-    if (!d.items.length) { box.innerHTML = '<div class="empty">暂无工作项（点「扫描遗忘候选」生成）</div>'; return; }
-    box.innerHTML = '';
-    for (const it of d.items) {
-      const div = document.createElement('div');
-      div.className = 'item';
-      const stale = it.current_memory_version !== null &&
-                    it.base_memory_version !== null &&
-                    it.current_memory_version !== it.base_memory_version;
-      div.innerHTML =
-        `<div class="meta"><span>${esc(it.proposal_id)}</span><span>r${it.revision}</span>` +
-        `<span>${esc(it.created_by)}</span>` +
-        `<span class="tag state-${esc(it.state)}">${esc(it.state)}</span>` +
-        (stale && it.state === 'submitted' ? '<span class="tag">STALE</span>' : '') + `</div>` +
-        `<div>目标：<code>${esc(it.target_memory_id)}</code> base v${it.base_memory_version ?? '?'} / 当前 v${it.current_memory_version ?? '?'}</div>` +
-        (it.state === 'draft'
-          ? `<textarea id="sum-${esc(it.proposal_id)}" placeholder="审批后作为唯一检索依据的摘要">${esc(it.compressed_summary || '')}</textarea>` +
-            `<textarea id="rsn-${esc(it.proposal_id)}" placeholder="理由">${esc(it.reason || '')}</textarea>` +
-            `<div class="row"><button data-act="revise" data-id="${esc(it.proposal_id)}">保存修订</button>` +
-            `<button class="primary" data-act="submit" data-id="${esc(it.proposal_id)}" data-rev="${it.revision}">提交</button></div>`
-          : it.state === 'submitted'
-          ? `<div class="mem-detail">${esc(it.compressed_summary || '(无摘要)')}</div>` +
-            `<pre class="hash">hash ${esc(it.proposal_hash)}</pre>` +
-            `<div class="row"><button class="primary" data-act="approve" data-id="${esc(it.proposal_id)}" ` +
-            `data-rev="${it.revision}" data-hash="${esc(it.proposal_hash)}" data-base="${it.base_memory_version}">批准</button>` +
-            `<button class="danger" data-act="reject" data-id="${esc(it.proposal_id)}" data-rev="${it.revision}" ` +
-            `data-hash="${esc(it.proposal_hash)}" data-base="${it.base_memory_version}">拒绝</button></div>`
-          : `<div class="mem-detail">${esc(it.compressed_summary || '')}</div>`);
-      box.appendChild(div);
-    }
-  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-}
-
-$('wsList').addEventListener('click', async (e) => {
-  const btn = e.target.closest('button');
-  if (!btn) return;
-  const id = btn.dataset.id;
-  try {
-    if (btn.dataset.act === 'revise') {
-      const d = await api('workspace.proposals.revise', {
-        proposal_id: id,
-        compressed_summary: document.getElementById('sum-' + id).value,
-        reason: document.getElementById('rsn-' + id).value,
-      });
-      setStatus('修订到 r' + d.revision);
-      loadWorkspace();
-    } else if (btn.dataset.act === 'submit') {
-      const d = await api('workspace.proposals.submit',
-        { proposal_id: id, revision: parseInt(btn.dataset.rev) }, 'submit-' + id + '-' + btn.dataset.rev);
-      setStatus('已提交，hash 冻结');
-      loadWorkspace();
-    } else if (btn.dataset.act === 'approve') {
-      const d = await api('memory.forgetting.decide', {
-        proposal_id: id, proposal_revision: parseInt(btn.dataset.rev),
-        proposal_hash: btn.dataset.hash,
-        expected_memory_version: parseInt(btn.dataset.base),
-        decision: 'approve',
-      }, 'decide-' + id + '-' + btn.dataset.rev);
-      setStatus('已批准并应用：新版本 v' + (d.new_version ?? '?'));
-      loadWorkspace();
-    } else if (btn.dataset.act === 'reject') {
-      await api('memory.forgetting.decide', {
-        proposal_id: id, proposal_revision: parseInt(btn.dataset.rev),
-        proposal_hash: btn.dataset.hash,
-        expected_memory_version: parseInt(btn.dataset.base),
-        decision: 'reject',
-      }, 'reject-' + id + '-' + btn.dataset.rev);
-      setStatus('已拒绝');
-      loadWorkspace();
-    }
-  } catch (err) { setStatus(err.message, true); loadWorkspace(); }
 });
 
 // ---------- 日历 ----------
@@ -396,7 +358,7 @@ function showCalDay(dateKey) {
         `<div class="meta"><span class="tag ${esc(it.kind)}">${esc(it.kind)}</span>` +
         `<span>${esc(it.status)}</span><span>v${it.resource_version}</span></div>` +
         `<div class="mem-detail"><strong>${esc(it.title)}</strong></div>` +
-        (it.kind === 'memory' ? `<div class="meta" style="margin-top:4px">preview_kind: <code>${esc(it.preview_kind)}</code>${it.preview_kind === 'forgotten_summary' ? '（遗忘桶：仅摘要）' : ''}</div>` : '');
+        (it.kind === 'memory' ? `<div class="meta" style="margin-top:4px">preview_kind: <code>${esc(it.preview_kind)}</code>${it.preview_kind === 'forgotten_summary' ? '（旧摘要表示，待离线迁移）' : ''}</div>` : '');
       box.appendChild(div);
     }
   }).catch(e => { $('calDay').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
@@ -557,8 +519,216 @@ $('delList').addEventListener('click', async (e) => {
   } catch (err) { setStatus(err.message, true); loadDeletions(); }
 });
 
-function refreshAll() { searchMemories(''); loadWorkspace(); }
-if (state.token) refreshAll();
+function refreshAll() { searchMemories(''); }
+if (state.token) refreshAll();// ---------- 原文 Source Layer ----------
+const srcState = { conv: null, nextSeq: null, hasMore: false };
+
+function srcMd(raw) {
+  // 安全 Markdown：先全量 HTML 转义，再做有限转换；链接不加 href（不跳转外部）
+  let s = esc(raw);
+  const blocks = [];
+  s = s.replace(/```([\s\S]*?)```/g, (_, code) => {
+    blocks.push('<pre><code>' + code.replace(/^\n/, '') + '</code></pre>');
+    return '\x00B' + (blocks.length - 1) + '\x00';
+  });
+  s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>')
+       .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+       .replace(/^# (.*)$/gm, '<h1>$1</h1>')
+       .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+       .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+       .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  const lines = s.split('\n'); let html = '', inUl = false, inOl = false;
+  const closeLists = () => { if (inUl) { html += '</ul>'; inUl = false; }
+                             if (inOl) { html += '</ol>'; inOl = false; } };
+  for (const ln of lines) {
+    const ul = ln.match(/^[-*] (.*)$/), ol = ln.match(/^\d+\. (.*)$/);
+    if (ul) { if (!inUl) { closeLists(); html += '<ul>'; inUl = true; }
+              html += '<li>' + ul[1] + '</li>'; }
+    else if (ol) { if (!inOl) { closeLists(); html += '<ol>'; inOl = true; }
+                   html += '<li>' + ol[1] + '</li>'; }
+    else if (ln.trim() === '') { closeLists(); html += '</p><p>'; }
+    else { closeLists(); html += ln + '\n'; }
+  }
+  closeLists();
+  html = '<p>' + html + '</p>'
+    .replace(/<p><\/p>/g, '').replace(/<p>\s*<\/p>/g, '')
+    .replace(/\n/g, '<br>');
+  html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
+  return html;
+}
+
+function srcTime(t) { return t ? t.replace('T', ' ').replace(/\.\d+.*$/, '') : '—'; }
+
+function srcMsgHtml(m) {
+  const isHuman = m.normalized_sender === 'human';
+  const name = m.speaker_display || ({system:'system', tool:'tool', unknown:'未知角色'}[m.normalized_sender] || m.normalized_sender);
+  const badges = [];
+  if (m.has_thinking) badges.push('<span class="src-badge think">thinking（不入正文）</span>');
+  if (m.has_tool_content) badges.push('<span class="src-badge tool">工具内容（不入正文）</span>');
+  if (m.id_synthetic) badges.push('<span class="src-badge">缺失UUID·合成ID</span>');
+  for (const a of (m.attachments || []))
+    badges.push(`<span class="src-badge">附件 ${esc(a.file_name || a.filename || a.title || a.block_type || '')}</span>`);
+  let evidence = '';
+  if (m.has_thinking || m.has_tool_content || m.normalized_sender === 'unknown' || m.normalized_sender === 'system' || m.normalized_sender === 'tool')
+    evidence = '<details><summary>证据内容（thinking / 工具 / 非正文块）</summary>' +
+      `<div class="src-md">${srcMd(m.text || '（正文为空；完整结构见 content_json，母本在 Raw Archive）')}</div>` +
+      '</details>';
+  const body = m.text
+    ? `<div class="src-bubble"><div class="src-md">${srcMd(m.text)}</div></div>`
+    : `<div class="src-bubble" style="opacity:.6">（无用户可见正文）</div>`;
+  return `<div class="src-msg ${isHuman ? 'human' : ''}" id="srcmsg-${esc(m.provider_message_id)}">` +
+    `<div class="src-meta"><b>${esc(name)}</b><span class="mono">${srcTime(m.created_at)}</span>` +
+    `<span>${esc(m.occurred_date || '')}</span>${badges.join('')}</div>` +
+    body + `<div class="src-evidence">${evidence}</div></div>`;
+}
+
+async function loadSourceConvs() {
+  const box = $('srcConvList');
+  try {
+    const d = await api('source.conversations.list', { limit: 50 });
+    if (!d.conversations.length) {
+      box.innerHTML = '<div class="empty">尚无原文：上传 Claude conversations.json 开始</div>'; return;
+    }
+    box.innerHTML = '<h3 style="margin:14px 0 6px">原文会话（按更新时间）</h3>';
+    for (const c of d.conversations) {
+      const div = document.createElement('div');
+      div.className = 'item src-conv';
+      div.innerHTML = `<div><b>${esc(c.title)}</b></div>` +
+        `<div class="meta"><span>${c.message_count} 条</span>` +
+        `<span>${srcTime(c.first_message_at)} → ${srcTime(c.last_message_at)}</span>` +
+        `<code>${esc(c.provider_conversation_id)}</code></div>`;
+      div.onclick = () => openSourceConv(c.id, null);
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function openSourceConv(convId, aroundSeq) {
+  srcState.conv = convId; srcState.nextSeq = null; srcState.hasMore = false;
+  const box = $('srcConvView');
+  try {
+    const d = await api('source.conversation.get', {
+      conversation_id: convId, limit: 100,
+      ...(aroundSeq != null ? { around_seq: aroundSeq } : {}) });
+    renderSourceConv(d, aroundSeq != null);
+    if (aroundSeq != null) {
+      const el = document.getElementById('srcConvView');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+function renderSourceConv(d, jump) {
+  const box = $('srcConvView');
+  const c = d.conversation;
+  let html = `<div class="item"><div class="row">` +
+    `<b style="flex:1">${esc(c.title)}</b>` +
+    `<button id="srcConvBack">← 返回列表</button></div>` +
+    `<div class="meta"><span>${c.message_count} 条</span>` +
+    `<span>会话 ${srcTime(c.created_at)} → ${srcTime(c.updated_at)}</span>` +
+    `<code>${esc(c.provider_conversation_id)}</code></div></div>`;
+  html += d.messages.map(srcMsgHtml).join('');
+  box.innerHTML = html;
+  $('srcConvBack').onclick = () => { box.innerHTML = ''; loadSourceConvs(); };
+  if (d.has_more) wireSrcMore(d.prev_before_seq);
+}
+
+function wireSrcMore(prevSeq) {
+  const box = $('srcConvView');
+  const row = document.createElement('div');
+  row.className = 'row';
+  const btn = document.createElement('button');
+  btn.textContent = '加载更早消息 ↓';
+  row.appendChild(btn); box.appendChild(row);
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const d2 = await api('source.conversation.get', {
+        conversation_id: srcState.conv, before_seq: prevSeq, limit: 100 });
+      row.remove();
+      box.insertAdjacentHTML('beforeend', d2.messages.map(srcMsgHtml).join(''));
+      if (d2.has_more) wireSrcMore(d2.prev_before_seq);
+    } catch (e) { btn.disabled = false; setStatus(e.message, true); }
+  };
+}
+
+async function sourceSearch() {
+  const box = $('srcResults');
+  const q = $('srcQ').value.trim();
+  try {
+    const args = { limit: 30 };
+    if (q) args.query = q;
+    const sv = $('srcSender').value;
+    if (sv) args.senders = sv.split(',');
+    if ($('srcDateFrom').value) args.date_from = $('srcDateFrom').value;
+    if ($('srcDateTo').value) args.date_to = $('srcDateTo').value;
+    const d = await api('source.search', args);
+    if (!d.hits.length) { box.innerHTML = '<div class="empty">原文无命中（默认只查双方正文）</div>'; return; }
+    box.innerHTML = `<div class="meta" style="margin-top:10px">原文命中 ${d.hits.length} 条 · ` +
+      `<span class="tag">专项检索 · 不属于记忆召回</span></div>`;
+    for (const h of d.hits) {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="meta"><b>${esc(h.speaker_display || h.normalized_sender)}</b>` +
+        `<span class="mono">${srcTime(h.created_at)}</span><span>${esc(h.occurred_date || '')}</span>` +
+        `<span>${esc(h.conversation_title || '')}</span></div>` +
+        `<div class="mem-detail">${esc(h.excerpt || h.text || '')}</div>` +
+        `<div class="meta"><code>${esc(h.provider_message_id)}</code></div>`;
+      div.onclick = () => openSourceConv(h.provider_conversation_id, h.sequence);
+      box.appendChild(div);
+    }
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function sourceImport(path, filename) {
+  setStatus('原文导入中…（大文件流式解析，稍等）');
+  try {
+    const d = await api('source.import', { path, filename }, 'srcimp-' + Date.now());
+    const s = d.stats;
+    setStatus(`导入${d.status === 'already_imported' ? '（已存在，幂等返回）' : '完成'}：` +
+      `${s.conversations_total} 会话 / ${s.messages_new} 新消息 / ` +
+      `human ${s.sender_human} · assistant ${s.sender_assistant} · ` +
+      `system/tool/unknown ${s.sender_system + s.sender_tool + s.sender_unknown}` +
+      (s.verify_problems && s.verify_problems.length
+        ? ` · ⚠ 校验问题 ${s.verify_problems.length}` : ' · 校验通过'));
+    loadSourceConvs();
+  } catch (e) { setStatus('导入失败：' + e.message, true); }
+}
+
+$('srcUploadBtn').onclick = async () => {
+  const f = $('srcFile').files[0];
+  if (!f) { setStatus('先选择文件', true); return; }
+  setStatus(`上传 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）…`);
+  try {
+    const res = await fetch('/api/source/upload', {
+      method: 'PUT', headers: { 'Authorization': 'Bearer ' + state.token }, body: f });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) throw new Error(body.error?.code + ': ' + (body.error?.message || res.status));
+    await sourceImport(body.data.upload_path, f.name);
+  } catch (e) { setStatus('上传失败：' + e.message, true); }
+};
+
+$('srcImportPathBtn').onclick = () => {
+  const p = $('srcPath').value.trim();
+  if (p) sourceImport(p, null);
+};
+$('srcSearchBtn').onclick = sourceSearch;
+$('srcQ').addEventListener('keydown', e => { if (e.key === 'Enter') sourceSearch(); });
+$('srcBatchesBtn').onclick = async () => {
+  const box = $('srcBatches');
+  try {
+    const d = await api('source.import.batches', { limit: 20 });
+    if (!d.batches.length) { box.innerHTML = '<div class="empty">无导入批次</div>'; return; }
+    box.innerHTML = d.batches.map(b =>
+      `<div class="item"><div class="meta"><b>${esc(b.batch_id)}</b>` +
+      `<span class="tag ${b.status === 'completed' ? 'full' : (b.status === 'failed' ? 'state-rejected' : 'state-pending')}">${esc(b.status)}</span>` +
+      `<span>${esc(b.original_filename)}</span><span>${(b.original_bytes / 1048576).toFixed(1)} MB</span>` +
+      `<span class="mono">${srcTime(b.import_started_at)}</span></div>` +
+      (b.error ? `<div class="err">${esc(b.error)}</div>` : '') +
+      `<pre class="hash">${esc(b.sha256)}</pre></div>`).join('');
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+};
+
 </script>
 </body>
 </html>

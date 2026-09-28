@@ -19,7 +19,6 @@ from mariposa.capabilities import registry
 from mariposa.errors import Forbidden, OutcomeUnknown
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.workspace import service as workspace
 from tests.conftest import TOKENS, _test_root_allowed, reset_all
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -79,87 +78,12 @@ class TestB06TestRootFuse:
         assert "fail closed" in out
 
 
-class TestB08ScanStarvation:
-    """V2-RET-09：前页全是跳过项时，后续到期项仍能被发现。"""
-
-    def _hold(self, actors, text, date):
-        return memory.hold(actors["jiaming"], text=text, why_remember=None,
-                           memory_date=date, date_confidence="exact")
-
-    def test_no_starvation_when_earliest_rows_skipped(self, actors):
-        # 25 条 date_unknown（NULL 日期在 ASC 排序中排最前、全部被跳过）
-        # + 1 条真正到期：旧实现 LIMIT 20 全被跳过 → 到期项永远扫不到；
-        # 新实现游标推进，跳过项不阻塞后续发现。
-        for i in range(25):
-            memory.hold(actors["jiaming"], text=f"无日期琐事{i}",
-                        memory_date=None, date_confidence="unknown")
-        due = self._hold(actors, "真正到期的旧记忆", "2020-01-01")["memory_id"]
-        out = workspace.scan_candidates(actors["worker"], min_idle_days=0,
-                                        limit=5)
-        assert any(c["target_memory_id"] == due for c in out["created"]), out
-        assert out["skipped"], "无日期项应被如实跳过"
-
-    def test_cursor_is_stable_and_reported(self, actors):
-        self._hold(actors, "旧事1", "2020-01-01")
-        self._hold(actors, "旧事2", "2019-01-01")
-        out = workspace.scan_candidates(actors["worker"], min_idle_days=0, limit=1)
-        assert out["exhausted"] is False
-        assert out["next_cursor"] and len(out["next_cursor"]) == 2
-        out2 = workspace.scan_candidates(actors["worker"], min_idle_days=0,
-                                         limit=5, cursor=tuple(out["next_cursor"]))
-        assert out2["exhausted"] is True
-        assert out2["next_cursor"] is None
-
-    def test_defer_updates_work_item_state(self, actors):
-        h = self._hold(actors, "待挂起的事", "2020-01-01")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "摘要。", "r")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        out = workspace.decide(actors["qiaosheng"], sub["proposal_id"],
-                               sub["revision"], sub["proposal_hash"],
-                               sub["base_memory_version"], "defer")
-        assert out["decision"] == "defer"
-        items = {i["proposal_id"]: i for i in
-                 workspace.list_items(states=["deferred"])}
-        assert sub["proposal_id"] in items, "defer 必须实际落到 deferred 状态"
-        # defer 后桶挂起：扫描跳过（open_item），不再产生新草稿
-        scan2 = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        assert all(c["target_memory_id"] != h["memory_id"] for c in scan2["created"])
-
-    def test_withdraw_capability_reachable_by_worker(self, actors):
-        h = self._hold(actors, "将被撤回的事", "2020-01-01")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "摘要。", "r")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        out = registry.invoke(actors["worker"], "workspace.proposals.withdraw",
-                              {"proposal_id": sub["proposal_id"]}, None)
-        assert out["data"]["state"] == "withdrawn"
-        with pytest.raises(Forbidden):
-            workspace.withdraw(actors["worker"], sub["proposal_id"])  # 已终局
-
-    def test_worker_cannot_withdraw_others_proposal(self, actors):
-        h = self._hold(actors, "他人提案", "2020-01-01")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["jiaming"], prop["proposal_id"],
-                                     "摘要。", "r")
-        sub = workspace.submit(actors["jiaming"], prop["proposal_id"], rev["revision"])
-        with pytest.raises(Forbidden):
-            workspace.withdraw(actors["worker"], sub["proposal_id"])
-
-
 class TestB02CrashWindow:
     """V2-OPS-05：running 残留不盲重放，显式对账后才能重试。"""
 
     ARGS = {"text": "崩溃后重试", "memory_date": "2026-01-01",
-            "date_confidence": "exact", "raw_pending": False}
+            "date_confidence": "exact", "raw_pending": False,
+            "categories": ["daily"]}
 
     def _seed_running(self, key, age_seconds):
         old = (datetime.now(timezone.utc)

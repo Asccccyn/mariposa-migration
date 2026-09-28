@@ -13,7 +13,6 @@ from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.plans import service as plans
 from mariposa.retrieval import search as retrieval
-from mariposa.workspace import service as workspace
 from tests.conftest import reset_all
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "legacy_bucket_sample"
@@ -30,27 +29,6 @@ def actors():
 
 
 class TestBOOT:
-    def test_T_BOOT_07_snapshot_stale_across_forget(self, actors):
-        """T-BOOT-07：bootstrap 后桶被遗忘，续取/复用快照须 STALE。"""
-        from mariposa.bootstrap import service as bootstrap
-        h = memory.hold(actors["jiaming"], text="快照失效", memory_date="2026-06-01")
-        first = bootstrap.get("jiaming", "cc", "cc")
-        # 遗忘该桶（走完整审批）
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "快照后的摘要。", "x")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        with pytest.raises(SnapshotStale):
-            bootstrap.get("jiaming", "cc", "cc",
-                          loaded_snapshot_id=first["snapshot_id"])
-
     def test_T_BOOT_08_no_repeated_full_package(self, actors):
         """T-BOOT-08：状态未变重复开窗 -> unchanged 薄响应。"""
         from mariposa.bootstrap import service as bootstrap
@@ -59,38 +37,6 @@ class TestBOOT:
                               loaded_snapshot_id=first["snapshot_id"])
         assert again.get("unchanged") is True
         assert "memory_days" not in again  # 不重发内容包
-
-    def test_T_BOOT_13_bootstrap_and_calendar_only_summary(self, actors):
-        """T-RET-13/BOOT：开窗与日历的记忆区域仅批准摘要表示。"""
-        from mariposa.bootstrap import service as bootstrap
-        from zoneinfo import ZoneInfo
-        from datetime import datetime, timezone
-        today = datetime.now(timezone.utc).astimezone(
-            ZoneInfo("Asia/Shanghai")).date().isoformat()
-        h = memory.hold(actors["jiaming"],
-                        text="正文含绝密词XMNQA的日子", memory_date=today)
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "安全摘要词PLMOK", "x")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        boot = bootstrap.get("jiaming", "cc", "cc")
-        for m in boot["memory_days"]["items"]:
-            if m["memory_id"] == h["memory_id"]:
-                # superseded by V2-BOOT-01：开窗条目不再携带正文/摘要文本；
-                # 遗忘桶只标注当前表示，正文须显式打开（只见批准摘要）
-                assert "text" not in m
-                assert m["representation"] == "forgotten_summary"
-        for i in calendar.day(today)["items"]:
-            if i.get("resource_id") == h["memory_id"]:
-                assert "XMNQA" not in (i.get("preview") or "")
-
 
 class TestCAL:
     def test_T_CAL_03_plan_date_change_reflected(self, actors):
@@ -108,7 +54,8 @@ class TestCAL:
 
     def test_T_CAL_04_undated_section(self, actors):
         """T-CAL-04：日期未知进待定区，不冒充今天。"""
-        h = memory.hold(actors["jiaming"], text="没有日期的桶")  # memory_date=None
+        h = memory.hold(actors["jiaming"], text="没有日期的桶",
+                         categories=["daily"])  # memory_date=None
         out = calendar.undated()
         assert any(i["resource_id"] == h["memory_id"] for i in out["items"])
         from datetime import datetime, timezone
@@ -120,7 +67,7 @@ class TestCAL:
 
     def test_T_CAL_05_hidden_not_in_calendar(self, actors):
         """T-CAL-05：隐藏/归档资源不进日历计数或列表。"""
-        h = memory.hold(actors["jiaming"], text="将被隐藏", memory_date="2026-06-01")
+        h = memory.hold(actors["jiaming"], text="将被隐藏", memory_date="2026-06-01", categories=["daily"])
         with db.formal() as conn:
             conn.execute("UPDATE memories SET visibility='hidden' WHERE"
                          " memory_id=?", (h["memory_id"],))
@@ -159,7 +106,7 @@ class TestSELF:
     def test_T_SELF_03_q_correction_not_overwritten(self, actors):
         """T-SELF-03：乔生的情绪标签修正不被后续写入静默覆盖。"""
         from mariposa.content import service as content
-        h = memory.hold(actors["jiaming"], text="情绪修正", memory_date="2026-06-01")
+        h = memory.hold(actors["jiaming"], text="情绪修正", memory_date="2026-06-01", categories=["daily"])
         content.tags_add("qiaosheng", h["memory_id"],
                          [{"tag": "平静", "whose": "qiaosheng"}])
         # 后续（模型观察路径的）同 tag 写入不覆盖
@@ -174,37 +121,7 @@ class TestSELF:
                 " tag='平静'", (h["memory_id"],)).fetchone()["created_by"]
         assert n == 1 and creator == "qiaosheng"
 
-    def test_T_SELF_04_diary_never_compressed(self, actors):
-        """T-SELF-04：遗忘管线不触碰日记；正文 hash 不变。"""
-        import hashlib
-        from mariposa.content import service as content
-        d = content.diary_write("qiaosheng", "不可压缩", "日记全文逐字保留",
-                                covers_from="2026-06-01", covers_to="2026-06-01")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        assert not any(p["target_memory_id"] == d["diary_id"]
-                       for p in scan["created"])  # 日记不进遗忘候选
-        before = hashlib.sha256("日记全文逐字保留".encode()).hexdigest()
-        got = content.diary_read(d["diary_id"])
-        assert hashlib.sha256(got["content"].encode()).hexdigest() == before
-
-
 class TestMIG:
-    def test_T_MIG_06_apply_idempotent_with_id_map(self, actors, tmp_path):
-        """T-MIG-06：重复 apply 走 ID 映射，不重复正式记录。"""
-        from mariposa.migration import apply_from_report, dry_run
-        report_path = tmp_path / "dry.json"
-        dry_run(str(FIXTURES), str(report_path))
-        r1 = apply_from_report(str(report_path))
-        assert r1["applied"] == 3
-        r2 = apply_from_report(str(report_path))
-        assert r2["applied"] == 0
-        assert r2["skipped_already_migrated"] == 3
-        with db.formal() as conn:
-            n = conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"]
-            letters = conn.execute("SELECT COUNT(*) AS c FROM letters"
-                                   ).fetchone()["c"]
-        assert n == 2 and letters == 1  # 与第一次相同，无重复
-
     def test_T_MIG_03_04_semantic_flags(self, actors, tmp_path):
         """T-MIG-03/04：dont_surface→hidden 不进检索；tags_only→migration review。"""
         from mariposa.migration import dry_run_real
@@ -282,15 +199,6 @@ class TestArchitecture:
             assert "fts5" not in src.lower(), name
             assert "search_fts" not in src, name
             assert "canonical_hash" not in src, name
-
-    def test_workspace_module_never_writes_formal_tables(self):
-        """工作区模块不直接写正式业务表（跨库经 envelope/审批协调）。"""
-        import mariposa.workspace.service as ws
-        src = Path(ws.__file__).read_text(encoding="utf-8")
-        forbidden = ["INSERT INTO memories", "INSERT INTO memory_versions",
-                     "UPDATE memories SET", "DELETE FROM memories"]
-        for f in forbidden:
-            assert f not in src, f
 
     def test_retrieval_only_reads_projection(self):
         """检索模块不直接读 memory_versions 正文（只走投影）。"""

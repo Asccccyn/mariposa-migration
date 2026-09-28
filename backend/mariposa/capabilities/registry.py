@@ -18,7 +18,6 @@ from ..retrieval import search as retrieval_search
 from ..recall import service as recall_service
 from ..recall import store as recall_store
 from ..retrieval import words as words_mod
-from ..workspace import service as workspace
 from ..raw import service as raw
 from ..quotes import service as quotes
 from ..quotes import semantic_review
@@ -37,6 +36,9 @@ from ..maintenance import service as maintenance
 from ..media import service as media
 from ..moments import service as moments
 from ..reminders import service as reminders
+from ..source import importer as source_importer
+from ..source import query as source_query
+from ..source import binding as source_binding
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,10 @@ def _register() -> dict[str, Capability]:
         description="修订本人回忆（原话留底，supersedes 链）")
     add("memory.recollections.list", _recollect_list, _owners(), False,
         description="列出桶的回忆（当前版；include_history 含修订历史）")
+    add("memory.keep.revoke", _keep_revoke, _owners(), True,
+        description="撤销本人的「留」标记（谁留谁撤；撤销不重置年龄）")
+    add("memory.keeps.list", _keeps_list, _owners(), False,
+        description="桶的留标记列表（含已撤销；阶段用有效标记）")
     add("memory.our_words.append", _our_words_append, _owners(), True,
         description="追加我们的话（speaker/ordinal；不参与召回）")
     add("memory.our_words.list", _our_words_list, _owners(), False,
@@ -112,42 +118,23 @@ def _register() -> dict[str, Capability]:
         description="显式结束：resolved/cancelled；终止本次自动补查")
     add("memory.words.recall", _words_recall, _owners(), False,
         description="独立 words 通道检索（我们的话；不混入 event ranking）")
+    add("memory.find_words", _find_words, _owners(), False,
+        description="v1.7 找话专项：全量可见 our_words 跨阶段检索")
+    add("memory.recall.round2", _recall_round2, _owners(), True,
+        description="v1.7 Round 2 原文深搜：同 session+revision、"
+                    "ROUND1_COMPLETE 回执、judge 完成且 reason 属闭集")
     add("memory.words.get", _words_get, _owners(), False,
         description="按 word_id 读单条话语（当前表示校验；遗忘=disabled）")
     add("memory.context.validate", _context_validate, _owners(), False,
         description="装配上下文的资源引用+版本重查（estómago/CC 换窗用）")
     add("memory.versions.read", _versions, _owners(), False,
         description="明确展开历史版本，不自动 restore")
-    add("memory.restore", _restore, _owners(), True,
-        description="恢复到最近压缩前版本（或指定历史 full 版本）")
-    add("workspace.forgetting.scan", _scan, {"worker", "qiaosheng", "jiaming"}, False,
-        description="扫描遗忘候选并落工作区草稿；不改正式桶")
-    add("workspace.proposals.revise", _revise, {"worker", "qiaosheng", "jiaming"}, True,
-        description="修订未提交草稿")
-    add("workspace.proposals.submit", _submit, {"worker", "qiaosheng", "jiaming"}, True,
-        True, description="提交提案：冻结版本并登记正式 envelope")
-    add("workspace.proposals.list", _list_items, _everyone(), False,
-        description="列出工作区提案")
-    add("memory.forgetting.decide", _decide, _owners(), True, True,
-        description="审批遗忘提案（worker 拒绝）")
-    add("workspace.proposals.withdraw", _withdraw, {"worker", "qiaosheng", "jiaming"},
-        True, description="撤回自己未终局的已提交提案（提交者或两人；不要求hash）")
+    # v1.7：遗忘/摘要/审查链已整体退役（决策 2026-09-28）——
+    # memory.restore、workspace.forgetting.*、workspace.proposals.*、
+    # memory.forgetting.decide、workspace.review.*、memory.retention.decide、
+    # workspace.memory.inspect 不再注册；旧请求获 UNKNOWN_CAPABILITY。
     add("maintenance.idempotency.reconcile", _idem_reconcile, _owners(), True,
         description="崩溃窗口对账：核实业务结果后清除 running 幂等占位")
-    add("workspace.forgetting.generate", _v2_generate,
-        {"worker", "qiaosheng", "jiaming"}, True,
-        description="v2：从到期队列生成审查项（候选摘要/tags；无正式写入权）")
-    add("workspace.review.claim", _v2_claim, {"linshijian"}, True,
-        description="林石见领取待审项（受限委托；不改原始字段）")
-    add("workspace.review.get", _v2_review_get,
-        {"linshijian", "qiaosheng", "jiaming", "worker"}, False,
-        description="审查材料：原标题/正文/心情/分类+候选稿版本+保留线索")
-    add("workspace.review.revise", _v2_review_revise, {"linshijian"}, True,
-        description="林石见只改候选summary_body/forget_tags；其余字段拒绝")
-    add("workspace.review.submit", _v2_review_submit, {"linshijian"}, True, True,
-        description="放行干净到期项或转疑难（release/escalate_*）")
-    add("memory.retention.decide", _v2_retention_decide, _owners(), True, True,
-        description="终裁 keep/continue/defer；共同话语限定周家明")
     add("raw.import", _raw_import, {"worker", "qiaosheng", "jiaming"}, True, True,
         description="导入原文（同源同消息 ID 幂等，不覆盖已存在消息）")
     add("raw.messages.list", _raw_list, _owners(), False,
@@ -156,6 +143,34 @@ def _register() -> dict[str, Capability]:
         description="独立原文查询，命中标 source=raw")
     add("raw.conversations.list", _raw_convs, _owners(), False,
         description="已收录会话列表")
+    # ===== Source Layer（原文层，2026-09-27；与 raw.* 相互独立）=====
+    add("source.import", _source_import, _owners(), True, True,
+        description="导入 Claude conversations 导出（.json/.zip；流式解析；"
+                    "Raw Archive 留只读母本；同 provider+sha256 幂等）")
+    add("source.import.status", _source_import_status, _owners(), False,
+        description="导入批次状态与统计（batch_id；失败含错误信息）")
+    add("source.import.batches", _source_import_batches, _owners(), False,
+        description="导入批次列表")
+    add("source.search", _source_search, _owners(), False,
+        description="原文专项检索：关键词/说话人/日期区间/会话。"
+                    "不是普通 Recall，不参与记忆召回（分层边界）")
+    add("source.message.get", _source_message_get, _owners(), False,
+        description="按 provider UUID 精确打开原文消息（含前后上下文）")
+    add("source.range.open", _source_range_open, _owners(), False,
+        description="打开原文消息区间（语义绑定的动态查看入口）")
+    add("source.conversation.get", _source_conversation_get, _owners(), False,
+        description="按 sequence 游标分页读原文会话（超长会话不整段拉取）")
+    add("source.conversations.list", _source_conversations_list, _owners(),
+        False, description="原文会话列表（标题/时间/条数）")
+    add("source.binding.bind", _source_bind, _owners(), True,
+        description="把 memory 绑定到原文消息区间（可叠加多个 range；"
+                    "默认消息边界，句内片段用可选 char offset）")
+    add("source.binding.list", _source_bindings, _owners(), False,
+        description="memory 的原文绑定列表")
+    add("source.binding.revoke", _source_bind_revoke, _owners(), True,
+        description="撤销一条原文绑定（行保留留历史）")
+    add("source.memory.open", _source_memory_open, _owners(), False,
+        description="按 memory 动态打开其绑定的原文区间（原文不复制进记忆）")
     add("memory.quotes.keep", _quote_keep, {"jiaming"}, True,
         description="周家明选取保留她的话（允许复述）")
     add("memory.quotes.list", _quote_list, _owners(), False,
@@ -287,8 +302,6 @@ def _register() -> dict[str, Capability]:
     add("reminder.create", _reminder_create, _owners(), True, description="创建提醒")
     add("reminder.list", _reminder_list, _owners(), False, description="提醒列表")
     add("reminder.cancel", _reminder_cancel, _owners(), True, description="取消提醒")
-    add("workspace.proposals.decide_batch", _decide_batch, _owners(), True, True,
-        description="批量决议（逐项冻结 ID/hash；拒绝写冷却）")
     add("memory.list", _memory_list, _owners(), False,
         description="记忆倒序列表（遗忘桶只给摘要表示）")
     add("memory.by_date", _by_date, _owners(), False, description="按事件日期查")
@@ -309,8 +322,6 @@ def _register() -> dict[str, Capability]:
         description="认领任务租约（30 分钟，持久化）")
     add("workspace.tasks.release", _task_release, {"worker", "qiaosheng", "jiaming"}, True,
         description="释放租约（仅认领人）")
-    add("workspace.memory.inspect", _memory_inspect, {"worker", "qiaosheng", "jiaming"}, False,
-        description="读取授权任务材料（不默认全库）")
     add("memory.quotes.get", _quote_get, _owners(), False, description="单条她的话")
     add("memory.quotes.by_memory", _quote_by_memory, _owners(), False,
         description="按记忆找相关她的话")
@@ -559,7 +570,8 @@ def _recollect_append(principal: Principal, a: dict) -> dict:
     from ..memory import recollections as rec_mod
     return rec_mod.append(principal, str(a.get("memory_id", "")),
                           str(a.get("receipt_id", "")),
-                          str(a.get("text", "")))
+                          str(a.get("text", "")),
+                          keep_wide=bool(a.get("keep_wide", False)))
 
 
 def _recollect_revise(principal: Principal, a: dict) -> dict:
@@ -586,8 +598,9 @@ def _our_words_list(principal: Principal, a: dict) -> dict:
 
 
 def _categories_replace(principal: Principal, a: dict) -> dict:
+    # v1.7：分类替换不再触发遗忘到期重算（retention 已退役）；
+    # 阶段由查询时按分类 H 现算（P2 接 phase_policy）。
     from ..memory import categories as cats_mod
-    from ..memory import retention as retention_mod
     from .. import db as _db
     with _db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -599,14 +612,12 @@ def _categories_replace(principal: Principal, a: dict) -> dict:
             cats_mod.replace(conn, str(a.get("memory_id", "")),
                              a.get("categories") or [],
                              principal.principal_id)
-            out = retention_mod.recompute(conn, str(a.get("memory_id", "")))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return {"memory_id": a.get("memory_id"),
-            "categories": a.get("categories"),
-            "due_date": out.get("due_date"), "status": out.get("status")}
+            "categories": a.get("categories")}
 
 
 def _i_get(principal: Principal, a: dict) -> dict:
@@ -710,34 +721,6 @@ def _context_validate(principal: Principal, a: dict) -> dict:
     return recall_service.validate_context(principal, a)
 
 
-def _restore(principal: Principal, a: dict) -> dict:
-    return memory.restore(
-        principal,
-        memory_id=str(a.get("memory_id", "")),
-        expected_current_version=int(a["expected_current_version"]),
-        target_history_version=a.get("target_history_version"),
-    )
-
-
-def _scan(principal: Principal, a: dict) -> dict:
-    from .. import config as _cfg
-    pv = a.get("policy_version")
-    if pv and pv != _cfg.POLICY_VERSION:
-        raise Forbidden("policy_version mismatch",
-                        code="VERSION_CONFLICT",
-                        expected=_cfg.POLICY_VERSION, got=pv)
-    cursor = a.get("cursor")
-    if cursor is not None and not (isinstance(cursor, list) and len(cursor) == 2):
-        raise Forbidden("cursor must be [memory_date, memory_id]",
-                        code="INVALID_ARGUMENT")
-    return workspace.scan_candidates(principal, a.get("min_idle_days"),
-                                     cursor=tuple(cursor) if cursor else None)
-
-
-def _withdraw(principal: Principal, a: dict) -> dict:
-    return workspace.withdraw(principal, str(a.get("proposal_id", "")))
-
-
 def _idem_reconcile(principal: Principal, a: dict) -> dict:
     return maintenance.idempotency_reconcile(
         principal.principal_id,
@@ -746,78 +729,48 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
         int(a.get("stale_seconds", 60)))
 
 
-def _v2_generate(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    review_mod.ensure_default_delegation()
-    return review_mod.generate(
-        principal, a.get("memory_id"),
-        str(a.get("candidate_summary", "")),
-        a.get("candidate_tags"))
+def _find_words(principal: Principal, a: dict) -> dict:
+    from ..recall import pipeline as pl
+    from .. import db
+    plan = dict(a.get("query_plan") or {})
+    plan.setdefault("original_request", a.get("original_request", ""))
+    if not plan.get("lexical_terms"):
+        plan["lexical_terms"] = [a.get("query", "") or
+                                 a.get("original_request", "")]
+    with db.formal() as conn:
+        return pl.find_words_candidates(conn, plan)
 
 
-def _v2_claim(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    review_mod.ensure_default_delegation()
-    return review_mod.claim(principal)
+def _recall_round2(principal: Principal, a: dict) -> dict:
+    from ..recall import pipeline as pl
+    from ..recall import store as recall_store
+    from ..errors import Forbidden as _F
+    sid = str(a.get("session_id", ""))
+    session = recall_store.require_session(sid)
+    revision = int(a.get("query_revision", session["current_revision"]))
+    gate = pl.round2_gate(
+        session, revision, str(a.get("reason", "")),
+        str(a.get("judge_status", "")),
+        bool(a.get("raw_search_authorized", False)),
+        bool(a.get("budget_available", True)))
+    if not gate["allowed"]:
+        raise _F("Round 2 gate 未满足（§6.4）",
+                 code="ROUND2_GATE_DENIED", gate=gate["gate"])
+    return {"gate": gate,
+            **pl.raw_deep_search(principal, dict(a.get("query_plan") or {}),
+                                 int(a.get("limit", 20)))}
 
 
-def _v2_review_get(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    return review_mod.get_item(principal, str(a.get("item_id", "")))
+def _keep_revoke(principal: Principal, a: dict) -> dict:
+    from ..memory import keep as keep_mod
+    return keep_mod.revoke(principal, str(a.get("mark_id", "")))
 
 
-def _v2_review_revise(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    return review_mod.revise(principal, str(a.get("item_id", "")),
-                             a.get("changes") or {})
-
-
-def _v2_review_submit(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    return review_mod.submit(
-        principal, str(a.get("item_id", "")),
-        str(a.get("decision", "")), int(a.get("expected_revision", 0)),
-        a.get("candidate_hash"))
-
-
-def _v2_retention_decide(principal: Principal, a: dict) -> dict:
-    from ..workspace import review as review_mod
-    return review_mod.decide_retention(
-        principal, str(a.get("item_id", "")), str(a.get("decision", "")))
-
-
-def _revise(principal: Principal, a: dict) -> dict:
-    return workspace.revise_draft(
-        principal,
-        proposal_id=str(a.get("proposal_id", "")),
-        compressed_summary=str(a.get("compressed_summary", "")),
-        reason=str(a.get("reason", "")),
-    )
-
-
-def _submit(principal: Principal, a: dict) -> dict:
-    return workspace.submit(
-        principal,
-        proposal_id=str(a.get("proposal_id", "")),
-        revision=int(a.get("proposal_revision", a.get("revision", 1))),
-        expected_hash=a.get("proposal_hash"),
-    )
-
-
-def _decide(principal: Principal, a: dict) -> dict:
-    return workspace.decide(
-        principal,
-        proposal_id=str(a.get("proposal_id", "")),
-        proposal_revision=int(a.get("proposal_revision", 0)),
-        proposal_hash=str(a.get("proposal_hash", "")),
-        expected_memory_version=int(a.get("expected_memory_version", 0)),
-        decision=str(a.get("decision", "")),
-    )
-
-
-def _list_items(principal: Principal, a: dict) -> dict:
-    states = a.get("states")
-    return {"items": workspace.list_items(states)}
+def _keeps_list(principal: Principal, a: dict) -> dict:
+    from ..memory import keep as keep_mod
+    return {"marks": keep_mod.marks_of(str(a.get("memory_id", ""))),
+            "active_keepers": keep_mod.active_keepers(
+                str(a.get("memory_id", "")))}
 
 
 def _raw_import(principal: Principal, a: dict) -> dict:
@@ -836,6 +789,96 @@ def _raw_search(principal: Principal, a: dict) -> dict:
 
 def _raw_convs(principal: Principal, a: dict) -> dict:
     return {"conversations": raw.conversations_list(int(a.get("limit", 50)))}
+
+
+# ===== Source Layer handlers =====
+
+def _source_import(principal: Principal, a: dict) -> dict:
+    path = str(a.get("path", "")).strip()
+    if not path:
+        raise Forbidden("path required（宿主本地文件路径或上传返回的路径）",
+                        code="SCHEMA_VIOLATION", capability="source.import")
+    return source_importer.import_file(
+        principal.principal_id, path, a.get("filename"))
+
+
+def _source_import_status(principal: Principal, a: dict) -> dict:
+    return source_importer.batch_status(str(a.get("batch_id", "")))
+
+
+def _source_import_batches(principal: Principal, a: dict) -> dict:
+    return {"batches": source_importer.batches_list(int(a.get("limit", 50)))}
+
+
+def _source_search(principal: Principal, a: dict) -> dict:
+    senders = a.get("senders")
+    return source_query.search(
+        a.get("query") or None,
+        senders=senders if isinstance(senders, list) else None,
+        provider=a.get("provider"),
+        conversation_id=a.get("conversation_id"),
+        date_from=a.get("date_from"), date_to=a.get("date_to"),
+        limit=int(a.get("limit", 20)), offset=int(a.get("offset", 0)))
+
+
+def _source_message_get(principal: Principal, a: dict) -> dict:
+    if not a.get("message_id") and not a.get("provider_message_id"):
+        raise Forbidden("message_id 或 provider_message_id 必填",
+                        code="SCHEMA_VIOLATION",
+                        capability="source.message.get")
+    return source_query.get_message(
+        message_id=a.get("message_id"),
+        provider_message_id=a.get("provider_message_id"),
+        context=int(a.get("context", 5)),
+        include_content=bool(a.get("include_content")))
+
+
+def _source_range_open(principal: Principal, a: dict) -> dict:
+    return source_query.open_range(
+        str(a.get("conversation_id", "")),
+        str(a.get("start_message_id", "")),
+        str(a.get("end_message_id", "")),
+        start_char_offset=a.get("start_char_offset"),
+        end_char_offset=a.get("end_char_offset"),
+        include_content=bool(a.get("include_content")))
+
+
+def _source_conversation_get(principal: Principal, a: dict) -> dict:
+    return source_query.get_conversation(
+        str(a.get("conversation_id", "")),
+        after_seq=a.get("after_seq"), before_seq=a.get("before_seq"),
+        around_seq=a.get("around_seq"), limit=int(a.get("limit", 100)))
+
+
+def _source_conversations_list(principal: Principal, a: dict) -> dict:
+    return source_query.conversations_list(
+        int(a.get("limit", 50)), int(a.get("offset", 0)), a.get("provider"))
+
+
+def _source_bind(principal: Principal, a: dict) -> dict:
+    return source_binding.bind(
+        principal.principal_id, str(a.get("memory_id", "")),
+        str(a.get("conversation_id", "")),
+        str(a.get("start_message_id", "")),
+        str(a.get("end_message_id", "")),
+        start_char_offset=a.get("start_char_offset"),
+        end_char_offset=a.get("end_char_offset"),
+        confidence=str(a.get("confidence", "exact")))
+
+
+def _source_bindings(principal: Principal, a: dict) -> dict:
+    return {"bindings": source_binding.ranges_of(str(a.get("memory_id", "")))}
+
+
+def _source_bind_revoke(principal: Principal, a: dict) -> dict:
+    return source_binding.revoke(principal.principal_id,
+                                 str(a.get("binding_id", "")))
+
+
+def _source_memory_open(principal: Principal, a: dict) -> dict:
+    return source_binding.open_for_memory(
+        str(a.get("memory_id", "")),
+        include_content=bool(a.get("include_content")))
 
 
 def _quote_keep(principal: Principal, a: dict) -> dict:
@@ -1196,13 +1239,6 @@ def _reminder_cancel(principal: Principal, a: dict) -> dict:
     return reminders.cancel(principal.principal_id, str(a.get("reminder_id", "")))
 
 
-def _decide_batch(principal: Principal, a: dict) -> dict:
-    items = a.get("items") or []
-    if not isinstance(items, list):
-        raise Forbidden("items must be a list")
-    return workspace.decide_batch(principal, items)
-
-
 def _memory_list(principal: Principal, a: dict) -> dict:
     return listing.list_memories(a.get("state"), int(a.get("limit", 50)),
                                  a.get("cursor_date"))
@@ -1259,11 +1295,6 @@ def _task_release(principal: Principal, a: dict) -> dict:
                                  str(a.get("lease_id", "")))
 
 
-def _memory_inspect(principal: Principal, a: dict) -> dict:
-    return ws_tasks.memory_inspect(principal.principal_id,
-                                   str(a.get("memory_id", "")))
-
-
 def _quote_get(principal: Principal, a: dict) -> dict:
     return quotes.get_quote(str(a.get("quote_id", "")))
 
@@ -1303,13 +1334,7 @@ def _settings_get(principal: Principal, a: dict) -> dict:
     return {
         "relationship_timezone": _cfg.RELATIONSHIP_TIMEZONE,
         "http": {"bind": _cfg.HTTP_BIND, "port": _cfg.HTTP_PORT},
-        "forgetting": {
-            "idle_days": _cfg.FORGET_IDLE_DAYS,
-            "schedule_enabled": _cfg.FORGET_SCHEDULE_ENABLED,
-            "reject_cooldown_days": _cfg.FORGET_REJECT_COOLDOWN_DAYS,
-            "scan_batch_size": _cfg.FORGET_SCAN_BATCH_SIZE,
-            "policy_version": _cfg.POLICY_VERSION,
-        },
+        "forgetting": {"status": "retired_v1_7"},
         "bootstrap": {
             "raw_messages": _raw.BOOT_RAW_MESSAGES,
             "memory_days": _bs.BOOT_MEMORY_DAYS,

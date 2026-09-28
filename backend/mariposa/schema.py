@@ -432,13 +432,6 @@ CREATE TABLE moment_versions(
   PRIMARY KEY(moment_id, version_no)
 );
 
-CREATE TABLE rejection_suppression(
-  target_memory_id TEXT NOT NULL,
-  suppressed_until TEXT NOT NULL,
-  reason TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(target_memory_id, suppressed_until)
-);
 """),
     (6, """
 ALTER TABLE memories ADD COLUMN source_state TEXT NOT NULL DEFAULT 'raw_pending'
@@ -523,7 +516,8 @@ CREATE TABLE migration_id_map(
 CREATE TABLE memory_categories(
   memory_id TEXT NOT NULL REFERENCES memories(memory_id),
   category TEXT NOT NULL CHECK(category IN
-    ('daily','milestone','sad','sweet','date','plan','sex','anniversary')),
+    ('daily','milestone','sad','sweet','date','plan','sex','anniversary',
+     'reloplay')),
   added_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY(memory_id, category)
@@ -586,46 +580,6 @@ CREATE TABLE memory_recollections(
 );
 CREATE INDEX idx_recollections_memory ON memory_recollections(memory_id, written_at);
 
-CREATE TABLE memory_retention(
-  memory_id TEXT PRIMARY KEY REFERENCES memories(memory_id),
-  policy_version TEXT NOT NULL,
-  policy_timezone TEXT NOT NULL,
-  basis_at TEXT,
-  basis_date TEXT,
-  due_date TEXT,
-  next_due_at TEXT,
-  last_explicit_open_at TEXT,
-  view_revision INTEGER NOT NULL DEFAULT 0,
-  retention_revision INTEGER NOT NULL DEFAULT 0,
-  permanent_reason TEXT,
-  retain_hint TEXT,
-  status TEXT NOT NULL CHECK(status IN
-    ('active','retained','date_gap','plan_managed','excluded'))
-);
-
-CREATE TABLE memory_summary_versions(
-  memory_id TEXT NOT NULL,
-  summary_version INTEGER NOT NULL,
-  summary_body TEXT NOT NULL,
-  forget_tags TEXT NOT NULL DEFAULT '[]',
-  source_version INTEGER,
-  source_hash TEXT,
-  proposal_id TEXT,
-  applied_at TEXT NOT NULL,
-  applied_by TEXT NOT NULL,
-  PRIMARY KEY(memory_id, summary_version)
-);
-
-CREATE TABLE review_delegations(
-  delegation_id TEXT PRIMARY KEY,
-  reviewed_principal TEXT NOT NULL,
-  allowed_actions TEXT NOT NULL DEFAULT '[]',
-  resource_scope TEXT NOT NULL DEFAULT 'all',
-  valid_from TEXT NOT NULL,
-  valid_to TEXT,
-  revoked INTEGER NOT NULL DEFAULT 0
-);
-
 CREATE TABLE i_documents(
   doc_id TEXT PRIMARY KEY,
   current_version_no INTEGER NOT NULL,
@@ -667,23 +621,6 @@ ALTER TABLE plans ADD COLUMN terminal_date TEXT;
 ALTER TABLE plans ADD COLUMN due_date TEXT;
 ALTER TABLE plans ADD COLUMN policy_timezone TEXT;
 ALTER TABLE plans ADD COLUMN terminal_revision INTEGER NOT NULL DEFAULT 0;
-
-CREATE TABLE forgetting_due_queue(
-  item_id TEXT PRIMARY KEY,
-  target_kind TEXT NOT NULL CHECK(target_kind IN ('memory','plan')),
-  target_id TEXT NOT NULL,
-  due_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK(status IN ('pending','leased','done','failed','dead')),
-  lease_id TEXT,
-  lease_expires_at TEXT,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(target_kind, target_id, due_date)
-);
-CREATE INDEX idx_due_queue_status ON forgetting_due_queue(status, due_date);
 
 CREATE TABLE anniversary_definitions(
   definition_id TEXT PRIMARY KEY,
@@ -730,9 +667,210 @@ CREATE TABLE words_search_docs(
   built_at TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE words_fts USING fts5(word_id UNINDEXED, text_norm);
-"""),]
+"""),
+    (14, """
+-- ===== Source Layer（原文层，2026-09-27）=====
+-- 与 v1 raw_*（合成/导出导入）相互独立；原文层保存 provider 原始导出的
+-- 标准化副本，母本在 Raw Archive（runtime/source/raw/，不进库、不进 git）。
+-- 正文 text 只存 human/assistant 的用户可见文本；thinking/tool 只留标志
+-- 与 content_json 证据，不混入正文（实施规格 §5）。
+
+CREATE TABLE source_import_batches(
+  batch_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+  original_filename TEXT NOT NULL,
+  original_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  raw_path TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  import_started_at TEXT NOT NULL,
+  import_finished_at TEXT,
+  error TEXT,
+  stats TEXT NOT NULL DEFAULT '{}',
+  imported_by TEXT NOT NULL,
+  UNIQUE(provider, sha256)
+);
+
+CREATE TABLE source_conversations(
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  provider_conversation_id TEXT NOT NULL,
+  title TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  first_message_at TEXT,
+  last_message_at TEXT,
+  first_import_batch_id TEXT NOT NULL,
+  last_import_batch_id TEXT NOT NULL,
+  UNIQUE(provider, provider_conversation_id)
+);
+CREATE INDEX idx_source_conv_time ON source_conversations(updated_at);
+
+CREATE TABLE source_messages(
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES source_conversations(id),
+  provider TEXT NOT NULL,
+  provider_conversation_id TEXT NOT NULL,
+  provider_message_id TEXT NOT NULL,
+  id_synthetic INTEGER NOT NULL DEFAULT 0,
+  parent_provider_message_id TEXT,
+  raw_sender TEXT,
+  normalized_sender TEXT NOT NULL
+    CHECK(normalized_sender IN ('human','assistant','system','tool','unknown')),
+  speaker TEXT CHECK(speaker IN ('qiaosheng','jiaming') OR speaker IS NULL),
+  created_at TEXT,
+  updated_at TEXT,
+  occurred_date TEXT,
+  text TEXT NOT NULL DEFAULT '',
+  content_json TEXT,
+  attachments TEXT NOT NULL DEFAULT '[]',
+  has_thinking INTEGER NOT NULL DEFAULT 0,
+  has_tool_content INTEGER NOT NULL DEFAULT 0,
+  sequence INTEGER NOT NULL,
+  import_batch_id TEXT NOT NULL,
+  UNIQUE(provider, provider_message_id)
+);
+CREATE INDEX idx_source_msg_conv_seq ON source_messages(conversation_id, sequence);
+CREATE INDEX idx_source_msg_date ON source_messages(occurred_date);
+CREATE INDEX idx_source_msg_sender ON source_messages(normalized_sender);
+CREATE INDEX idx_source_msg_created ON source_messages(created_at);
+
+-- 原文检索投影（可重建，不是正本）：仅 human/assistant 的 text 进入。
+CREATE TABLE source_search_docs(
+  message_id TEXT PRIMARY KEY REFERENCES source_messages(id),
+  provider_message_id TEXT NOT NULL,
+  text_norm TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  projection_version TEXT NOT NULL,
+  built_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE source_fts USING fts5(message_id UNINDEXED, text_norm);
+
+-- Semantic Source Binding：一条 Memory 可绑多个 source range（多行）。
+-- 默认 message boundary；句内片段才用 char offset（可空）。
+CREATE TABLE memory_source_bindings(
+  binding_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  conversation_id TEXT NOT NULL REFERENCES source_conversations(id),
+  start_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  end_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  start_char_offset INTEGER,
+  end_char_offset INTEGER,
+  bind_confidence TEXT NOT NULL DEFAULT 'exact'
+    CHECK(bind_confidence IN ('exact','high','low','revoked')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_msb_memory ON memory_source_bindings(memory_id, bind_confidence);
+CREATE INDEX idx_msb_conv ON memory_source_bindings(conversation_id);
+"""),
+    (15, """
+-- ===== Source Layer 定点补修（2026-09-27 v1.1 复核；SL-05/07/10）=====
+
+-- 发布门禁：只有批次完整校验通过后才置 1；失败批次的新增消息默认不可见
+ALTER TABLE source_messages ADD COLUMN published INTEGER NOT NULL DEFAULT 0;
+
+-- 消息规范化内容身份：同 UUID 跨导出内容变化的判定依据
+ALTER TABLE source_messages ADD COLUMN content_hash TEXT;
+
+-- 会话快照：一次导入对一个会话的一次观察（元数据不再永久停留首见）
+CREATE TABLE source_conversation_snapshots(
+  snapshot_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES source_conversations(id),
+  batch_id TEXT NOT NULL REFERENCES source_import_batches(batch_id),
+  title TEXT,
+  observed_created_at TEXT,
+  observed_updated_at TEXT,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  sequence_conflicts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(conversation_id, batch_id)
+);
+CREATE INDEX idx_scs_conv ON source_conversation_snapshots(conversation_id);
+
+-- 快照成员：sequence 只在快照内解释，不混用多次导出的数组序（SL-07）
+CREATE TABLE source_snapshot_members(
+  snapshot_id TEXT NOT NULL REFERENCES source_conversation_snapshots(snapshot_id),
+  provider_message_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  PRIMARY KEY(snapshot_id, provider_message_id)
+);
+CREATE INDEX idx_ssm_seq ON source_snapshot_members(snapshot_id, sequence);
+
+-- 不可变消息版本：同 UUID 不同内容各留一份，永不覆盖/丢弃（SL-07）
+CREATE TABLE source_message_versions(
+  version_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  provider_message_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  observed_batch_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  UNIQUE(provider, provider_message_id, content_hash)
+);
+CREATE INDEX idx_smv_msg ON source_message_versions(provider, provider_message_id);
+
+-- 绑定固定证据版本：记录绑定时的正文 hash，读取时校验防漂移（SL-05）
+ALTER TABLE memory_source_bindings ADD COLUMN start_content_hash TEXT;
+ALTER TABLE memory_source_bindings ADD COLUMN end_content_hash TEXT;
+"""),
+    (16, """
+-- ===== v1.7（2026-09-28）：删除遗忘/压缩/审查链；九分类；明开回温 =====
+-- 新 fresh 库不会创建这些结构（历史 migration DDL 已摘除）；本迁移
+-- 只对旧库执行 DROP。历史数据保全走一次性离线迁移（scripts/migrations/
+-- offline_v15/，另行授权执行），不在在线链路复活任何摘要实现。
+
+DROP TABLE IF EXISTS forgetting_due_queue;
+DROP TABLE IF EXISTS memory_summary_versions;
+DROP TABLE IF EXISTS memory_retention;
+DROP TABLE IF EXISTS rejection_suppression;
+DROP TABLE IF EXISTS review_delegations;
+
+-- 明开回温事实列（v1.7 §5.4：确认时刻，取 max 防倒退）
+ALTER TABLE memories ADD COLUMN last_explicit_open_at TEXT;
+"""),
+    (17, """
+-- ===== v1.7 P2：作者「留」（keep_wide）——回忆写入时显式选择，谁留谁撤 =====
+-- 理由就是回忆本身，不另设 reason 字段；keep 指向选择时的回忆版本，
+-- 回忆后续修订不改指向。两位作者独立标记 OR 生效。
+CREATE TABLE memory_keeps(
+  mark_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  owner TEXT NOT NULL CHECK(owner IN ('qiaosheng','jiaming')),
+  recollection_id TEXT NOT NULL,
+  recollection_version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX idx_keeps_memory ON memory_keeps(memory_id, owner);
+"""),
+    (18, """
+-- ===== v1.7 P3：分字段投影（§3.1：event/title/words 独立派生索引）=====
+-- 阶段过滤（WIDE 6 / MID 5 / CORE 4）按 field_kind 精确去留；
+-- mood_text/回忆/keep 理由永不入索引（字段来源隔离，不是全局拉黑）。
+CREATE TABLE field_search_docs(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  field_kind TEXT NOT NULL CHECK(field_kind IN
+    ('original_title', 'event_text', 'our_words')),
+  text_norm TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  projection_version TEXT NOT NULL,
+  built_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, field_kind)
+);
+CREATE VIRTUAL TABLE field_fts USING fts5(
+  memory_id UNINDEXED, field_kind UNINDEXED, text_norm);
+"""),
+]
+
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
+    (4, """
+DROP TABLE IF EXISTS v2_review_items;
+DROP TABLE IF EXISTS v2_proposal_versions;
+"""),
     (2, """
 CREATE TABLE IF NOT EXISTS workspace_task_leases(
   lease_id TEXT PRIMARY KEY,
@@ -786,44 +924,6 @@ CREATE TABLE workspace_audit(
   detail TEXT
 );
 """),
-    (3, """
--- ===== v2 审查闭环（spec_v2 §8）=====
-CREATE TABLE v2_review_items(
-  item_id TEXT PRIMARY KEY,
-  target_kind TEXT NOT NULL DEFAULT 'memory' CHECK(target_kind IN ('memory','plan')),
-  target_id TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state IN
-    ('generating','generated','in_review','ready_to_apply',
-     'needs_owner_decision','needs_jiaming_decision',
-     'retained','forgotten','deferred','stale','withdrawn','failed')),
-  current_revision INTEGER NOT NULL DEFAULT 1,
-  generated_summary TEXT,
-  generated_tags TEXT NOT NULL DEFAULT '[]',
-  source_version INTEGER,
-  source_fields_hash TEXT,
-  retention_revision INTEGER,
-  terminal_revision INTEGER,
-  policy_version TEXT,
-  created_by TEXT NOT NULL,
-  claimed_by TEXT,
-  claimed_at TEXT,
-  retain_hints TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_v2_review_state ON v2_review_items(state, updated_at);
-
-CREATE TABLE v2_proposal_versions(
-  item_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  summary_body TEXT NOT NULL,
-  forget_tags TEXT NOT NULL DEFAULT '[]',
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(item_id, revision)
-);
-"""),
-
 ]
 
 

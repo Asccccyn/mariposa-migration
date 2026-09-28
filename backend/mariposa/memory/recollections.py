@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 from .. import audit, db
 from ..errors import Forbidden, NotFound, ViewReceiptInvalid
-from . import retention as retention_mod
 
 _AUTHORS = ("jiaming", "qiaosheng")
 
@@ -20,14 +19,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def append(principal, memory_id: str, receipt_id: str, text: str) -> dict:
-    """凭有效查看回执追加本人回忆（VIEW-01/02/03）。"""
+def append(principal, memory_id: str, receipt_id: str, text: str,
+           keep_wide: bool = False) -> dict:
+    """凭有效查看回执追加本人回忆（VIEW-01/02/03）。
+
+    v1.7 §5.5：keep_wide=True 时在**同一事务**内为本次回忆登记作者
+    「留」标记（memory_keeps）；默认 False，绝不因回忆非空自动留。
+    keep 必须绑定本次新写入的回忆（recollection_id + version）。
+    """
     author = principal.principal_id
     if author not in _AUTHORS:
         raise Forbidden("only the two owners may write recollections",
                         principal=author)
     if not text or not str(text).strip():
         raise Forbidden("recollection text required", code="INVALID_ARGUMENT")
+    if not isinstance(keep_wide, bool):
+        raise Forbidden("keep_wide must be a boolean", code="INVALID_ARGUMENT")
     now = _now()
     rid = f"rc_{uuid.uuid4().hex[:12]}"
     with db.formal() as conn:
@@ -54,17 +61,27 @@ def append(principal, memory_id: str, receipt_id: str, text: str) -> dict:
                 " author, text, view_receipt, version, written_at)"
                 " VALUES(?,?,?,?,?,1,?)",
                 (rid, memory_id, author, str(text).strip(), receipt_id, now))
-            # 回忆非空 = 保留线索（REV-07）：暂停无疑点自动压缩
-            retention_mod.set_retain_hint(conn, memory_id, "has_recollections")
+            keep_mark = None
+            if keep_wide:
+                # v1.7 §5.5：留 = 本次回忆写入时显式选择，同事务、指本条
+                from . import keep as keep_mod
+                keep_mark = keep_mod.register_in_txn(
+                    conn, author, memory_id, rid, 1, now)
             audit.record(conn, "memory.recollection.appended", author,
                          resource_id=memory_id,
-                         payload={"recollection_id": rid})
+                         payload={"recollection_id": rid,
+                                  "keep_wide": keep_wide,
+                                  **({"keep_mark": keep_mark["mark_id"]}
+                                     if keep_mark else {})})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"recollection_id": rid, "memory_id": memory_id,
-            "author": author, "version": 1}
+    out = {"recollection_id": rid, "memory_id": memory_id,
+           "author": author, "version": 1}
+    if keep_mark:
+        out["keep"] = keep_mark
+    return out
 
 
 def revise(principal, recollection_id: str, text: str) -> dict:

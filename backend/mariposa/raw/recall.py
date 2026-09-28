@@ -18,7 +18,7 @@ def resolve_scope(plan: dict, principal) -> dict:
     """raw_scope_resolver：根据主体权限与计划明确条件生成可查范围。
 
     当前授权模型：raw 已收录消息对 owners（qiaosheng/jiaming）开放；
-    worker/linshijian 不可查。conversation 范围与日期来自明确条件——
+    worker 不可查。conversation 范围与日期来自明确条件——
     推测（inferred_hints）不参与范围决定。无权限时 allowed=False，
     由上层报告证据缺口，而不是静默缩小或扩大。
     """

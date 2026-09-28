@@ -154,6 +154,56 @@ def media_object(content_hash: str, request: Request):
                         filename=path.name)
 
 
+# Source Layer：原文导出文件上传走专用字节端点（流式写盘，不进 capability
+# JSON 参数，不驻内存）；随后调 source.import {path: upload_path}。
+@app.put("/api/source/upload")
+async def source_upload(request: Request):
+    import uuid as _uuid
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError as e:
+        return JSONResponse(status_code=401,
+                            content={"ok": False, "error": {"code": e.code}})
+    if principal.principal_id not in ("qiaosheng", "jiaming"):
+        return JSONResponse(status_code=403,
+                            content={"ok": False,
+                                     "error": {"code": "FORBIDDEN"}})
+    # 大小限额：Content-Length 预检 + 流式累计双保险（复核 v1.1 §6）
+    declared = request.headers.get("Content-Length")
+    if declared and declared.isdigit() and \
+            int(declared) > _config.SOURCE_UPLOAD_MAX_BYTES:
+        return JSONResponse(status_code=413, content={
+            "ok": False, "error": {
+                "code": "SOURCE_UPLOAD_TOO_LARGE",
+                "max_bytes": _config.SOURCE_UPLOAD_MAX_BYTES}})
+    _config.SOURCE_INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _config.SOURCE_INCOMING_DIR / (
+        "upload_" + _uuid.uuid4().hex[:12] + ".tmp")
+    size = 0
+    with open(dest, "wb") as f:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > _config.SOURCE_UPLOAD_MAX_BYTES:
+                f.close()
+                dest.unlink(missing_ok=True)
+                return JSONResponse(status_code=413, content={
+                    "ok": False, "error": {
+                        "code": "SOURCE_UPLOAD_TOO_LARGE",
+                        "max_bytes": _config.SOURCE_UPLOAD_MAX_BYTES}})
+            f.write(chunk)
+    if size == 0:
+        dest.unlink(missing_ok=True)
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": {"code": "EMPTY_UPLOAD"}})
+    return {"ok": True, "data": {"upload_path": str(dest), "bytes": size,
+                                 "note": "已流式暂存到宿主数据根 incoming/"
+                                         "；调 source.import 导入（成功后"
+                                         "母本进入 Raw Archive）"}}
+
+
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 

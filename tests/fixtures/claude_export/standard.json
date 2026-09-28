@@ -1,0 +1,31 @@
+[
+  {
+    "uuid": "conv-std-001",
+    "name": "周末安排",
+    "created_at": "2026-03-01T02:00:00.000Z",
+    "updated_at": "2026-03-01T02:10:00.000Z",
+    "chat_messages": [
+      {
+        "uuid": "std-m1",
+        "sender": "human",
+        "created_at": "2026-03-01T02:00:00.000Z",
+        "updated_at": "2026-03-01T02:00:01.000Z",
+        "parent_message_uuid": null,
+        "text": "",
+        "content": [{"type": "text", "text": "这周末想去海边吗"}]
+      },
+      {
+        "uuid": "std-m2",
+        "sender": "assistant",
+        "created_at": "2026-03-01T02:05:00.000Z",
+        "updated_at": "2026-03-01T02:05:30.000Z",
+        "parent_message_uuid": "std-m1",
+        "text": "",
+        "content": [
+          {"type": "thinking", "thinking": "她提到海边，先想想天气"},
+          {"type": "text", "text": "想！周六上午出发避开堵车怎么样"}
+        ]
+      }
+    ]
+  }
+]

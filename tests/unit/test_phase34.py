@@ -16,7 +16,6 @@ from mariposa.plans import service as plans
 from mariposa.quotes import service as quotes
 from mariposa.raw import service as raw
 from mariposa.time_context import service as time_ctx
-from mariposa.workspace import service as workspace
 from tests.conftest import reset_all, TOKENS
 
 
@@ -111,7 +110,7 @@ class TestHandoff:
 class TestPlansAndCalendar:
     def test_plan_lifecycle_and_links(self, actors):
         hold = memory.hold(actors["jiaming"], text="讨论了周年旅行计划",
-                           memory_date="2026-09-10")
+                           memory_date="2026-09-10", categories=["daily"])
         p = plans.create("jiaming", title="周年旅行", state="active",
                          date_start="2026-09-25", date_end="2026-09-27",
                          link_memory_ids=[hold["memory_id"]])
@@ -122,29 +121,6 @@ class TestPlansAndCalendar:
         assert u["version"] == 2 and u["state"] == "waiting"
         with pytest.raises(Forbidden):
             plans.update("jiaming", p["plan_id"], expected_version=1, state="done")
-
-    def test_calendar_aggregates_and_forgotten_preview(self, actors):
-        hold = memory.hold(actors["jiaming"], text="蓝瓷小钥匙放进书架盒子",
-                           memory_date="2026-09-10")
-        plans.create("jiaming", title="复诊", state="planned", due_at="2026-09-10T09:00:00")
-        day = calendar.day("2026-09-10")
-        kinds = {i["kind"] for i in day["items"]}
-        assert kinds == {"memory", "plan"}
-        assert day["range_end_inclusive"] is True
-
-        # 遗忘后日历只显示摘要
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"] if p["target_memory_id"] == hold["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "把心爱小物收进书架。", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"], proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"], decision="approve")
-        day = calendar.day("2026-09-10")
-        mem_item = next(i for i in day["items"] if i["kind"] == "memory")
-        assert mem_item["preview_kind"] == "forgotten_summary"
-        assert "蓝瓷小钥匙" not in mem_item["preview"]
 
     def test_bootstrap_plans_filter(self, actors):
         from zoneinfo import ZoneInfo
@@ -166,7 +142,8 @@ class TestBootstrap:
         # superseded by V2-BOOT-03/08：claude_chat 不再默认附 30 条原文；
         # 临近计划改为日期差 0..3 日
         raw.import_payload("worker", _conv_payload(35))
-        memory.hold(actors["jiaming"], text="今天的桶", memory_date=None)  # 无日期不进三天
+        memory.hold(actors["jiaming"], text="今天的桶", memory_date=None,
+                    categories=["daily"])  # 无日期不进三天
         out = bootstrap.get("jiaming", "claude_chat", "claude_chat")
         assert "raw" not in out  # v2：取原文走 raw.messages.list 显式查询
         assert out["coverage"]["raw"] == "not_in_default_package"
@@ -191,11 +168,11 @@ class TestBootstrap:
         # 判定窗口成员（三天=今天及前两天，四天前不进窗）
         from zoneinfo import ZoneInfo
         today = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date()
-        h1 = memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat())
+        h1 = memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat(), categories=["daily"])
         h2 = memory.hold(actors["jiaming"], text="前天的记忆",
-                         memory_date=(today - timedelta(days=2)).isoformat())
+                         memory_date=(today - timedelta(days=2)).isoformat(), categories=["daily"])
         memory.hold(actors["jiaming"], text="四天前旧桶",
-                    memory_date=(today - timedelta(days=4)).isoformat())
+                    memory_date=(today - timedelta(days=4)).isoformat(), categories=["daily"])
         out = bootstrap.get("jiaming", "cc", "cc")
         ids = {m["memory_id"] for m in out["memory_days"]["items"]}
         assert h1["memory_id"] in ids and h2["memory_id"] in ids

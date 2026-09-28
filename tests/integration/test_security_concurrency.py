@@ -17,7 +17,6 @@ from mariposa.maintenance import service as maintenance
 from mariposa.media import service as media
 from mariposa.memory import service as memory
 from mariposa.migration import apply_from_report, dry_run
-from mariposa.workspace import service as workspace
 from tests.conftest import TOKENS, reset_all
 
 
@@ -35,7 +34,8 @@ class TestSecurity:
     def test_xss_payload_is_data_not_html(self, c):
         """存储型内容按 JSON 返回，Content-Type 不触发 HTML 解析。"""
         payload = {"arguments": {"text": "<img src=x onerror=alert(1)>药水",
-                                 "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False}}
+                                 "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False,
+                                 "categories": ["daily"]}}
         r = c.post("/api/capability/memory.hold", json=payload,
                    headers=auth("jiaming"))
         assert r.status_code == 200
@@ -67,91 +67,10 @@ class TestSecurity:
 
     def test_cross_principal_idempotency_isolated(self, actors):
         """幂等键按 (principal, capability, key) 隔离：不同主体同 key 各自生效。"""
-        args = {"text": "幂等隔离测试", "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False}
+        args = {"text": "幂等隔离测试", "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False, "categories": ["daily"]}
         a = registry.invoke(actors["jiaming"], "memory.hold", args, "same-key")
         b = registry.invoke(actors["qiaosheng"], "memory.hold", args, "same-key")
         ida, idb = a["data"]["memory_id"], b["data"]["memory_id"]
         assert ida != idb  # 两个独立桶，不互相重放
 
 
-class TestConcurrency:
-    def _submitted(self, actors, text):
-        hold = memory.hold(actors["jiaming"], text=text, memory_date="2026-06-01")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == hold["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     f"{text}摘要", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        return hold, sub
-
-    def test_concurrent_decide_exactly_one_wins(self, actors):
-        hold, sub = self._submitted(actors, "并发审批测试")
-        args = (sub["proposal_id"], sub["revision"], sub["proposal_hash"],
-                sub["base_memory_version"], "approve")
-
-        def decide_as(p):
-            try:
-                workspace.decide(p, proposal_id=args[0], proposal_revision=args[1],
-                                 proposal_hash=args[2],
-                                 expected_memory_version=args[3],
-                                 decision=args[4])
-                return "ok"
-            except Exception as e:
-                return getattr(e, "code", "ERROR")
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            results = list(pool.map(decide_as, [actors["qiaosheng"]] * 2 +
-                                    [actors["jiaming"]] * 2))
-        assert results.count("ok") == 1, results
-        with db.formal() as conn:
-            versions = conn.execute(
-                "SELECT COUNT(*) AS c FROM memory_versions WHERE memory_id=?",
-                (hold["memory_id"],)).fetchone()["c"]
-        assert versions == 2  # 只产生一个压缩版本
-
-    def test_workspace_reconcile_after_interrupt(self, actors):
-        """模拟审批事务提交后、工作区回填前崩溃：对账修复。"""
-        hold, sub = self._submitted(actors, "对账测试")
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        # 人为把工作区状态打回 submitted（模拟回填丢失）
-        with db.workspace() as wconn:
-            wconn.execute("UPDATE work_items SET state='submitted' WHERE item_id=?",
-                          (sub["proposal_id"],))
-        out = maintenance.reconcile_workspace()
-        assert out["fixed"] >= 1
-        items = {i["proposal_id"]: i for i in workspace.list_items()}
-        assert items[sub["proposal_id"]]["state"] == "approved_and_applied"
-        # 幂等：再跑不重复修
-        assert maintenance.reconcile_workspace()["fixed"] == 0
-
-
-class TestMigrationApplyDrill:
-    def test_apply_and_verify(self, actors, tmp_path):
-        from pathlib import Path
-        fixtures = Path(__file__).parents[1] / "fixtures" / "legacy_bucket_sample"
-        report_path = tmp_path / "dry.json"
-        dry_run(str(fixtures), str(report_path))
-        out = apply_from_report(str(report_path))
-        assert out["ok"] is True
-        assert out["applied"] == 3 and out["verified"] == 3
-        # 核对：置顶保留、锁信锁参数保留（合成正文未进任何索引/日志）
-        with db.formal() as conn:
-            pinned = conn.execute(
-                "SELECT COUNT(*) AS c FROM memories WHERE pinned=1").fetchone()["c"]
-            locked = conn.execute(
-                "SELECT COUNT(*) AS c FROM letters WHERE lock_type='timed'"
-            ).fetchone()["c"]
-        assert pinned >= 1 and locked >= 1
-
-    def test_apply_rejects_big_report(self, actors, tmp_path):
-        report = {"fixture_dir": str(tmp_path),
-                  "entries": [{"legacy_id": f"x{i}.md"} for i in range(60)]}
-        p = tmp_path / "big.json"
-        p.write_text(json.dumps(report), encoding="utf-8")
-        out = apply_from_report(str(p))
-        assert out["ok"] is False

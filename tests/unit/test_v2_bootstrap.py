@@ -14,7 +14,7 @@ import pytest
 from mariposa import db
 from mariposa.bootstrap import service as bootstrap
 from mariposa.identity import service as identity
-from mariposa.memory import retention as ret_mod
+from mariposa import biztime as ret_mod
 from mariposa.memory import service as memory
 from mariposa.plans import service as plans
 from tests.conftest import reset_all
@@ -90,16 +90,20 @@ class TestBootstrapV2:
             assert out["coverage"]["raw"] == "not_in_default_package"
 
     def test_bootstrap_does_not_renew_boot04(self, actors):
+        # v1.7：bootstrap 不算明确打开——last_explicit_open_at 不得被刷新
         today = datetime.now(timezone.utc).astimezone(ZoneInfo(TZ)).date()
         m = hold_v2(actors, today.isoformat())
         with db.formal() as conn:
-            before = ret_mod.get(conn, m["memory_id"])
+            conn.execute(
+                "UPDATE memories SET last_explicit_open_at=? WHERE memory_id=?",
+                ("2026-01-01T00:00:00+00:00", m["memory_id"]))
         for _ in range(3):
             bootstrap.get("jiaming", "cc", "cc")
         with db.formal() as conn:
-            after = ret_mod.get(conn, m["memory_id"])
-        assert before["due_date"] == after["due_date"]
-        assert after["retention_revision"] == before["retention_revision"]
+            row = conn.execute(
+                "SELECT last_explicit_open_at FROM memories WHERE memory_id=?",
+                (m["memory_id"],)).fetchone()
+        assert row["last_explicit_open_at"] == "2026-01-01T00:00:00+00:00"
 
     def test_snapshot_invalidated_by_changes_boot05(self, actors):
         first = bootstrap.get("jiaming", "cc", "cc")

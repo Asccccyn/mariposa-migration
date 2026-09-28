@@ -227,28 +227,8 @@ def _register_thin() -> int:
 
     add("memory.deletion.get", _deletion_get)
 
-    def _proposal_get(p, a):
-        from ..workspace import service as ws
-        pid = str(a.get("proposal_id", ""))
-        for i in ws.list_items():
-            if i["proposal_id"] == pid:
-                return i
-        raise NotFound("proposal not found", proposal_id=pid)
-
-    add("workspace.proposals.get", _proposal_get)
-    add("workspace.proposals.withdraw", lambda p, a: _decide(p, a, "withdraw"))
-
-    def _decide(p, a, decision):
-        from ..workspace import service as ws
-        item = next((i for i in ws.list_items()
-                     if i["proposal_id"] == str(a.get("proposal_id", ""))), None)
-        if item is None:
-            raise NotFound("proposal not found")
-        return ws.decide(p, proposal_id=item["proposal_id"],
-                         proposal_revision=item["revision"],
-                         proposal_hash=item["proposal_hash"],
-                         expected_memory_version=item["base_memory_version"] or 0,
-                         decision=decision)
+    # v1.7：遗忘提案兼容层（workspace.proposals.get/withdraw 与
+    # memory.forgetting.*）已随遗忘链整体退役，不再注册。
 
     def _runs_get(p, a):
         rid = str(a.get("run_id", ""))
@@ -263,7 +243,6 @@ def _register_thin() -> int:
 
     # hold_candidate 最小机制（§6.1；confirm 仅周家明——§4.11）
     def _candidates_create(p, a):
-        from ..workspace import service as ws
         import uuid
         from datetime import datetime, timezone
         mid = str(a.get("target_memory_id", "")) or f"cand_{uuid.uuid4().hex[:8]}"
@@ -359,29 +338,8 @@ def _register_thin() -> int:
 
     add("memory.emotions.set", _emotions_set)
 
-    def _forgetting_request(p, a):
-        """手动为指定桶生成遗忘提案（与扫描殊途同归：都要审批才生效）。"""
-        from ..workspace import service as ws
-        scan = ws.scan_candidates(p.principal_id, min_idle_days=0)
-        target = str(a.get("memory_id", ""))
-        prop = next((x for x in scan["created"]
-                     if x["target_memory_id"] == target), None)
-        if prop is None:
-            # 已有 open item 或被排除：返回现状
-            return {"created": False,
-                    "reason": "not_a_candidate（保护/意义/冷却/open item）",
-                    "target": target}
-        rev = ws.revise_draft(p.principal_id, prop["proposal_id"],
-                              str(a.get("compressed_summary", "")),
-                              str(a.get("reason", "")))
-        sub = ws.submit(p.principal_id, prop["proposal_id"], rev["revision"])
-        return {"created": True, **sub}
-
-    add("memory.forgetting.request", _forgetting_request)
-    add("memory.forgetting.proposals.list",
-        lambda p, a: {"items": __import__("mariposa.workspace.service",
-                                          fromlist=["list_items"]).list_items()})
-    add("memory.forgetting.proposals.get", _proposal_get)
+    # v1.7：memory.forgetting.request / proposals.list / proposals.get
+    # 已随遗忘链退役（2026-09-28 决策），不再注册。
 
     def _runs_report(p, a):
         """工具人上报运行结果（worker_runs 补录 + 状态）。"""

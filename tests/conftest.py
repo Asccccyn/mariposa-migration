@@ -79,17 +79,13 @@ import pytest  # noqa: E402
 from mariposa import db, schema  # noqa: E402
 from mariposa.identity import service as identity  # noqa: E402
 
-TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w",
-          "linshijian": "tok-l"}
+TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}
 
 FORMAL_TABLES = [
     # 子表在前，父表在后
     "i_suggestions", "i_versions", "i_documents",
-    "review_delegations",
-    "memory_summary_versions", "memory_retention",
     "memory_recollections", "memory_view_receipts", "memory_our_words",
     "memory_mood_tags", "memory_moods", "memory_categories",
-    "forgetting_due_queue",
     "anniversary_occurrences", "anniversary_definitions",
     "audit_events", "events_outbox", "idempotency_records", "proposal_resolutions",
     "proposal_envelopes", "words_fts", "words_search_docs", "search_fts",
@@ -105,12 +101,16 @@ FORMAL_TABLES = [
     "diary_versions", "diary_entries", "memory_tags", "bootstrap_snapshots",
     "memory_relations", "memory_raw_refs", "provisional_sources",
     "reminders", "media_objects", "moment_reactions", "moment_comments",
-    "moment_versions", "moments", "rejection_suppression",
+    "moment_versions", "moments",
     "memory_meanings", "stickers", "import_jobs",
     "memory_reengagements", "migration_id_map",
+    # Source Layer（子表在前；FTS 虚表与普通表同样可 DELETE）
+    "source_fts", "source_search_docs", "memory_source_bindings",
+    "source_messages", "source_conversations", "source_import_batches",
+    "source_snapshot_members", "source_conversation_snapshots",
+    "source_message_versions",
 ]
 WORKSPACE_TABLES = [
-    "v2_proposal_versions", "v2_review_items",
     "workspace_audit", "worker_runs", "proposal_versions", "work_items",
     "workspace_task_leases",
 ]

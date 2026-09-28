@@ -24,10 +24,10 @@ PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "mariposa", "version": "0.1.0"}
 
 # 业务 profile 允许的主体 / 维护 profile 允许的主体
-# 林石见经 MCP 维护入口领取/审查（§8.1：受限委托，非 worker 集合升权）
 PROFILE_PRINCIPALS = {
     "business": {"jiaming", "qiaosheng"},
-    "maintenance": {"worker", "linshijian"},
+    # v1.7：林石见应用内审查角色已退役；maintenance 仅通用工程工具
+    "maintenance": {"worker"},
 }
 
 

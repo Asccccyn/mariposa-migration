@@ -39,9 +39,32 @@ def test_unauthenticated_rejected(c):
 
 def test_worker_forbidden_on_search_and_decide(c):
     assert call(c, "worker", "memory.search", {"query": "x"}).status_code == 403
+    # v1.7：退役能力对任何主体都是不可调用（404 而非 403）
     r = call(c, "worker", "memory.forgetting.decide", {"proposal_id": "nope"})
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "FORBIDDEN"
+    assert r.status_code == 404
+    # 保留能力：worker 无正式检索、无 owner 级 source 绑定
+    assert call(c, "worker", "source.binding.bind", {}).status_code == 403
+
+
+def test_retired_capabilities_uncallable(c):
+    """v1.7 遗忘/审查链负向：HTTP 入口结构化拒绝且无写入。"""
+    for name in ("memory.restore", "workspace.forgetting.scan",
+                 "workspace.forgetting.generate", "memory.forgetting.decide",
+                 "workspace.review.claim", "memory.retention.decide",
+                 "workspace.memory.inspect", "workspace.proposals.submit",
+                 "workspace.proposals.decide_batch"):
+        r = call(c, "qiaosheng", name, {"memory_id": "x", "proposal_id": "x"})
+        assert r.status_code == 404, f"{name} 应已退役（404），实得 {r.status_code}"
+        assert r.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_capability_listing_respects_role(c):
+    names_q = {x["name"] for x in c.get("/api/capabilities", headers=auth("qiaosheng")).json()["data"]}
+    names_w = {x["name"] for x in c.get("/api/capabilities", headers=auth("worker")).json()["data"]}
+    assert "source.search" in names_q and "source.search" not in names_w
+    assert "memory.recall.start" in names_q and "memory.recall.start" not in names_w
+    # 通用任务租约对 worker 开放（v1.7 保留通用工程能力）
+    assert "workspace.tasks.claim" in names_w
 
 
 def test_unknown_capability_404(c):
@@ -49,63 +72,3 @@ def test_unknown_capability_404(c):
     assert r.status_code == 404
 
 
-def test_http_full_forget_loop(c):
-    r = call(c, "jiaming", "memory.hold", {
-        "text": "蓝瓷小钥匙挂在玄关第二个抽屉的挂钩上。",
-        "why_remember": "钥匙位置",
-        "memory_date": "2026-06-01",
-        "date_confidence": "exact",
-        "raw_pending": False,
-    })
-    assert r.status_code == 200
-    mem_id = r.json()["data"]["memory_id"]
-
-    hits = call(c, "qiaosheng", "memory.search", {"query": "蓝瓷小钥匙"}).json()["data"]["hits"]
-    assert any(h["memory_id"] == mem_id for h in hits)
-
-    scan = call(c, "worker", "workspace.forgetting.scan", {"policy_version": "forget_policy_v1"}).json()["data"]
-    prop = next(p for p in scan["created"] if p["target_memory_id"] == mem_id)
-
-    rev = call(c, "worker", "workspace.proposals.revise", {
-        "proposal_id": prop["proposal_id"],
-        "compressed_summary": "一件随身小物放在玄关收纳处。",
-        "reason": "琐事压缩",
-    }).json()["data"]
-
-    sub = call(c, "worker", "workspace.proposals.submit",
-               {"proposal_id": prop["proposal_id"],
-         "proposal_revision": rev["revision"],
-         "proposal_hash": rev["payload_hash"]},
-               idem=f"submit-{prop['proposal_id']}").json()["data"]
-
-    dec = call(c, "jiaming", "memory.forgetting.decide", {
-        "proposal_id": sub["proposal_id"], "proposal_revision": sub["revision"],
-        "proposal_hash": sub["proposal_hash"],
-        "expected_memory_version": sub["base_memory_version"],
-        "decision": "approve",
-    }, idem=f"decide-{prop['proposal_id']}")
-    assert dec.status_code == 200
-
-    hits = call(c, "qiaosheng", "memory.search", {"query": "蓝瓷小钥匙"}).json()["data"]["hits"]
-    assert not any(h["memory_id"] == mem_id for h in hits)
-    hits = call(c, "qiaosheng", "memory.search", {"query": "玄关"}).json()["data"]["hits"]
-    hit = next(h for h in hits if h["memory_id"] == mem_id)
-    assert hit["matched_by"] == "summary_keyword"
-
-    got = call(c, "qiaosheng", "memory.get", {"memory_id": mem_id}).json()["data"]
-    assert got["representation"] == "forgotten_summary"
-
-    res = call(c, "jiaming", "memory.restore", {
-        "memory_id": mem_id, "expected_current_version": 2,
-    }).json()["data"]
-    assert res["new_version"] == 3
-    hits = call(c, "qiaosheng", "memory.search", {"query": "蓝瓷小钥匙"}).json()["data"]["hits"]
-    assert any(h["memory_id"] == mem_id for h in hits)
-
-
-def test_capability_listing_respects_role(c):
-    names_q = {x["name"] for x in c.get("/api/capabilities", headers=auth("qiaosheng")).json()["data"]}
-    names_w = {x["name"] for x in c.get("/api/capabilities", headers=auth("worker")).json()["data"]}
-    assert "memory.forgetting.decide" in names_q
-    assert "memory.forgetting.decide" not in names_w
-    assert "workspace.proposals.submit" in names_w

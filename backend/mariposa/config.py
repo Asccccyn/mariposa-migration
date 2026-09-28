@@ -34,6 +34,39 @@ WORKSPACE_DB = RUNTIME_DIR / "workspace" / "workspace.sqlite3"
 # 与正式库/工作区库相互独立）。
 RECALL_DB = RUNTIME_DIR / "recall" / "recall.sqlite3"
 LOG_DIR = RUNTIME_DIR / "logs"
+# Source Layer（原文层）：Raw Archive 母本 + 上传暂存，均在宿主数据根，
+# 容器/镜像不可吞噬（实施规格 §2）；runtime/ 整体在 .gitignore。
+SOURCE_RAW_DIR = RUNTIME_DIR / "source" / "raw"
+SOURCE_INCOMING_DIR = RUNTIME_DIR / "source" / "incoming"
+SOURCE_PROJECTION_VERSION = "source_projection_v1"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Source Layer 资源边界（复核 v1.1 §6）：工程初值，可环境变量覆盖；
+# 超限走结构化拒绝，不允许吃满内存再失败。
+SOURCE_MAX_ELEMENT_BYTES = _env_int("MARIPOSA_SOURCE_MAX_ELEMENT_BYTES", 64 << 20)
+SOURCE_MAX_MESSAGE_TEXT_BYTES = _env_int(
+    "MARIPOSA_SOURCE_MAX_MESSAGE_TEXT_BYTES", 2 << 20)
+SOURCE_MAX_MESSAGE_CONTENT_BYTES = _env_int(
+    "MARIPOSA_SOURCE_MAX_MESSAGE_CONTENT_BYTES", 4 << 20)
+SOURCE_MAX_ZIP_MEMBERS = _env_int("MARIPOSA_SOURCE_MAX_ZIP_MEMBERS", 20000)
+SOURCE_MAX_ZIP_MEMBER_BYTES = _env_int(
+    "MARIPOSA_SOURCE_MAX_ZIP_MEMBER_BYTES", 1 << 30)
+SOURCE_MAX_ZIP_TOTAL_BYTES = _env_int(
+    "MARIPOSA_SOURCE_MAX_ZIP_TOTAL_BYTES", 2 << 31)
+SOURCE_UPLOAD_MAX_BYTES = _env_int("MARIPOSA_SOURCE_UPLOAD_MAX_BYTES", 2 << 31)
+SOURCE_RANGE_MAX_MESSAGES = _env_int("MARIPOSA_SOURCE_RANGE_MAX_MESSAGES", 500)
+SOURCE_RANGE_MAX_TEXT_BYTES = _env_int(
+    "MARIPOSA_SOURCE_RANGE_MAX_TEXT_BYTES", 1 << 20)
+# running 批次认领租约：超过该时长未完成的批次可被同文件重导接管
+SOURCE_IMPORT_LEASE_MINUTES = _env_int("MARIPOSA_SOURCE_IMPORT_LEASE_MINUTES", 120)
+
 ENV_FILE = PROJECT_ROOT / ".env"
 
 # 新建数据库必须显式允许（OPS-RECALL-01）：测试根由 conftest 打开；
@@ -47,13 +80,9 @@ HTTP_PORT = int(os.environ.get("MARIPOSA_PORT", "18780"))
 RELATIONSHIP_TIMEZONE = os.environ.get("MARIPOSA_TZ", "Asia/Shanghai")
 
 PROJECTION_REVISION = "retrieval_projection_v1"
-POLICY_VERSION = "forget_policy_v1"
+# 投影/迁移标识（v1.7：不再表示遗忘策略；遗忘链已退役）
+POLICY_VERSION = "mariposa_v1_7"
 
-FORGET_IDLE_DAYS = int(os.environ.get("MARIPOSA_FORGET_IDLE_DAYS", "30"))
-FORGET_SCHEDULE_ENABLED = False  # 初期无自动扫描；只能手动触发 scan
-FORGET_SCAN_BATCH_SIZE = 20
-FORGET_REJECT_COOLDOWN_DAYS = int(
-    os.environ.get("MARIPOSA_FORGET_REJECT_COOLDOWN_DAYS", "30"))
 
 SEMANTIC_PROVIDER = os.environ.get("MARIPOSA_SEMANTIC_PROVIDER", "")  # 空 = 未配置
 QUOTE_SEMANTIC_AUTO_APPLY = os.environ.get(
@@ -105,5 +134,5 @@ RECALL_JUDGE_ROUND_DEADLINE_MS = 20000
 
 def ensure_dirs() -> None:
     for p in (RUNTIME_DIR, FORMAL_DB.parent, WORKSPACE_DB.parent,
-              RECALL_DB.parent, LOG_DIR):
+              RECALL_DB.parent, LOG_DIR, SOURCE_RAW_DIR, SOURCE_INCOMING_DIR):
         p.mkdir(parents=True, exist_ok=True)
