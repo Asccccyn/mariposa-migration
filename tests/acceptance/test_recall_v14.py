@@ -527,7 +527,7 @@ class TestOpsRecall:
         assert "fail closed" in r and "业务/生产库" in r
 
     def test_ops_recall03_policy_versioned(self):
-        assert config.RECALL_POLICY_VERSION == "recall-v1.4-eval-1"
+        assert config.RECALL_POLICY_VERSION == "recall-v1.7"  # v1.7 F8 统一
         assert config.RECALL_JUDGE_PROMPT_VERSION == "mariposa-relevance-v1"
 
     def test_ops_recall04_disable_withdraws(self, actors, monkeypatch):

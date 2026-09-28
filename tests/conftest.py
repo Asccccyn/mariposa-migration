@@ -87,8 +87,7 @@ FORMAL_TABLES = [
     "memory_recollections", "memory_view_receipts", "memory_our_words",
     "memory_mood_tags", "memory_moods", "memory_categories",
     "anniversary_occurrences", "anniversary_definitions",
-    "audit_events", "events_outbox", "idempotency_records", "proposal_resolutions",
-    "proposal_envelopes", "words_fts", "words_search_docs", "search_fts",
+    "audit_events", "events_outbox", "idempotency_records",  "words_fts", "words_search_docs", "search_fts",
     "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",
     "raw_messages", "raw_conversations",
@@ -111,7 +110,7 @@ FORMAL_TABLES = [
     "source_message_versions",
 ]
 WORKSPACE_TABLES = [
-    "workspace_audit", "worker_runs", "proposal_versions", "work_items",
+    "worker_runs", "proposal_versions", "work_items",
     "workspace_task_leases",
 ]
 

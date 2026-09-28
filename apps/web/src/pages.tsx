@@ -80,9 +80,8 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
                }}
                placeholder="关键词，例如：蓝瓷小钥匙" style={{ flex: 1 }} />
         <button className="primary" onClick={() => search(q)}>搜索</button>
-        <button onClick={() => call("workspace.forgetting.scan", {})
-          .then((d) => { note(`扫描完成：新建草稿 ${(d as { created: unknown[] }).created.length}`); })
-          .catch((e) => note(String(e), true))}>扫描遗忘候选</button>
+        <button onClick={() =>  })
+          .catch((e) => note(String(e), true))}></button>
         <button onClick={hold}>写测试记忆</button>
       </div>
       {error ? <Err e={error} /> : null}
@@ -119,14 +118,14 @@ type Proposal = {
 
 export function Workspace({ note }: { note: (s: string, err?: boolean) => void }) {
   const { data, error, reload } = useAsync<{ items: Proposal[] }>(
-    () => call("workspace.proposals.list", {}), []);
+    () => 
   const [drafts, setDrafts] = useState<Record<string, { sum: string; rsn: string }>>({});
   // 冻结稿信息：revise 返回的 revision/hash 供 submit/decide 精确引用
   const [frozen, setFrozen] = useState<Record<string, { revision: number; hash: string }>>({});
 
   if (error) return <Err e={error} />;
   if (!data) return <Empty>加载中…</Empty>;
-  if (!data.items.length) return <Empty>暂无工作项（先「扫描遗忘候选」）</Empty>;
+  if (!data.items.length) return <Empty>暂无工作项（先「」）</Empty>;
 
   const setDraft = (id: string, sum: string, rsn: string) =>
     setDrafts((d) => ({ ...d, [id]: { sum, rsn } }));
@@ -145,11 +144,7 @@ export function Workspace({ note }: { note: (s: string, err?: boolean) => void }
         note(`修订到 r${d.revision}`);
       } else if (kind === "submit") {
         const info = frozen[p.proposal_id];
-        await call("workspace.proposals.submit", {
-          proposal_id: p.proposal_id,
-          proposal_revision: info ? info.revision : p.revision,
-          proposal_hash: info ? info.hash : p.proposal_hash,
-        }, `ui-submit-${p.proposal_id}-${p.revision}`);
+        await 
         note("已提交，hash 冻结");
       } else if (kind === "approve" || kind === "reject") {
         await call("memory.forgetting.decide", {
