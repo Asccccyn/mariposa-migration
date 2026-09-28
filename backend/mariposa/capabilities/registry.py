@@ -852,7 +852,12 @@ def _source_range_open(principal: Principal, a: dict) -> dict:
 def _source_conversation_get(principal: Principal, a: dict) -> dict:
     return source_query.get_conversation(
         str(a.get("conversation_id", "")),
-        after_seq=a.get("after_seq"), before_seq=a.get("before_seq"),
+        after_seq=a.get("after_cursor", a.get("after_seq")),
+        before_seq=a.get("before_cursor", a.get("before_seq")),
+        after_id=(a.get("after_cursor") or {}).get("id")
+        if isinstance(a.get("after_cursor"), dict) else None,
+        before_id=(a.get("before_cursor") or {}).get("id")
+        if isinstance(a.get("before_cursor"), dict) else None,
         around_seq=a.get("around_seq"), limit=int(a.get("limit", 100)))
 
 
