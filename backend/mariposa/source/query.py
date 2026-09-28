@@ -282,11 +282,27 @@ def _parent_path_ids(conn, start, end, pubflt: str) -> set[str]:
     return path
 
 
-def get_conversation(conversation_id: str, after_seq: int | None = None,
-                     before_seq: int | None = None, around_seq: int | None = None,
-                     limit: int = 100) -> dict:
-    """按 sequence 游标分页读会话消息（published；has_more=真实下一条）。"""
+def get_conversation(conversation_id: str, after_seq=None,
+                     before_seq=None, around_seq: int | None = None,
+                     limit: int = 100, after_id: str | None = None,
+                     before_id: str | None = None) -> dict:
+    """按 (sequence, id) 复合游标分页（A11：sequence 非唯一不漏消息）。
+
+    游标接受旧式纯整数（兼容）或 {"seq": n, "id": "..."}；返回
+    next_after_cursor/prev_before_cursor 复合游标 + 兼容的 *_seq 字段。
+    """
     limit = max(1, min(int(limit), 500))
+
+    def _cursor(raw, cid):
+        """dict 游标 → ("cmp", seq, id)；纯整数 → ("gt", seq, None) 兼容。"""
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return ("cmp", int(raw.get("seq", 0)), str(raw.get("id", "")))
+        return ("gt", int(raw), None)
+
+    after_cur = _cursor(after_seq, after_id)
+    before_cur = _cursor(before_seq, before_id)
     with db.formal() as conn:
         conv = _find_conversation(conn, conversation_id)
         if conv is None:
@@ -297,41 +313,65 @@ def get_conversation(conversation_id: str, after_seq: int | None = None,
             half = limit // 2
             before_rows = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence<?{pub} ORDER BY sequence DESC LIMIT ?",
+                f" AND sequence<?{pub} ORDER BY sequence DESC, id DESC"
+                " LIMIT ?",
                 (conv["id"], int(around_seq), half)).fetchall()
             exact = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence=?{pub}",
+                f" AND sequence=?{pub} ORDER BY id",
                 (conv["id"], int(around_seq))).fetchall()
             after = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence>?{pub} ORDER BY sequence ASC LIMIT ?",
+                f" AND sequence>?{pub} ORDER BY sequence ASC, id ASC LIMIT ?",
                 (conv["id"], int(around_seq), half)).fetchall()
             msgs = list(reversed(before_rows)) + list(exact) + list(after)
             has_more = bool(after)
-        elif before_seq is not None:
+        elif before_cur is not None:
+            if before_cur[0] == "cmp":
+                cond = " AND (sequence<? OR (sequence=? AND id<?))"
+                params = [conv["id"], before_cur[1], before_cur[1],
+                          before_cur[2], limit + 1]
+            else:
+                cond = " AND sequence<?"
+                params = [conv["id"], before_cur[1], limit + 1]
             rows = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence<?{pub} ORDER BY sequence DESC LIMIT ?",
-                (conv["id"], int(before_seq), limit + 1)).fetchall()
+                f"{pub}{cond}"
+                " ORDER BY sequence DESC, id DESC LIMIT ?", params
+            ).fetchall()
             has_more = len(rows) > limit
             msgs = list(reversed(rows[:limit]))
         else:
+            if after_cur is not None and after_cur[0] == "cmp":
+                cond = " AND (sequence>? OR (sequence=? AND id>?))"
+                params = [conv["id"], after_cur[1], after_cur[1],
+                          after_cur[2], limit + 1]
+            elif after_cur is not None:  # 旧式整数：严格大于
+                cond = " AND sequence>?"
+                params = [conv["id"], after_cur[1], limit + 1]
+            else:
+                cond = ""
+                params = [conv["id"], limit + 1]
             rows = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence>?{pub} ORDER BY sequence ASC LIMIT ?",
-                (conv["id"], -1 if after_seq is None else int(after_seq),
-                 limit + 1)).fetchall()
+                f"{pub}{cond}"
+                " ORDER BY sequence ASC, id ASC LIMIT ?", params).fetchall()
             has_more = len(rows) > limit
             msgs = rows[:limit]
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM source_messages WHERE conversation_id=?"
             " AND published=1", (conv["id"],)).fetchone()["c"]
+    first = msgs[0] if msgs else None
+    last = msgs[-1] if msgs else None
     return {
         "conversation": _conv_summary(conv),
         "messages": [_serialize(r) for r in msgs],
-        "next_after_seq": msgs[-1]["sequence"] if msgs else None,
-        "prev_before_seq": msgs[0]["sequence"] if msgs else None,
+        "next_after_seq": last["sequence"] if last else None,
+        "prev_before_seq": first["sequence"] if first else None,
+        "next_after_cursor": ({"seq": last["sequence"], "id": last["id"]}
+                              if last else None),
+        "prev_before_cursor": ({"seq": first["sequence"], "id": first["id"]}
+                               if first else None),
         "has_more": has_more,
         "published_total": total,
         "source": "source_layer",

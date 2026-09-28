@@ -206,14 +206,28 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                     "status": "failed", "stats": stats,
                     "error": "integrity gate", "raw_path": str(archived)}
 
-        # ---- 7) 发布可见性（SL-10）：仅本批新增消息置 published=1 ----
+        # ---- 7) 发布可见性（SL-10 + A09）：按本批全部快照成员发布。
+        # 同 UUID 曾卡在旧 failed 批次的 unpublished 行由本成功批次接管
+        #（import_batch_id 前移到本批），修正后重导不再"成功但隐藏"。----
         with db.formal() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                published = conn.execute(
-                    "UPDATE source_messages SET published=1"
-                    " WHERE import_batch_id=? AND published=0",
-                    (batch_id,)).rowcount
+                members = conn.execute(
+                    "SELECT m.provider_message_id FROM"
+                    " source_snapshot_members m"
+                    " JOIN source_conversation_snapshots s"
+                    " ON s.snapshot_id=m.snapshot_id WHERE s.batch_id=?",
+                    (batch_id,)).fetchall()
+                pids = [r["provider_message_id"] for r in members]
+                published = 0
+                if pids:
+                    marks = ",".join("?" * len(pids))
+                    published = conn.execute(
+                        "UPDATE source_messages SET published=1,"
+                        " import_batch_id=? WHERE provider=?"
+                        f" AND provider_message_id IN ({marks})"
+                        " AND published=0",
+                        [batch_id, provider] + pids).rowcount
                 conn.execute(
                     "UPDATE source_import_batches SET status='completed',"
                     " import_finished_at=?, stats=?, error=NULL"
@@ -230,9 +244,16 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-        archive.write_metadata(provider, batch_id, {
-            "status": "completed", "stats": stats,
-            "verification": verification})
+        # A12：批次状态已在上方事务内定稿；metadata 只是附属落盘，
+        # 失败不回写 failed（否则出现 failed+published=1 的矛盾态）
+        try:
+            archive.write_metadata(provider, batch_id, {
+                "status": "completed", "stats": stats,
+                "verification": verification})
+        except OSError as meta_err:
+            archive.write_metadata(provider, batch_id, {
+                "status": "completed", "stats": stats,
+                "metadata_note": f"metadata write retried: {meta_err}"})
         return {"batch_id": batch_id, "provider": provider,
                 "status": "completed", "stats": stats,
                 "verification": {**verification, "archive": archive_check},
@@ -460,6 +481,14 @@ def _consume_element(element: Any, provider: str, batch_id: str,
                                             batch_id)
                         continue
                     if pid in existing:
+                        if existing[pid] is None:
+                            # A13：旧数据无内容身份 → 本次成功导入回填
+                            # 正式 hash，行为等同幂等（不算冲突）
+                            conn.execute(
+                                "UPDATE source_messages SET content_hash=?"
+                                " WHERE provider=? AND provider_message_id=?",
+                                (chash, provider, pid))
+                            existing[pid] = chash
                         if existing[pid] == chash:
                             stats["messages_skipped_existing"] += 1
                         else:
@@ -647,28 +676,31 @@ def _verify_integrity(provider: str, batch_id: str) -> dict:
     with db.formal() as conn:
         # SL-11：speaker NULL 必须检出（IS NOT 对 NULL 语义正确）
         bad_speaker = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND ("
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND ("
             " (normalized_sender='human' AND speaker IS NOT 'qiaosheng') OR"
             " (normalized_sender='assistant' AND speaker IS NOT 'jiaming')"
             " OR (normalized_sender NOT IN ('human','assistant')"
-            "  AND speaker IS NOT NULL))", (provider,)).fetchone()["c"]
+            "  AND speaker IS NOT NULL))", (provider, batch_id)
+            ).fetchone()["c"]
         if bad_speaker:
             problems.append({"check": "speaker_mapping",
                              "violations": bad_speaker})
 
         text_no_sender = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND"
             " text<>'' AND normalized_sender NOT IN ('human','assistant')",
-            (provider,)).fetchone()["c"]
+            (provider, batch_id)).fetchone()["c"]
         if text_no_sender:
             problems.append({"check": "text_only_for_human_assistant",
                              "violations": text_no_sender})
 
         dup_ids = conn.execute(
             "SELECT COUNT(*) AS c FROM (SELECT provider_message_id"
-            " FROM source_messages WHERE provider=? GROUP BY"
-            " provider_message_id HAVING COUNT(*)>1)",
-            (provider,)).fetchone()["c"]
+            " FROM source_messages WHERE provider=? AND import_batch_id=?"
+            " GROUP BY provider_message_id HAVING COUNT(*)>1)",
+            (provider, batch_id)).fetchone()["c"]
         if dup_ids:
             problems.append({"check": "duplicate_provider_message_id",
                              "violations": dup_ids})
@@ -676,18 +708,21 @@ def _verify_integrity(provider: str, batch_id: str) -> dict:
         fts_docs = conn.execute(
             "SELECT COUNT(*) AS c FROM source_search_docs d"
             " JOIN source_messages m ON m.id=d.message_id"
-            " WHERE m.provider=? AND m.text<>''", (provider,)).fetchone()["c"]
+            " WHERE m.provider=? AND m.import_batch_id=? AND m.text<>''",
+            (provider, batch_id)).fetchone()["c"]
         texts = conn.execute(
             "SELECT COUNT(*) AS c FROM source_messages"
-            " WHERE provider=? AND text<>''", (provider,)).fetchone()["c"]
+            " WHERE provider=? AND import_batch_id=? AND text<>''",
+            (provider, batch_id)).fetchone()["c"]
         if fts_docs != texts:
             problems.append({"check": "search_docs_coverage",
                              "docs": fts_docs, "texts": texts})
 
         bad_dates = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND"
             " occurred_date IS NULL AND created_at IS NOT NULL",
-            (provider,)).fetchone()["c"]
+            (provider, batch_id)).fetchone()["c"]
         if bad_dates:
             problems.append({"check": "occurred_date_coverage",
                              "violations": bad_dates})
@@ -696,8 +731,9 @@ def _verify_integrity(provider: str, batch_id: str) -> dict:
         sample = conn.execute(
             "SELECT d.text_hash, m.text FROM source_search_docs d"
             " JOIN source_messages m ON m.id=d.message_id"
-            " WHERE m.provider=? ORDER BY d.built_at DESC LIMIT 50",
-            (provider,)).fetchall()
+            " WHERE m.provider=? AND m.import_batch_id=?"
+            " ORDER BY d.built_at DESC LIMIT 50",
+            (provider, batch_id)).fetchall()
         bad_hash = sum(
             1 for r in sample
             if hashlib.sha256((r["text"] or "").encode()).hexdigest()
@@ -719,17 +755,20 @@ def _verify_integrity(provider: str, batch_id: str) -> dict:
                              "violations": orphan_published})
 
         parent_kept = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND"
             " parent_provider_message_id IS NOT NULL",
-            (provider,)).fetchone()["c"]
+            (provider, batch_id)).fetchone()["c"]
         unknown_with_speaker = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND"
             " normalized_sender='unknown' AND speaker IS NOT NULL",
-            (provider,)).fetchone()["c"]
+            (provider, batch_id)).fetchone()["c"]
         human_speaker_null = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=? AND"
+            "SELECT COUNT(*) AS c FROM source_messages WHERE provider=?"
+            " AND import_batch_id=? AND"
             " normalized_sender='human' AND speaker IS NULL",
-            (provider,)).fetchone()["c"]
+            (provider, batch_id)).fetchone()["c"]
     return {
         "ok": not problems,
         "problems": problems,

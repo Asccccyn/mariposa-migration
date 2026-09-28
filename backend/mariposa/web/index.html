@@ -111,7 +111,14 @@
     <div class="row">
       <input id="q" placeholder="关键词，例如：蓝瓷小钥匙" style="flex:1" />
       <button id="searchBtn" class="primary">搜索</button>
-      <button id="newHoldBtn">写测试记忆</button>
+      <select id="holdCat">
+        <option value="daily">日常</option><option value="milestone">重大转折</option>
+        <option value="sad">伤心的事</option><option value="sweet">甜蜜</option>
+        <option value="date">约会</option><option value="sex">做爱</option>
+        <option value="anniversary">纪念</option><option value="reloplay">剧本</option>
+        <option value="plan">计划</option>
+      </select>
+      <button id="newHoldBtn">写记忆</button>
     </div>
     <div id="memResults"></div>
   </section>
@@ -265,6 +272,7 @@ $('newHoldBtn').onclick = async () => {
   if (!text) return;
   try {
     const d = await api('memory.hold', {
+      categories: [document.getElementById('holdCat').value],
       text, why_remember: '测试用途',
       memory_date: new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10),
       date_confidence: 'exact',

@@ -364,10 +364,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if r.get("ok") else 1
 
 
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 def apply_from_report(report_path: str) -> dict:
     """迁移演练 apply：把 dry-run 报告（合成 fixture）落到当前正式库并核对。
 
@@ -415,11 +411,13 @@ def apply_from_report(report_path: str) -> dict:
                                          "new_id": prior["new_id"]})
             continue
         if e["target"] == "memories":
+            cats = e["mapping"].get("categories") or ["daily"]
             out = memory.hold(_migrator,
                               text=body.strip(),
                               why_remember=meta.get("why_remembered"),
                               memory_date=e["mapping"]["memory_date"],
-                              date_confidence="inferred")
+                              date_confidence="inferred",
+                              categories=cats)
             mid = out["memory_id"]
             with _db.formal() as conn:
                 if e["mapping"].get("pinned"):
@@ -497,3 +495,7 @@ CREATE TABLE IF NOT EXISTS migration_id_map(
   migrated_at TEXT NOT NULL,
   PRIMARY KEY(legacy_id, source_type)
 )""")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

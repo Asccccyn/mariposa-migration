@@ -881,6 +881,15 @@ DROP TABLE memory_categories;
 ALTER TABLE memory_categories_new RENAME TO memory_categories;
 CREATE INDEX idx_categories_category ON memory_categories(category);
 """),
+    (20, """
+-- ===== v1.7 A13：旧 Source 数据补偿回填 =====
+-- migration 15 之前完成的 Source 批次没有 published 列语义；升级后
+-- 其消息被误置不可见。凡属 completed 批次的消息回填 published=1。
+-- content_hash 留 NULL，由下一次同文件导入的接管路径回填正式身份。
+UPDATE source_messages SET published=1
+ WHERE published=0 AND import_batch_id IN (
+   SELECT batch_id FROM source_import_batches WHERE status='completed');
+"""),
 ]
 
 

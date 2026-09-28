@@ -262,18 +262,21 @@ class TestFailureVisibility:
 
 class TestSpeakerVerify:
     def test_null_human_speaker_detected(self, actors, tmp_path):
-        imp(write(tmp_path, "v.json", [conv("c1", [msg("m1")])]))
+        r0 = imp(write(tmp_path, "v.json", [conv("c1", [msg("m1")])]))
         with db.formal() as c:
             c.execute("UPDATE source_messages SET speaker=NULL"
-                      " WHERE normalized_sender='human'")
-        r = importer._verify_integrity("claude", "sib_x")
+                      " WHERE normalized_sender='human' AND import_batch_id=?",
+                      (r0["batch_id"],))
+        r = importer._verify_integrity("claude", r0["batch_id"])
         assert any(p["check"] == "speaker_mapping" for p in r["problems"])
 
     def test_verify_checks_projection_hash_sample(self, actors, tmp_path):
-        imp(write(tmp_path, "v.json", [conv("c1", [msg("m1", text="正文X")])]))
+        r0 = imp(write(tmp_path, "v.json", [conv("c1", [msg("m1", text="正文X")])]))
         with db.formal() as c:
-            c.execute("UPDATE source_search_docs SET text_hash='deadbeef'")
-        r = importer._verify_integrity("claude", "sib_x")
+            c.execute("UPDATE source_search_docs SET text_hash='deadbeef'"
+                      " WHERE message_id IN (SELECT id FROM source_messages"
+                      " WHERE import_batch_id=?)", (r0["batch_id"],))
+        r = importer._verify_integrity("claude", r0["batch_id"])
         assert any(p["check"] == "projection_hash" for p in r["problems"])
 
 
