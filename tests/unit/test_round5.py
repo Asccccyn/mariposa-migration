@@ -15,7 +15,6 @@ from mariposa.memory import listing, service as memory
 from mariposa.raw import service as raw
 from mariposa.retrieval import rebuild as rebuild_mod
 from mariposa.retrieval import search as retrieval
-from mariposa.workspace import service as workspace
 from mariposa.workspace import tasks as ws_tasks
 from tests.conftest import reset_all
 
@@ -31,7 +30,7 @@ def actors():
 
 
 def _hold(actors, text, date="2026-06-01"):
-    return memory.hold(actors["jiaming"], text=text, memory_date=date)
+    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"])
 
 
 class TestListing:
@@ -71,51 +70,10 @@ class TestMeanings:
             hits = retrieval.search(conn, "侧脸形状")["hits"]
         assert not hits  # 替换后旧层不再可搜
 
-    def test_forgotten_meaning_not_searchable(self, actors):
-        h = _hold(actors, "待遗忘的桶")
-        # 注意顺序：先扫描拿候选（meaning 建立后会被自动候选排除），
-        # 再追加 meaning，最后提交审批——审批时 meaning 已存在
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        listing.meanings_append("jiaming", h["memory_id"], "独特意义词雾隐青竹")
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "压缩后的摘要。", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        with db.formal() as conn:
-            assert not retrieval.search(conn, "雾隐青竹")["hits"]  # §10.5
-
     def test_only_jiaming(self, actors):
         h = _hold(actors, "x")
         with pytest.raises(Forbidden):
             listing.meanings_append("qiaosheng", h["memory_id"], "她不能写他的意义")
-
-
-class TestRebuildIndex:
-    def test_rebuild_does_not_revive_old_words(self, actors):
-        """§8.5 标志性测试最后一条：管理员重建索引不能让旧词重新可搜。"""
-        h = _hold(actors, "蓝瓷小钥匙重建测试")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "重建索引后的摘要。", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        rebuild_mod.rebuild_index("qiaosheng")  # 管理员全量重建
-        with db.formal() as conn:
-            assert not retrieval.search(conn, "蓝瓷小钥匙重建测试")["hits"]
-            hits = retrieval.search(conn, "重建索引后的摘要")["hits"]
-        assert any(x["memory_id"] == h["memory_id"] for x in hits)
 
 
 class TestTaskLeases:
@@ -137,13 +95,6 @@ class TestTaskLeases:
         again = ws_tasks.task_claim("jiaming", "item_x")  # 释放后可重领
         assert again["lease_id"] != lease["lease_id"]
 
-    def test_inspect_scoped_material(self, actors):
-        h = _hold(actors, "被检查的桶")
-        out = ws_tasks.memory_inspect("worker", h["memory_id"])
-        assert out["memory"]["memory_id"] == h["memory_id"]
-        assert "open_proposals" in out and "versions" in out
-
-
 class TestHoldDedupe:
     def _payload(self):
         base = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
@@ -160,7 +111,7 @@ class TestHoldDedupe:
         conv = raw.conversations_list()[0]["id"]
         ref = [{"conversation_id": conv, "message_from": "dm0", "message_to": "dm2"}]
         first = memory.hold(actors["jiaming"], text="第一次 Hold",
-                            memory_date="2026-06-01", raw_refs=ref)
+                            memory_date="2026-06-01", raw_refs=ref, categories=["daily"])
         assert first.get("deduplicated") is None
         assert first["memory_id"]
         with db.formal() as conn:
@@ -168,7 +119,7 @@ class TestHoldDedupe:
                                  " memory_id=?", (first["memory_id"],)).fetchone()
         assert state["source_state"] == "bound"  # 带 refs 直接绑定
         second = memory.hold(actors["jiaming"], text="重复 Hold",
-                             memory_date="2026-06-01", raw_refs=ref)
+                             memory_date="2026-06-01", raw_refs=ref, categories=["daily"])
         assert second["deduplicated"] is True
         assert second["memory_id"] == first["memory_id"]  # 返回已有记录
 
@@ -253,21 +204,3 @@ class TestEventsBackfill:
         assert "memory.emotion.changed" in types
         assert "reminder.due" in types
 
-    def test_proposal_resolved_event(self, actors):
-        h = _hold(actors, "决议事件桶")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "决议摘要。", "x")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["jiaming"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        with db.formal() as conn:
-            resolved = conn.execute(
-                "SELECT COUNT(*) AS c FROM audit_events WHERE event_type="
-                "'workspace.proposal.resolved'").fetchone()["c"]
-        assert resolved >= 1

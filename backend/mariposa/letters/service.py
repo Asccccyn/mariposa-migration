@@ -342,11 +342,17 @@ def _execute(conn, row, actor: str) -> None:
         return
     # delete：物理删除（有审批+限额+审计门槛；继承旧 HumanDeleteExecutor 语义）
     if kind == "memory":
-        conn.execute("DELETE FROM memory_raw_refs WHERE memory_id=?", (rid,)) \
-            if _table_exists(conn, "memory_raw_refs") else None
-        conn.execute("DELETE FROM search_fts WHERE memory_id=?", (rid,))
-        conn.execute("DELETE FROM retrieval_documents WHERE memory_id=?", (rid,))
-        conn.execute("DELETE FROM memory_versions WHERE memory_id=?", (rid,))
+        # v2 分层子表全清（B08：v1 清单不含分类/心情/话语/回忆/keep 行，
+        # v2 桶会 FK 失败）
+        for table in ("memory_raw_refs", "memory_categories", "memory_moods",
+                      "memory_mood_tags", "memory_our_words",
+                      "memory_recollections", "memory_view_receipts",
+                      "memory_reengagements", "memory_meanings",
+                      "memory_keeps", "field_search_docs", "field_fts",
+                      "search_fts", "retrieval_documents", "memory_versions"):
+            conn.execute(f"DELETE FROM {table} WHERE memory_id=?", (rid,))
+        conn.execute("DELETE FROM memory_relations WHERE from_memory=?"
+                     " OR to_memory=?", (rid, rid))
         conn.execute("DELETE FROM plan_memory_links WHERE memory_id=?", (rid,))
         conn.execute("DELETE FROM memories WHERE memory_id=?", (rid,))
     else:

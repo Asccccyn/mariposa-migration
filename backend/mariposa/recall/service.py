@@ -156,19 +156,13 @@ def _attach_event_evidence(conn, candidates: list[dict]) -> None:
         body = row.get("whitelist_body") or ""
         snippet, truncated = evidence_mod.excerpt(body)
         if c["representation"] == "forgotten_summary":
+            # v1.7：无压缩。遗留 forgotten_summary 表示（离线迁移前）不再
+            # 从已退役的摘要表取数；标证据缺口，不冒充事件正文。
             ev = [evidence_mod.make_evidence(
-                "approved_summary", "summary_body", snippet,
+                "approved_summary", "summary_body", "",
                 f"memory:{mid}", source_version=c["content_version"],
-                truncated=truncated)]
-            tags = conn.execute(
-                "SELECT summary_body, forget_tags FROM memory_summary_versions"
-                " WHERE memory_id=? ORDER BY summary_version DESC LIMIT 1",
-                (mid,)).fetchone()
-            if tags and tags["forget_tags"]:
-                ev.append(evidence_mod.make_evidence(
-                    "structured_fact", "forget_tags", "", f"memory:{mid}",
-                    structured_value={"forget_tags": json.loads(
-                        tags["forget_tags"])}))
+                structured_value={"legacy_content_gap": True,
+                                  "note": "旧摘要表示待一次性离线迁移恢复"})]
         else:
             ev = [evidence_mod.make_evidence(
                 "authored_event", "event_text", snippet, f"memory:{mid}",

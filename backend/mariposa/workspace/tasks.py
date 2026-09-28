@@ -65,20 +65,3 @@ def task_release(principal_id: str, lease_id: str) -> dict:
     return {"lease_id": lease_id, "released": True}
 
 
-def memory_inspect(principal_id: str, memory_id: str) -> dict:
-    """授权任务材料读取：返回桶当前表示、版本链元数据、开放提案。"""
-    from ..memory import service as memory
-    with db.formal() as conn:
-        rep = memory.get(conn, memory_id)
-        versions = conn.execute(
-            "SELECT version_no, representation, origin_kind, created_at"
-            " FROM memory_versions WHERE memory_id=? ORDER BY version_no",
-            (memory_id,)).fetchall()
-    with db.workspace() as wconn:
-        proposals = wconn.execute(
-            "SELECT item_id, state, updated_at FROM work_items WHERE"
-            " target_memory_id=? AND state IN ('draft','submitted','deferred')",
-            (memory_id,)).fetchall()
-    return {"memory": rep,
-            "versions": [dict(v) for v in versions],
-            "open_proposals": [dict(p) for p in proposals]}

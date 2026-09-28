@@ -17,9 +17,23 @@ sys.path.insert(0, str(ROOT / "backend"))
 _QUICK = "--quick" in sys.argv
 
 
+def _enforce_isolated_root() -> str:
+    """A10：拒绝继承外部根；自建随机临时根（符号链接解析后判定）。"""
+    import tempfile
+    external = os.environ.get("MARIPOSA_ROOT")
+    if external:
+        real = os.path.realpath(external)
+        print(f"REFUSED: MARIPOSA_ROOT={external} (realpath={real})："
+              "验证脚本拒绝继承外部根（A10）；请去掉该环境变量重跑。",
+              file=sys.stderr)
+        raise SystemExit(2)
+    root = tempfile.mkdtemp(prefix="mr-verify-")
+    os.environ["MARIPOSA_ROOT"] = root
+    return root
+
+
 def main() -> int:
-    if not os.environ.get("MARIPOSA_ROOT"):
-        os.environ["MARIPOSA_ROOT"] = tempfile.mkdtemp(prefix="mr-verify-")
+    _enforce_isolated_root()
     os.environ.setdefault("MARIPOSA_ALLOW_CREATE", "1")
     os.environ.setdefault("MARIPOSA_RECALL_ENABLED", "1")
     os.environ.setdefault("MARIPOSA_WORDS_RECALL_ENABLED", "1")

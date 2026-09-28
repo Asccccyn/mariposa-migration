@@ -46,7 +46,7 @@ def _state_hash(conn) -> str:
     指纹 = 跨自然日旧快照必然 SNAPSHOT_STALE，不会继续吐前一天窗口。
     """
     import hashlib
-    from ..memory import retention as ret_mod
+    from .. import biztime as ret_mod
     today = ret_mod.business_today().isoformat()
     parts = [
         f"rules:{BOOT_RULES_VERSION}:{BOOT_MEMORY_DAYS}:{BOOT_UPCOMING_DAYS}"
@@ -83,7 +83,7 @@ def _memory_slim(conn, memory_id: str) -> dict:
     tags = conn.execute(
         "SELECT tag FROM memory_mood_tags WHERE memory_id=? ORDER BY tag",
         (memory_id,)).fetchall()
-    from ..memory import retention as ret_mod
+    from .. import biztime as ret_mod
     item = {
         "memory_id": memory_id,
         "memory_date": m["memory_date"],

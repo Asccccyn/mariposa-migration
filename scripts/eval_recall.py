@@ -26,6 +26,25 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 
+def enforce_isolated_root(prefix: str) -> str:
+    """A10：强制隔离根——评测脚本绝不继承服务/开发根，也绝不对它 seed。
+
+    外部显式传入的 MARIPOSA_ROOT 一律拒绝（含符号链接解析后指向
+    服务根的情况）；脚本自建随机临时根。真实库只读评测请走独立的
+    只读连接入口，不经本脚本。
+    """
+    external = os.environ.get("MARIPOSA_ROOT")
+    if external:
+        real = os.path.realpath(external)
+        print(f"REFUSED: MARIPOSA_ROOT={external} (realpath={real})："
+              "评测脚本拒绝继承外部根（A10）；请去掉该环境变量重跑。",
+              file=sys.stderr)
+        raise SystemExit(2)
+    root = tempfile.mkdtemp(prefix=prefix)
+    os.environ["MARIPOSA_ROOT"] = root
+    return root
+
+
 def run_group_a(principal, item) -> list[str]:
     """现状基线：旧 keyword-only recall。"""
     from mariposa import db
@@ -87,8 +106,7 @@ def main() -> int:
     ap.add_argument("--groups", default="A,B")
     args = ap.parse_args()
 
-    if not os.environ.get("MARIPOSA_ROOT"):
-        os.environ["MARIPOSA_ROOT"] = tempfile.mkdtemp(prefix="mr-eval-")
+    enforce_isolated_root("mr-eval-")
     os.environ.setdefault("MARIPOSA_ALLOW_CREATE", "1")
     os.environ.setdefault("MARIPOSA_RECALL_ENABLED", "1")
     os.environ.setdefault("MARIPOSA_WORDS_RECALL_ENABLED", "1")
