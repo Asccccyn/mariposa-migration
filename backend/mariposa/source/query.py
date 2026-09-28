@@ -204,8 +204,10 @@ def validate_range(conversation_id: str, start_message_id: str,
             raise NotFound("source conversation not found",
                            conversation_id=conversation_id)
         pubflt = "" if include_unpublished else " AND published=1"
-        start = _find_message_any(conn, start_message_id, pubflt)
-        end = _find_message_any(conn, end_message_id, pubflt)
+        start = _find_message_any(conn, start_message_id, pubflt,
+                                  provider=conv["provider"])
+        end = _find_message_any(conn, end_message_id, pubflt,
+                                provider=conv["provider"])
         if start is None or end is None:
             raise NotFound("range message not found",
                            start=start_message_id, end=end_message_id)
@@ -568,13 +570,19 @@ def _find_message(conn, message_id=None, provider_message_id=None):
     return None
 
 
-def _find_message_any(conn, id_or_uuid: str, pubflt: str = ""):
-    """按内部行 ID 或 provider UUID 解析（可选招发布过滤）。"""
+def _find_message_any(conn, id_or_uuid: str, pubflt: str = "",
+                      provider: str | None = None):
+    """按内部行 ID 或 provider UUID 解析（可选招发布过滤）。
+
+    F13：provider 维度限定——多 provider 接入后 UUID 碰撞不再取错行。
+    """
     cols = f"{_COLS}, conversation_id, content_json"
+    pv = " AND provider=?" if provider else ""
+    params = [id_or_uuid, id_or_uuid] + ([provider] if provider else [])
     return conn.execute(
         f"SELECT {cols} FROM source_messages WHERE (id=? OR"
-        f" provider_message_id=?){pubflt}",
-        (id_or_uuid, id_or_uuid)).fetchone()
+        f" provider_message_id=?){pubflt}{pv}",
+        params).fetchone()
 
 
 def _find_conversation(conn, conversation_id: str):

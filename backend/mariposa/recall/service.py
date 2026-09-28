@@ -195,7 +195,7 @@ def _words_evidence_insufficient(plan: dict, words_hits: list[dict]) -> bool:
         h.get("evidence") or [], "verbatim_required") for h in words_hits)
 
 
-def _run_round(session: dict, plan: dict) -> dict:
+def _run_round(session: dict, plan: dict, principal=None) -> dict:
     """一轮检索：两路召回 → RRF → 可选精排 → 代码门控 → 证据包。"""
     sid = session["session_id"]
     from . import pipeline as _pl
@@ -239,7 +239,8 @@ def _run_round(session: dict, plan: dict) -> dict:
             if not config.RECALL_RAW_FALLBACK_ENABLED:
                 coverage["raw"] = "not_executed"
             else:
-                scope = raw_recall.resolve_scope(plan, _current_principal())
+                scope = raw_recall.resolve_scope(
+                    plan, principal or _current_principal())
                 if not scope.get("allowed"):
                     coverage["raw"] = "not_authorized"
                 else:
@@ -376,6 +377,8 @@ def _finalize_cards(cards: list[dict]) -> list[dict]:
     return out
 
 
+# F12：主体经参数传递为主；此全局仅作未知调用方的最后兜底，
+# 不再是常规路径（并发串主体窗口已消除）
 _CURRENT = {"principal": None}
 
 
@@ -397,8 +400,7 @@ def start(principal, a: dict) -> dict:
     budget.consume_round(session["session_id"], _op_id("round"),
                          session["current_revision"], session["current_burst"])
     session = store.require_session(session["session_id"])
-    _CURRENT["principal"] = principal
-    packet = _run_round(session, plan)
+    packet = _run_round(session, plan, principal)
     packet["created"] = True
     return packet
 
@@ -433,8 +435,7 @@ def refine(principal, a: dict) -> dict:
         budget.consume_round(a["session_id"], _op_id("round"),
                              session["current_revision"], burst_no)
         session = store.require_session(a["session_id"])
-        _CURRENT["principal"] = principal
-        return _run_round(session, plan)
+        return _run_round(session, plan, principal)
     # burst 轮次已尽且无显式继续请求：允许修订条件，但不发起有成本的
     # 新检索（v1.4 §9.3——自动自循环不产生无界额度）
     store.update_status(a["session_id"], session["current_revision"],

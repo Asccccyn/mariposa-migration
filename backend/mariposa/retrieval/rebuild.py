@@ -64,4 +64,7 @@ def rebuild_index(actor: str = "system") -> dict:
         words_n = _words.rebuild_words_index(conn)
     out["field_projection"] = field_stat
     out["words_index"] = {"rebuilt": words_n}
+    # v1.7：source 检索投影一并重建（published 正文）
+    from ..source import binding as src_binding
+    out["source_projection"] = src_binding.reindex_search_docs()
     return {"rebuilt": rebuilt}

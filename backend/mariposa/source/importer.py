@@ -653,18 +653,21 @@ def _track_time_bounds(msg, stats: dict) -> None:
 
 def _refresh_conversation_aggregates(batch_id: str,
                                      published_only: bool = True) -> None:
-    flt = " AND m.published=1" if published_only else ""
+    # F13：聚合口径固定为 published（失败批次未发布消息不计入会话条数）
     with db.formal() as conn:
         conn.execute(
             "UPDATE source_conversations SET"
-            f" message_count=(SELECT COUNT(*) FROM source_messages m"
-            f"  WHERE m.conversation_id=source_conversations.id{flt}),"
-            f" first_message_at=(SELECT MIN(created_at) FROM"
-            f"  source_messages m WHERE"
-            f"  m.conversation_id=source_conversations.id{flt}),"
-            f" last_message_at=(SELECT MAX(created_at) FROM"
-            f"  source_messages m WHERE"
-            f"  m.conversation_id=source_conversations.id{flt})"
+            " message_count=(SELECT COUNT(*) FROM source_messages m"
+            "  WHERE m.conversation_id=source_conversations.id"
+            "  AND m.published=1),"
+            " first_message_at=(SELECT MIN(created_at) FROM"
+            "  source_messages m WHERE"
+            " m.conversation_id=source_conversations.id"
+            " AND m.published=1),"
+            " last_message_at=(SELECT MAX(created_at) FROM"
+            "  source_messages m WHERE"
+            " m.conversation_id=source_conversations.id"
+            " AND m.published=1)"
             " WHERE last_import_batch_id=?", (batch_id,))
 
 
@@ -793,10 +796,12 @@ def _set_raw_path(batch_id: str, raw_path: str, original_name: str) -> None:
 def _fail_batch(batch_id: str, provider: str, error: str,
                 stats: dict | None = None) -> None:
     with db.formal() as conn:
+        # F13：租约被接管后不得覆盖接管方的终态（completed 保护）；
+        # 本进程只在批次仍处 running/failed 时写失败
         conn.execute(
             "UPDATE source_import_batches SET status='failed', error=?,"
             " stats=COALESCE(?, stats), import_finished_at=?"
-            " WHERE batch_id=?",
+            " WHERE batch_id=? AND status<>'completed'",
             (error[:2000],
              json.dumps(stats, ensure_ascii=False) if stats else None,
              _now(), batch_id))

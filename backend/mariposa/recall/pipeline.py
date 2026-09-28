@@ -42,11 +42,14 @@ def round1_candidates(conn, plan: dict, *, limit: int = None) -> dict:
         f"SELECT m.memory_id FROM memories m {cond} LIMIT 2000",
         params).fetchall()
     refs, stats = [], {"WIDE": 0, "MID": 0, "CORE": 0, "skipped_gap": 0}
+    from datetime import datetime as _dt, timezone as _tz
+    _now = _dt.now(_tz.utc)
+    all_facts = pp.facts_for_many(conn, [r["memory_id"] for r in rows])
     for r in rows:
         mid = r["memory_id"]
         try:
-            phase = pp.phase_of(mid)
-        except (pp.DataGap, pp.PolicyError):
+            phase = pp.phase_from_facts(all_facts.get(mid, {}), now=_now)
+        except (pp.DataGap, pp.PolicyError, KeyError):
             stats["skipped_gap"] += 1
             continue
         stats[phase.stage] += 1
@@ -219,14 +222,17 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
 
     hits: list[dict] = []
     stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
+    from datetime import datetime as _dt, timezone as _tz
+    _now = _dt.now(_tz.utc)
+    all_facts = pp.facts_for_many(conn, [r["memory_id"] for r in pool])
     for r in pool:
         mid = r["memory_id"]
         ref = f"memory:{mid}"
         if ref in rejected:
             continue
         try:
-            phase = pp.phase_of(mid)
-        except (pp.DataGap, pp.PolicyError):
+            phase = pp.phase_from_facts(all_facts.get(mid, {}), now=_now)
+        except (pp.DataGap, pp.PolicyError, KeyError):
             stats["gap"] += 1
             continue
         stats[phase.stage] += 1

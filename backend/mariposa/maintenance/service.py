@@ -82,35 +82,6 @@ def reminders_fire_due(now: str | None = None) -> dict:
     return {"fired": [dict(r) for r in rows]}
 
 
-def reconcile_workspace() -> dict:
-    """按正式库终局决议对账工作区状态（§6.4.6）。
-
-    approved 的 resolution 若工作区未回填 -> 回填 approved_and_applied；
-    rejected/withdrawn 同理。崩溃/中断后调用，不重复应用正文。
-    """
-    from .. import db as _db
-    fixed = 0
-    with _db.formal() as fconn:
-        resolutions = fconn.execute(
-            "SELECT proposal_id, decision FROM proposal_resolutions").fetchall()
-    res_map = {r["proposal_id"]: r["decision"] for r in resolutions}
-    with _db.workspace() as wconn:
-        for pid, decision in res_map.items():
-            item = wconn.execute(
-                "SELECT state FROM work_items WHERE item_id=?", (pid,)).fetchone()
-            if item is None:
-                continue
-            target = {"approved": "approved_and_applied",
-                      "rejected": "rejected",
-                      "withdrawn": "withdrawn"}[decision]
-            if item["state"] != target:
-                wconn.execute(
-                    "UPDATE work_items SET state=?, updated_at=? WHERE item_id=?",
-                    (target, _now(), pid))
-                fixed += 1
-    return {"checked": len(res_map), "fixed": fixed}
-
-
 def idempotency_reconcile(principal_id: str, record_principal: str,
                           capability: str, idempotency_key: str,
                           stale_seconds: int = 60) -> dict:
@@ -179,3 +150,52 @@ def jobs_status() -> dict:
     return {"outbox_pending": pending, "active_leases": leases,
             "open_work_items": open_items,
             "import_jobs": {r["status"]: r["c"] for r in imports}}
+
+
+def idempotency_reconcile(principal_id: str, record_principal: str,
+                          capability: str, idempotency_key: str,
+                          stale_seconds: int = 60) -> dict:
+    """崩溃窗口对账（§13.2）：把疑似中途崩溃的 running 幂等记录显式标记 failed。
+
+    只有 failed 之后同 key 重试才能重新占位执行。调用方必须先核实业务结果
+    （副作用可能已发生）；本工具只清除占位，不伪造结果。
+    """
+    from ..errors import NotFound as _NF
+    from datetime import datetime as _dt
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT * FROM idempotency_records WHERE principal_id=? AND"
+            " capability=? AND idempotency_key=?",
+            (record_principal, capability, idempotency_key)).fetchone()
+        if row is None:
+            raise _NF("idempotency record not found",
+                      principal=record_principal, capability=capability,
+                      key=idempotency_key)
+        if row["status"] != "running":
+            return {"reconciled": False, "status": row["status"],
+                    "note": "record is not running; nothing to reconcile"}
+        created = _dt.fromisoformat(row["created_at"])
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - created).total_seconds()
+        if age <= stale_seconds:
+            return {"reconciled": False, "status": "running",
+                    "age_seconds": int(age),
+                    "note": "record still fresh; concurrent execution may be"
+                            " in flight; refuse to reconcile"}
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "UPDATE idempotency_records SET status='failed', result_ref=?"
+                " WHERE principal_id=? AND capability=? AND idempotency_key=?"
+                " AND status='running'",
+                (None, record_principal, capability, idempotency_key))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"reconciled": True, "status": "failed",
+            "age_seconds": int(age),
+            "reconciled_by": principal_id,
+            "note": "占位已清除；副作用是否已发生须由调用方核实业务状态，"
+                    "确认后同 key 重试将重新执行"}

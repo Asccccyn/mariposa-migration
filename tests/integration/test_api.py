@@ -48,11 +48,19 @@ def test_worker_forbidden_on_search_and_decide(c):
 
 def test_retired_capabilities_uncallable(c):
     """v1.7 遗忘/审查链负向：HTTP 入口结构化拒绝且无写入。"""
-    for name in ("memory.restore", "workspace.forgetting.scan",
-                 "workspace.forgetting.generate", "memory.forgetting.decide",
-                 "workspace.review.claim", "memory.retention.decide",
-                 "workspace.memory.inspect", "workspace.proposals.submit",
-                 "workspace.proposals.decide_batch"):
+    retired = ("memory.restore", "workspace.forgetting.scan",
+               "workspace.forgetting.generate", "workspace.proposals.revise",
+               "workspace.proposals.submit", "workspace.proposals.list",
+               "workspace.proposals.withdraw", "workspace.proposals.get",
+               "workspace.proposals.decide_batch",
+               "memory.forgetting.decide", "memory.retention.decide",
+               "memory.forgetting.request",
+               "memory.forgetting.proposals.list",
+               "memory.forgetting.proposals.get",
+               "workspace.review.claim", "workspace.review.get",
+               "workspace.review.revise", "workspace.review.submit",
+               "workspace.memory.inspect")
+    for name in retired:
         r = call(c, "qiaosheng", name, {"memory_id": "x", "proposal_id": "x"})
         assert r.status_code == 404, f"{name} 应已退役（404），实得 {r.status_code}"
         assert r.json()["error"]["code"] == "NOT_FOUND"

@@ -66,7 +66,7 @@ def _register() -> dict[str, Capability]:
         caps[name] = Capability(name, handler, set(allowed), write, idempotent, description)
 
     add("memory.hold", _hold, {"qiaosheng", "jiaming"}, True,
-        description="写入一条正式记忆（v2 分层：标题/八分类/事件/同期心情/我们的话）")
+        description="写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）")
     add("memory.get", _get, _owners(), False, description="读取当前表示（遗忘桶只返回摘要）")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
@@ -87,7 +87,7 @@ def _register() -> dict[str, Capability]:
     add("memory.our_words.list", _our_words_list, _owners(), False,
         description="列出桶内双方话语（按 ordinal）")
     add("memory.categories.replace", _categories_replace, _owners(), True,
-        description="整组替换八分类（平行多选；触发期限重算）")
+        description="整组替换九分类（平行多选，非空必填）")
     add("i.get", _i_get, _owners(), False, description="I 正本当前版（周家明写）")
     add("i.write", _i_write, {"jiaming"}, True,
         description="写 I 正本（仅周家明；版本留底；无情绪准入）")
@@ -313,7 +313,10 @@ def _register() -> dict[str, Capability]:
     add("memory.meanings.list", _meaning_list, _owners(), False,
         description="列出当前 meaning 层")
     add("maintenance.rebuild_index", _rebuild_index, _owners(), True,
-        description="按当前版本重建全部投影与 FTS（遗忘桶仅摘要）")
+        description="按当前版本重建全部派生索引（旧投影+分字段+words+source）")
+    add("maintenance.source.cleanup", _source_cleanup, _owners(), True,
+        description="清理 Source 暂存残留（过期 staging/part 文件）；"
+                    "返回清理计数")
     add("maintenance.semantic.warmup", _semantic_warmup, _owners(), True,
         description="全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）")
     add("workspace.tasks.list", _tasks_list, {"worker", "qiaosheng", "jiaming"}, False,
@@ -727,6 +730,13 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
         str(a.get("record_principal", principal.principal_id)),
         str(a.get("capability", "")), str(a.get("idempotency_key", "")),
         int(a.get("stale_seconds", 60)))
+
+
+def _source_cleanup(principal: Principal, a: dict) -> dict:
+    from ..source import archive as src_archive
+    hours = int(a.get("max_age_hours", 48))
+    return {"removed": src_archive.cleanup_staging(hours),
+            "max_age_hours": hours}
 
 
 def _find_words(principal: Principal, a: dict) -> dict:

@@ -1,4 +1,4 @@
-"""八分类平行多选（spec_v2 R04 / §7.1）。
+"""九分类平行多选（v1.7 §3.2：daily/milestone/sad/sweet/date/plan/sex/anniversary/reloplay）。
 
 同一桶可同时属于多个分类（平行，无主副）；一个分类只存一行。
 期限取桶内所有分类的最长自然日周期；重大转折/纪念为永久类，
@@ -27,17 +27,6 @@ LABELS = {
 }
 
 #: 自然日周期；None = 永久（不自动遗忘）。plan 无独立期限（plan_managed）。
-PERIOD_DAYS: dict[str, int | None] = {
-    "daily": 20,
-    "sad": 30,
-    "sweet": 30,
-    "sex": 20,
-    "date": 60,
-    "milestone": None,
-    "anniversary": None,
-    "plan": -1,  # 哨兵：不参与 max，且使纯 plan 桶成为 plan_managed
-}
-
 PERMANENT = {"milestone", "anniversary"}
 
 
@@ -101,27 +90,4 @@ def list_of(conn, memory_id: str) -> list[str]:
     return [r["category"] for r in rows]
 
 
-def period_days(categories: list[str]) -> int | None:
-    """最长自然日周期；永久类返回 None；纯 plan 返回 None（plan_managed）。
 
-    日常20 / 伤心30 / 甜蜜30 / 做爱20 / 约会60；多类取最长（R04/R11）。
-    """
-    if not categories:
-        return None  # 未分类：无期限依据，不自动压缩（见 DECISIONS）
-    if PERMANENT & set(categories):
-        return None
-    days = [PERIOD_DAYS[c] for c in categories if PERIOD_DAYS[c] > 0]
-    if not days:
-        return None  # 纯 plan 分类
-    return max(days)
-
-
-def classify(categories: list[str]) -> str:
-    """桶的留存分类：permanent / plan_managed / timed / uncategorized。"""
-    if not categories:
-        return "uncategorized"
-    if PERMANENT & set(categories):
-        return "permanent"
-    if period_days(categories) is None:
-        return "plan_managed"
-    return "timed"

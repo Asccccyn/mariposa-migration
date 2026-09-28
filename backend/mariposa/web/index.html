@@ -290,13 +290,29 @@ async function searchMemories(q) {
     box.innerHTML = '';
     for (const h of d.hits) {
       const mem = await api('memory.get', { memory_id: h.memory_id });
+      const [keeps, words, recols, bindings] = await Promise.all([
+        api('memory.keeps.list', { memory_id: h.memory_id }).catch(() => ({ marks: [], active_keepers: [] })),
+        api('memory.our_words.list', { memory_id: h.memory_id }).catch(() => ({ words: [] })),
+        api('memory.recollections.list', { memory_id: h.memory_id }).catch(() => ({ recollections: [] })),
+        api('source.binding.list', { memory_id: h.memory_id }).catch(() => ({ bindings: [] })),
+      ]);
       const div = document.createElement('div');
       div.className = 'item';
+      // v1.7 八模块：标题/日期/分类/心情/事件/我们的话/回忆/原文绑定 + 阶段
+      const mood = mem.mood || null;
       div.innerHTML =
         `<div class="meta"><span>${esc(mem.memory_id)}</span>` +
         `<span class="tag ${esc(mem.representation)}">${mem.representation === 'full' ? 'full' : '旧表示(' + mem.representation + ')'}</span>` +
-        `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span></div>` +
+        `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span>` +
+        (mem.categories || []).map(c => `<span class="tag">${esc(c)}</span>`).join('') +
+        (keeps.active_keepers || []).map(k => `<span class="tag full">留·${esc(k)}</span>`).join('') +
+        `</div>` +
+        (mem.original_title ? `<div class="mem-detail"><strong>${esc(mem.original_title)}</strong></div>` : '') +
         `<div class="mem-detail">${esc(mem.text)}</div>` +
+        (mood && (mood.tags || []).length ? `<div class="meta">心情标签: ${mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
+        ((words.words || []).length ? `<div class="mem-detail"><em>我们的话：</em>${words.words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '') +
+        ((recols.recollections || []).length ? `<div class="mem-detail"><em>回忆：</em>${recols.recollections.map(r => esc(r.author) + ': ' + esc(r.text)).join('；')}</div>` : '') +
+        ((bindings.bindings || []).length ? `<div class="meta">原文绑定 ${bindings.bindings.length} 段（source.memory.open 查看）</div>` : '') +
         `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span></div>`;
       box.appendChild(div);
     }

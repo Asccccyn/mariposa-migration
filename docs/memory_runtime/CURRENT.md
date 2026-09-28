@@ -1,79 +1,87 @@
-# Mariposa 召回运行时·当前语义（CURRENT）
+# Mariposa 记忆运行时·当前语义（CURRENT）
 
-**性质：仓库内唯一现行召回说明（v1.4 §0：不保留多套并列有效语义）**
-生效：2026-09-26｜上游正本：`Mariposa_记忆运行语义正本_v1.3.md` +
-`Mariposa_分层混合召回_GLM实现路径_v1.4.md`
-
-旧召回说明（v2.0.1 文档中的召回章节）凡与本文件冲突的句子已被本文件
-覆盖；Git 历史保留旧版。v2.0.1 未被改变的存储、遗忘、审批、身份、
-自然日规则继续有效。
+**性质：仓库内唯一现行说明（v1.7 §0：不保留多套并列有效语义）**
+生效：2026-09-28｜上游正本：《Mariposa_v1.7 最终执行包》
+（`LATEST_DECISIONS.json` + 主执行文档）；历史版本（v1.3/v1.4/v2.0.1）
+只作代码定位与证据，凡与本文件冲突的旧句已被覆盖。
 
 ## 1. 一句话
 
-Chat（MCP）与 CC（estómago）等权调用同一 Recall Session 运行时：
-查询分层校验 → 授权范围内作用域隔离的词法+向量粗召回 → 去重/RRF →
-可选 Jev 精排（默认关闭）→ 代码门控 → 0—3 条带证据分级的候选卡 →
-周家明判断；纠正只改本 session 临时状态，永不修改正式记忆。
+不遗忘、不压缩、不生成摘要；记忆按九分类整数周期在 WIDE→MID→CORE
+间**现算**淡出（可检索字段逐层收窄，不是删除）；找话是全量 our_words
+专项；原文（Source 层）是二轮深搜与证据展开层，永不进第一轮普通召回；
+所有候选正文出站前必经一层 Jev。
 
 ## 2. 分层规则（现行）
 
-- **Recall Session 正本只在 Mariposa**（`runtime/recall/recall.sqlite3`）。
-  estómago 只携带 session ref / revision / version receipts 换窗重取，
-  不建第二份正本。
-- 检索限制与补查预算由 Mariposa session 层维护：一个 burst =
-  原始+≤2 替代表达、初次+≤2 轮补查；每 session ≤3 burst、累计 9 轮。
-  新 burst 必须绑定真实用户继续请求（`continue_request_ref`）。
-- 查询分层：`explicit_constraints`（白名单字段可硬过滤）/
-  `explicit_negative_constraints`（硬排除）/
-  `resolved_references`（带来源与作用域）/
-  `inferred_hints`（软提示，永不硬过滤，QUERY-01）/
-  `alternate_queries`（不新增事实）/`unknowns`（不自动填成事实）。
-  白名单外过滤字段报错不静默忽略；两个明确条件冲突返回 CONFLICT。
-- 普通事件召回（未遗忘=事件正文，遗忘=批准摘要+forget_tags）与
-  **独立 words 通道**互不混排（WORD-01）；mixed 返回时各通道证据
-  角色独立（WORD-04）。raw 不是直接通道，只在 words 证据不足且
-  显式开启授权时做专项补查（RAWX-01..04）。
-- 证据分级八类：`authored_event / approved_summary / structured_fact /
-  word_verbatim / word_paraphrase / word_unverified / raw_verbatim /
-  relation_reference`。authored_event 不冒充原话（EVID-01）；
-  paraphrase/unverified 不满足 verbatim_required（EVID-02/PACK-07）；
-  来源失效的 verbatim 降级 word_unverified（EVID-03）。
-- 全链路 `content_role=retrieved_memory`、`instruction_authority=none`
-  （SAFE-01/02）：记忆正文里的指令只是历史数据。
-- 遗忘后的 words 显式检索 = **disabled / PENDING_OWNER_DECISION**
-  （唯一未决业务项；确认后直接改本文件对应章节，不新增第二套语义）。
-- 检索/预览/关系浏览/版本校验不触发普通记忆续期（WORD-05）；
-  plan 固定自然日期限不变。
-- 无 raw 绑定的 verbatim 话语视为正式逐字记录（word_verbatim）；
-  有绑定时按来源有效性校验。
+- **Recall Session 正本只在 Mariposa**（`runtime/recall/`）；estómago/CC
+  只带 session ref 换窗重取。七动作（start/refine/reject/accept/
+  navigate/status/close）与预算/继续请求约束沿用 v1.4 §9 机制不变。
+- **删除链已退役（v1.7）**：自动遗忘、二次压缩、摘要生产/审查/发布、
+  林石见审查角色整链删除（migration 16/19/20 + workspace 4）；历史
+  forgotten_summary 表示读侧标 `LEGACY_CONTENT_GAP`，恢复走一次性
+  离线迁移（offline 工具），无在线 restore。
+- **明开回温**：`memory.open` → `view.confirm` 的服务端确认时刻写入
+  `memories.last_explicit_open_at`（取 max 防倒退，同票据幂等不刷新）；
+  命中/Jev/hydrate/bootstrap/预览/accept 都不算打开。
 
-## 3. 能力清单（Registry 现名）
+## 3. 阶段策略（`recall/phase_policy.py`，每次查询现算、永不持久化）
 
-`memory.recall.start/refine/reject/accept/navigate/status/close`、
-`memory.words.recall/get`、`memory.context.validate`；
-`memory.relations.read` 的现名等价物为 `memory.relations.list/trace`。
-旧 `memory.recall`/`memory.search` 保持 event-only 兼容（返回补数据
-角色标注）。MCP 名 = `mariposa_` + 点换下划线。
+- 九分类必填：daily=20 / sex=20 / sad=30 / sweet=30 / date=60 /
+  **reloplay=7（工程初值）** 天；milestone/anniversary 永久；plan 由
+  计划资源状态自管。多选取最大 H，不累加；k=100（改 k 需两位主体同意）。
+- 分支顺序：作者 keep > 永久类别 > plan（未终态 WIDE / done|cancelled
+  即时 CORE）> 整数年龄（basis = max(首次 hold 上海日, 最近有效明开
+  上海日)；D<H→WIDE，H≤D<2H→MID，D≥2H→CORE）。
+- 字段矩阵：WIDE 6（标题/日期/分类/心情标签/事件/我们的话）→ MID 5
+  （去我们的话）→ CORE 4（再去标题）。mood_text 与回忆全阶段全检索
+  禁用；raw 不属于 6/5/4。
 
-## 4. 开关（生产默认全关；隔离验收后分项启用）
+## 4. 召回管线（`recall/pipeline.py` 已接主线）
 
-```text
-MARIPOSA_RECALL_ENABLED / MARIPOSA_WORDS_RECALL_ENABLED /
-MARIPOSA_RAW_FALLBACK_ENABLED（默认 false）
-MARIPOSA_RECALL_JUDGE_PROVIDER（默认 disabled）
-MARIPOSA_ROOT（非 Windows 必须显式）+ MARIPOSA_ALLOW_CREATE（首建）
-```
+- **Round 1**：结构过滤前置 → 每桶按当前事实现算阶段 → AllowedFields
+  内在分字段索引（`field_search_docs`+`field_fts`，title/event/words
+  各自独立投影）执行词法检索；dense 路同 where 前置；RRF 融合 →
+  一层 Jev（默认关闭，`DisabledJudge` 显式 unavailable）→ 代码门控
+  0-3 卡。首轮真实执行完成自动签发 `ROUND1_COMPLETE` 回执。
+- **Round 2**（`memory.recall.round2`）：gate 八条件全部服务端事实
+  （同 session/revision、ROUND1_COMPLETE 回执、judge 完成、raw 授权
+  = RECALL_RUNTIME+RAW_FALLBACK 开关且 owners、预算、理由属五值闭集）；
+  通过后在 Source 层（published=1，human/assistant）深搜，候选标
+  `raw_verbatim`，仍经同一层 Jev 出站。
+- **find_words**（`memory.find_words`）：跨阶段全量 our_words 专项
+  （受 `MARIPOSA_WORDS_RECALL_ENABLED` 开关）；verbatim 不足可按
+  §6.5 升级 raw 深搜。已知 `source_ref` 的定点展开是证据读取，不是
+  检索 round，不需 Jev 重判。
+- 生产开关默认全关：`MARIPOSA_RECALL_ENABLED` /
+  `MARIPOSA_WORDS_RECALL_ENABLED` / `MARIPOSA_RAW_FALLBACK_ENABLED` /
+  judge——**无例外**（v1.7 新能力已全部纳入开关约束）。
 
-## 5. 状态分层（§12 + session 九状态）
+## 5. 「留」keep（v1.7 §5.5）
 
-检索结果状态（FOUND/AMBIGUOUS/CONFLICT/NO_MATCH_OBSERVED/DEGRADED/
-BUDGET_EXHAUSTED/STALE_RETRY_REQUIRED/UNAVAILABLE）与 session 生命周期
-状态分开；`degraded_reasons` 表达并存的降级因素（如
-semantic_unavailable 与 judge_timeout 可共存）而不都升为 DEGRADED。
+唯一入口：`recollection.append(keep_wide=True)` 同事务绑定本次新写
+的回忆；hold 不能留、非本人回忆不能留、后台模型无权。谁留谁撤
+（`memory.keep.revoke` 幂等）；双作者独立 OR；撤销不重置年龄。
 
-## 6. 失效与恢复
+## 6. Source 原文层（证据层）
 
-正式修订/遗忘/restore/撤权 → 读取时重校验回执（receipts vs 当前库），
-失效引用不重放旧正文，受影响 session 转 STALE_RETRY_REQUIRED；
-容器/进程重启后未过期 session 从宿主 runtime 库恢复（SESSION-04）；
-TTL（24h，可配）只是运行状态清理，不影响正式记忆自然日期限。
+Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
+流式导入 → 发布门禁（published）→ 专项检索（`source.search` 独立于
+普通 Recall）。失败批次默认不可见；同 UUID 内容变化留不可变版本。
+`memory_source_bindings` 绑定消息区间（parent 路径校验 + code point
+半开区间偏移 + content_hash 防漂移）。
+
+## 7. 未决业务项
+
+- forgotten our_words recall：保持 `disabled / PENDING_OWNER_DECISION`
+  （删除链退役后仅影响存量遗留表示，等乔生拍板）。
+
+## 8. 与旧文档的关系
+
+v1.4 的 session 机制、证据分级八类（`authored_event/structured_fact/
+word_verbatim/word_paraphrase/word_unverified/raw_verbatim/
+relation_reference` + 遗留 `approved_summary`）、安全包装
+（`content_role=retrieved_memory` / `instruction_authority=none`）、
+幂等/审计继续有效；其遗忘续期、retention 表、摘要通道、"raw 非直接
+通道"段已由本文件覆盖。`POLICY_VERSION="mariposa_v1_7"`、
+`RECALL_POLICY_VERSION="recall-v1.7"`。
