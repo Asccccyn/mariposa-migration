@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime, timezone
 
 from .. import audit, config, db
-from ..memory import retention as retention_mod
 from ..memory import service as memory
 from ..errors import Forbidden, NotFound
 
@@ -18,7 +17,6 @@ STATES = {"planned", "active", "waiting", "blocked", "done", "cancelled"}
 OPEN_STATES = {"active", "waiting", "blocked"}
 TERMINAL_STATES = {"done": "completed_at", "cancelled": "abandoned_at"}
 #: plan 终结后的固定到期自然日数（S4 确认；不按小时累计）
-TERMINAL_FORGET_DAYS = 20
 
 
 def _now() -> str:
@@ -34,12 +32,10 @@ def _tz_of(v) -> str:
 
 
 def _terminal_anchors(now: str, tzname: str) -> dict:
-    """终结自然日 + 固定 20 自然日到期（起算日第 0 日）。"""
-    t_date = retention_mod.local_date(now, tzname)
-    due = retention_mod.due_from_basis(t_date, TERMINAL_FORGET_DAYS)
-    return {"terminal_date": t_date.isoformat(),
-            "due_date": due.isoformat(),
-            "next_due_at": retention_mod.start_of_local_day_utc(due, tzname)}
+    """终结自然日（v1.7：不再计算 20 日遗忘到期；终态 plan 即时 CORE）。"""
+    from .. import biztime
+    t_date = biztime.local_date(now, tzname)
+    return {"terminal_date": t_date.isoformat()}
 
 
 def create(principal_id: str, title: str, content: str | None = None,
@@ -90,11 +86,6 @@ def create(principal_id: str, title: str, content: str | None = None,
                 conn.execute(
                     "INSERT OR IGNORE INTO plan_memory_links(plan_id, memory_id)"
                     " VALUES(?,?)", (pid, mid))
-            if state in TERMINAL_STATES:
-                # 直建终态计划同样进入到期队列（与 update 终结路径一致）
-                from ..workspace import due_queue
-                due_queue.replace_pending(conn, "plan", pid,
-                                          anchors.get("due_date"))
             audit.record(conn, "plan.changed", principal_id, resource_id=pid,
                          resource_version=1, payload={"action": "create", "state": state})
             conn.execute("COMMIT")
@@ -171,14 +162,7 @@ def update(principal_id: str, plan_id: str, expected_version: int, **changes) ->
         sets = ", ".join(f"{k}=?" for k in plans_update)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            # 队列是 plans 锚点的派生物，必须与锚点同事务落库，
-            # 否则 plans 回滚后队列与真源不一致
-            from ..workspace import due_queue
-            if not was_terminal and now_terminal:
-                due_queue.replace_pending(conn, "plan", plan_id,
-                                          plans_update.get("due_date"))
-            elif was_terminal and not now_terminal:
-                due_queue.replace_pending(conn, "plan", plan_id, None)
+            # v1.7：遗忘到期队列已退役；plan 终态即 CORE 由阶段策略现算
             conn.execute(
                 "INSERT INTO plan_versions(plan_id, version_no, title, content, state,"
                 " starts_at, due_at, date_start, date_end, timezone, all_day, weight,"

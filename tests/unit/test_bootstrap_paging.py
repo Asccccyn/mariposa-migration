@@ -53,7 +53,7 @@ def test_memory_days_pagination_no_silent_truncation(actors):
     ids = set()
     for i in range(60):  # 窗口内 60 桶 > 段上限 50
         h = memory.hold(actors["jiaming"], text=f"分页桶 {i}",
-                        memory_date=today.isoformat())
+                        memory_date=today.isoformat(), categories=["daily"])
         ids.add(h["memory_id"])
     first = bootstrap.get("jiaming", "cc", "cc")
     md = first["memory_days"]
@@ -69,7 +69,7 @@ def test_memory_days_pagination_no_silent_truncation(actors):
 def test_page2_stale_when_resources_change(actors):
     first = bootstrap.get("jiaming", "cc", "cc")
     # 底层资源变化（记忆/计划/I/纪念日任一）→ 旧快照分页拒绝
-    memory.hold(actors["jiaming"], text="新桶", memory_date=_today().isoformat())
+    memory.hold(actors["jiaming"], text="新桶", memory_date=_today().isoformat(), categories=["daily"])
     with pytest.raises(SnapshotStale):
         bootstrap.next_page("jiaming", "cc", first["snapshot_id"],
                             {"plans_offset": 0}, section="plans")

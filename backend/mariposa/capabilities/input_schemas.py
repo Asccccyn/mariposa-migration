@@ -377,14 +377,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             },
         },
     },
-    "memory.retention.decide": {
-        "type": "object", "required": ["item_id", "decision"],
-        "additionalProperties": False,
-        "properties": {
-            "item_id": {"type": "string", "minLength": 1},
-            "decision": {"type": "string", "enum": ["keep", "continue", "defer"]},
-        },
-    },
 }
 
 

@@ -77,7 +77,7 @@ class TestLetters:
 class TestDeletion:
     def _hold(self, actors, text="将被申请删除的测试记忆"):
         return memory.hold(actors["jiaming"], text=text,
-                           memory_date="2026-06-01", date_confidence="exact")
+                           memory_date="2026-06-01", date_confidence="exact", categories=["daily"])
 
     def test_full_flow_approve_archive(self, actors):
         hold = self._hold(actors)

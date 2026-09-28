@@ -15,7 +15,6 @@ from mariposa.moments import service as moments
 from mariposa.raw import binding, service as raw
 from mariposa.reminders import service as reminders
 from mariposa.retrieval import search as retrieval
-from mariposa.workspace import service as workspace
 from tests.conftest import reset_all
 
 
@@ -30,17 +29,10 @@ def actors():
 
 
 def _hold(actors, text="关联测试桶", date="2026-06-01"):
-    return memory.hold(actors["jiaming"], text=text, memory_date=date)
+    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"])
 
 
 class TestMemoryExtras:
-    def test_flags_exclude_from_scan(self, actors):
-        h = _hold(actors)
-        assert extras.set_flag("qiaosheng", h["memory_id"], "protect", True)
-        scan = workspace.scan_candidates(actors["worker"])
-        assert not any(p["target_memory_id"] == h["memory_id"]
-                       for p in scan["created"])
-
     def test_update_creates_version_and_reindex(self, actors):
         h = _hold(actors, text="初版正文")
         u = extras.update_text("jiaming", h["memory_id"], 1,
@@ -112,7 +104,7 @@ class TestRawBinding:
                  "sequence": i} for i in range(n)]})
 
     def test_pending_then_bind_then_revoke(self, actors):
-        h = memory.hold(actors["jiaming"], text="周末去了山里", memory_date="2026-06-01")
+        h = memory.hold(actors["jiaming"], text="周末去了山里", memory_date="2026-06-01", categories=["daily"])
         with db.formal() as conn:
             state = conn.execute("SELECT source_state FROM memories WHERE memory_id=?",
                                  (h["memory_id"],)).fetchone()
@@ -132,8 +124,8 @@ class TestRawBinding:
         assert refs[0]["bind_confidence"] == "revoked"  # 留历史
 
     def test_dedupe_needs_review(self, actors):
-        h1 = memory.hold(actors["jiaming"], text="第一个桶", memory_date="2026-06-01")
-        h2 = memory.hold(actors["jiaming"], text="第二个桶", memory_date="2026-06-01")
+        h1 = memory.hold(actors["jiaming"], text="第一个桶", memory_date="2026-06-01", categories=["daily"])
+        h2 = memory.hold(actors["jiaming"], text="第二个桶", memory_date="2026-06-01", categories=["daily"])
         self._import_conv()
         conv = raw.conversations_list()[0]["id"]
         binding.bind("jiaming", h1["memory_id"], conv, "bm0", "bm2")
@@ -208,46 +200,6 @@ class TestMoments:
         assert listed[0]["content"].startswith("今天")
         # group_archive 与 post 分开
         assert all(x["kind"] == "post" for x in listed)
-
-
-class TestBatchAndCooldown:
-    def _submitted(self, actors, text):
-        h = _hold(actors, text)
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"]
-                    if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     f"{text} 的摘要。", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        return h, sub
-
-    def test_batch_and_cooldown(self, actors):
-        h1, s1 = self._submitted(actors, "批量测试一")
-        h2, s2 = self._submitted(actors, "批量测试二")
-        out = workspace.decide_batch(actors["qiaosheng"], [
-            {"proposal_id": s1["proposal_id"], "proposal_revision": s1["revision"],
-             "proposal_hash": s1["proposal_hash"],
-             "expected_memory_version": s1["base_memory_version"],
-             "decision": "approve"},
-            {"proposal_id": s2["proposal_id"], "proposal_revision": s2["revision"],
-             "proposal_hash": "0" * 64,  # 篡改 -> 单项失败
-             "expected_memory_version": s2["base_memory_version"],
-             "decision": "approve"},
-        ])
-        by_id = {r["proposal_id"]: r for r in out["results"]}
-        assert by_id[s1["proposal_id"]]["ok"] is True
-        assert by_id[s2["proposal_id"]]["ok"] is False
-        assert by_id[s2["proposal_id"]]["error"] == "PROPOSAL_HASH_MISMATCH"
-
-        # 篡改的 decide 未产生终局：用正确 hash 正式拒绝 -> 冷却生效
-        workspace.decide(actors["jiaming"], proposal_id=s2["proposal_id"],
-                         proposal_revision=s2["revision"],
-                         proposal_hash=s2["proposal_hash"],
-                         expected_memory_version=s2["base_memory_version"],
-                         decision="reject")
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        assert any(s["memory_id"] == h2["memory_id"] and
-                   s["reason"] == "rejection_cooldown" for s in scan["skipped"])
 
 
 class TestReservedContracts:

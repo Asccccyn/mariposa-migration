@@ -10,7 +10,6 @@ from mariposa.content import service as content
 from mariposa.errors import Forbidden, SnapshotStale
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.workspace import service as workspace
 from tests.conftest import reset_all
 
 
@@ -96,7 +95,7 @@ class TestDiary:
 class TestEmotionTags:
     def _hold(self, actors):
         return memory.hold(actors["jiaming"], text="一起挑了婚礼请柬的纸张",
-                           memory_date="2026-06-01")
+                           memory_date="2026-06-01", categories=["daily"])
 
     def test_whose_required(self, actors):
         h = self._hold(actors)
@@ -107,24 +106,6 @@ class TestEmotionTags:
         out = content.by_emotion("开心", "qiaosheng")
         assert out["hits"] and out["hits"][0]["matched_by"] == "tag"
 
-    def test_forgotten_bucket_still_findable_by_tag(self, actors):
-        h = self._hold(actors)
-        content.tags_add("jiaming", h["memory_id"], [{"tag": "期待", "whose": "jiaming"}])
-        scan = workspace.scan_candidates(actors["worker"], min_idle_days=0)
-        prop = next(p for p in scan["created"] if p["target_memory_id"] == h["memory_id"])
-        rev = workspace.revise_draft(actors["worker"], prop["proposal_id"],
-                                     "一起挑了纸质品。", "压缩")
-        sub = workspace.submit(actors["worker"], prop["proposal_id"], rev["revision"])
-        workspace.decide(actors["qiaosheng"], proposal_id=sub["proposal_id"],
-                         proposal_revision=sub["revision"],
-                         proposal_hash=sub["proposal_hash"],
-                         expected_memory_version=sub["base_memory_version"],
-                         decision="approve")
-        out = content.by_emotion("期待", "jiaming")  # 结构化入口不因压缩消失
-        assert any(x["memory_id"] == h["memory_id"] for x in out["hits"])
-        assert out["hits"][0]["representation"] == "forgotten_summary"
-
-
 class TestBootstrapSnapshot:
     def test_snapshot_stale_on_change(self, actors):
         first = bootstrap.get("jiaming", "cc", "cc")
@@ -132,7 +113,7 @@ class TestBootstrapSnapshot:
         again = bootstrap.get("jiaming", "cc", "cc", loaded_snapshot_id=snap)
         # BOOT-08：未变 -> 薄响应不重复灌包（unchanged=true）
         assert again.get("unchanged") is True
-        memory.hold(actors["jiaming"], text="新桶", memory_date=None)
+        memory.hold(actors["jiaming"], text="新桶", memory_date=None, categories=["daily"])
         with pytest.raises(SnapshotStale):
             bootstrap.get("jiaming", "cc", "cc", loaded_snapshot_id=snap)
 
