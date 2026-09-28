@@ -94,11 +94,11 @@ def test_session02_http_mcp_same_semantics(c, seeded):
     mcp = tool(c, "jiaming", "mariposa_memory_words_recall", args)
     assert http["hits"] == mcp["hits"]
     assert http["instruction_authority"] == "none"
-    # words 通道能找到话语，event-only 找不到（隔离在两个入口一致）
+    # v1.7：WIDE 阶段 event 通道含 our_words 字段 → 两入口一致命中
     ev = tool(c, "jiaming", "mariposa_memory_recall_start", {
         "query_plan": {"original_request": "窗帘", "channels": ["event"],
                        "lexical_terms": ["窗帘"]}})
-    assert ev["candidates"] == []
+    assert ev["candidates"], "WIDE 六入口应含我们的话（HTTP/MCP 一致）"
 
 
 def test_worker_cannot_use_recall_runtime(c, actors):

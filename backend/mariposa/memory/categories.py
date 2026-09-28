@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from .. import db
 from ..errors import Forbidden, NotFound
 
-CATEGORIES = ("daily", "milestone", "sad", "sweet", "date", "plan", "sex",
-              "anniversary")
+CATEGORIES = ("daily", "milestone", "sad", "sweet", "date", "plan",
+              "sex", "anniversary", "reloplay")
 
 LABELS = {
     "daily": "日常",

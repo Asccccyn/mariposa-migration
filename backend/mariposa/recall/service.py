@@ -67,12 +67,12 @@ def _event_candidates(conn, plan: dict, rejected: set[str],
     terms, phrases = qp.plan_token_groups(plan)
     lexical_rows: list = []
     if terms or phrases:
-        res = fusion.scoped_lexical_search(conn, lex_where, lex_params,
-                                           terms, phrases)
-        lexical_rows = [h["row"] for h in
-                        res["rows"][:config.RECALL_LEXICAL_K]]
-        coverage["event"] = ("partial" if res["capped"]
-                             else "complete_within_scope")
+        # v1.7 主线接线（A04）：阶段过滤 + 分字段索引替代整桶投影检索
+        from . import pipeline as _pl
+        stage_hits = _pl.round1_lexical_hits(conn, plan, rejected, coverage)
+        return stage_hits + _dense_tail(conn, plan, terms, phrases,
+                                        base_where, base_params, rejected,
+                                        coverage, degraded)
     else:
         # 空 query = 浏览该池（HYBRID-09）：不构造随机/空语义向量
         lexical_rows = conn.execute(
@@ -105,6 +105,14 @@ def _event_candidates(conn, plan: dict, rejected: set[str],
             "_row": dict(r),
         })
 
+    dense = _dense_tail(conn, plan, terms, phrases, base_where,
+                        base_params, rejected, coverage, degraded)
+    return lexical_hits + dense
+
+
+def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
+                rejected, coverage, degraded) -> list[dict]:
+    """dense 路独立函数（v1.7 接线后与阶段词法路并列）。"""
     dense_hits: list[dict] = []
     if plan.get("semantic_query") and (terms or phrases):
         if config.SEMANTIC_PROVIDER == "local_bge_zh":
@@ -136,7 +144,7 @@ def _event_candidates(conn, plan: dict, rejected: set[str],
                                    else "unavailable")
         if config.SEMANTIC_PROVIDER != "local_bge_zh" and (terms or phrases):
             degraded.append("semantic_unavailable")
-    return lexical_hits + dense_hits
+    return dense_hits
 
 
 def _attach_event_evidence(conn, candidates: list[dict]) -> None:
@@ -190,6 +198,7 @@ def _words_evidence_insufficient(plan: dict, words_hits: list[dict]) -> bool:
 def _run_round(session: dict, plan: dict) -> dict:
     """一轮检索：两路召回 → RRF → 可选精排 → 代码门控 → 证据包。"""
     sid = session["session_id"]
+    from . import pipeline as _pl
     rejected = store.rejected_resource_refs(sid)
     coverage: dict = {"truncated": False}
     degraded: list[str] = []
@@ -343,6 +352,10 @@ def _run_round(session: dict, plan: dict) -> dict:
         "token_count": config.RECALL_TOKENIZER,
     }
     store.update_status(sid, session["current_revision"], status)
+    # v1.7 A05：首轮真实执行完成（无论有无候选）即签发 ROUND1_COMPLETE
+    # 回执——这是 Round 2 gate 的服务端事实；故障/降级轮不签发
+    if search_status not in ("UNAVAILABLE", "ERROR", "DEGRADED"):
+        _pl.mark_round1_complete(sid)
     return packet
 
 
