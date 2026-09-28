@@ -123,7 +123,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "original_title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "categories": {"type": "array", "items": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan", "sex",
-                "anniversary"]}},
+                "anniversary", "reloplay"]}},
             "mood": {"type": "object", "additionalProperties": False,
                       "properties": {"text": {"type": "string"},
                                      "tags": {"type": "array",
@@ -157,7 +157,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {"memory_id": {"type": "string", "minLength": 1},
                         "receipt_id": {"type": "string", "minLength": 1},
-                        "text": {"type": "string", "minLength": 1}},
+                        "text": {"type": "string", "minLength": 1},
+                        "keep_wide": {"type": "boolean"}},
     },
     "memory.recollections.revise": {
         "type": "object", "required": ["recollection_id", "text"],
@@ -193,7 +194,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "memory_id": {"type": "string", "minLength": 1},
             "categories": {"type": "array", "minItems": 1, "items": {
                 "type": "string", "enum": ["daily", "milestone", "sad", "sweet",
-                                            "date", "plan", "sex", "anniversary"]}}},
+                                            "date", "plan", "sex", "anniversary",
+                                            "reloplay"]}}},
     },
     "i.get": {"type": "object", "properties": {}, "additionalProperties": False},
     "i.write": {

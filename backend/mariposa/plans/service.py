@@ -146,7 +146,6 @@ def update(principal_id: str, plan_id: str, expected_version: int, **changes) ->
             plans_update.update({
                 TERMINAL_STATES[new_state]: now,
                 "terminal_date": anchors["terminal_date"],
-                "due_date": anchors["due_date"],
                 "policy_timezone": tzname,
                 "terminal_revision": row["terminal_revision"] + 1,
             })

@@ -92,6 +92,12 @@ def _ext_for(mime: str) -> str:
 
 
 def get_media(principal_id: str, content_hash: str) -> tuple[dict, Path]:
+    # A03 修复：字节端点与 Registry media.get 同一授权（owners 专用）；
+    # 已知 hash 不等于读取许可
+    if principal_id not in ("qiaosheng", "jiaming"):
+        from ..errors import Forbidden as _F
+        raise _F("media bytes require owner principal",
+                 principal=principal_id)
     with db.formal() as conn:
         row = conn.execute("SELECT * FROM media_objects WHERE content_hash=?",
                            (content_hash,)).fetchone()

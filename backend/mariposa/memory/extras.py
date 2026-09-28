@@ -59,6 +59,15 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             raise Forbidden("forgotten memory cannot be edited in place; restore first")
         new_version = expected_version + 1
         now = _now()
+        # A01 修复：v2 分层字段按正本复制——未修改的 event_text/
+        # original_title/schema_version 必须进新版本行，禁止隐式置空
+        new_event = text if text is not None else (
+            v["event_text"] if "event_text" in v.keys() and v["event_text"]
+            else v["hold_text"])
+        old_title = v["original_title"] if "original_title" in v.keys() else None
+        old_schema = (v["schema_version"]
+                      if "schema_version" in v.keys() and v["schema_version"]
+                      else 1)
         payload = {"representation": "full", "hold_text": new_text,
                    "why_remember": new_why, "origin": "update"}
         from ..retrieval import projection
@@ -67,16 +76,20 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             conn.execute(
                 "INSERT INTO memory_versions(memory_id, version_no, representation,"
                 " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
-                " origin_kind, payload_hash, created_at)"
-                " VALUES(?,?,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
+                " origin_kind, payload_hash, created_at, original_title,"
+                " event_text, schema_version)"
+                " VALUES(?,?,'full',?,NULL,?,?,NULL,'initial_hold',?,?,?,?,?)",
                 (memory_id, new_version, new_text, new_why, principal_id,
-                 memory.canonical_hash(payload), now))
+                 memory.canonical_hash(payload), now, old_title, new_event,
+                 old_schema))
             conn.execute(
                 "UPDATE memories SET current_version_no=?, memory_date=?,"
                 " date_confidence=?, updated_at=? WHERE memory_id=?",
                 (new_version,
                  memory_date if memory_date is not None else m["memory_date"],
                  date_confidence or m["date_confidence"], now, memory_id))
+            from ..retrieval import field_projection as _fp
+            _fp.build_for_memory(conn, memory_id)
             projection.upsert(conn, memory_id, new_version, "full",
                               projection.build_full(new_text or "", new_why),
                               whitelist_body=projection.normalize_search_text(

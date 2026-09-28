@@ -40,8 +40,11 @@ def words_recall(actors, **a):
 
 
 class TestWordsChannel:
-    def test_word01_event_only_not_hit_by_words_probe(self, actors):
-        """WORD-01：独有词只写 our_words，event-only 召回不因该词命中。"""
+    def test_word01_words_field_stage_gated(self, actors):
+        """WORD-01（v1.7 REPLACE）：our_words 独有词按阶段进出 event 通道。
+
+        WIDE 六入口含我们的话 → 命中；拨老后 CORE 四入口不含 → 不命中。
+        """
         target = hold(actors, text="搬家事件正文",
                       our_words=[{"speaker": "qiaosheng",
                                   "text": "叽里咕噜独有话语",
@@ -52,13 +55,21 @@ class TestWordsChannel:
                 "original_request": "找叽里咕噜",
                 "channels": ["event"],
                 "lexical_terms": ["叽里咕噜"]}})
-        assert packet["candidates"] == []
-        assert packet["search_status"] == "NO_MATCH_OBSERVED"
-        # 旧 event 通道同样不命中（投影白名单结构性保证）
+        assert packet["candidates"], "WIDE 阶段 our_words 参与普通召回"
+        assert packet["candidates"][0]["memory_id"] == target["memory_id"]
+        # 拨老到 CORE（daily H=20 → 100 天 ≥ 2H）后同一词不再命中
+        from datetime import datetime, timedelta, timezone as _tz
         with db.formal() as conn:
-            from mariposa.retrieval import search as rs
-            out = rs.recall(conn, "叽里咕噜")
-        assert out["hits"] == []
+            conn.execute("UPDATE memories SET held_at=? WHERE memory_id=?",
+                         ((datetime.now(_tz.utc) - timedelta(days=100)
+                           ).isoformat(), target["memory_id"]))
+        packet2 = recall_service.start(actors["jiaming"], {
+            "query_plan": {
+                "original_request": "找叽里咕噜",
+                "channels": ["event"],
+                "lexical_terms": ["叽里咕噜"]}})
+        assert packet2["candidates"] == []
+        assert packet2["search_status"] == "NO_MATCH_OBSERVED"
 
     def test_word02_words_channel_finds_word(self, actors):
         """WORD-02：words 通道可命中话语资源。"""

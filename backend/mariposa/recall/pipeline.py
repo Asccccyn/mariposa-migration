@@ -29,7 +29,10 @@ def round1_candidates(conn, plan: dict, *, limit: int = None) -> dict:
     每桶阶段按当前事实现算（不读持久 stage 列）。
     """
     limit = limit or config.RECALL_LEXICAL_K
-    phrase = projection.compile_query(" ".join(plan.get("lexical_terms") or []))
+    from ..retrieval import query_plan as qp
+    phrase = qp.compile_plan_lexical(plan)
+    if not phrase:
+        phrase = "''"  # 空表达式 = 浏览（全部桶按阶段给出）
     ec = (plan.get("explicit_constraints") or {})
     where, params = _structure_filters(ec)
 
@@ -176,3 +179,110 @@ def find_words_candidates(conn, plan: dict, *, limit: int = 30) -> dict:
             "coverage": res.get("coverage"),
             "verbatim_required": verbatim_only,
             "stage_restricted": pp.find_words_stage_restricted()}
+
+
+# ------------------------------------------------ 主线适配层（A04 接线）
+
+def round1_lexical_hits(conn, plan: dict, rejected: set[str],
+                        coverage: dict) -> list[dict]:
+    """阶段过滤词法检索：给 _run_round 主线调用的适配层。
+
+    与 v1.4 _event_candidates 词法路同构返回（resource_ref/_row/
+    matched_by/matched_fields），但检索面按每桶当前阶段的 AllowedFields
+    在分字段索引（field_fts）上执行（v1.7 §6.3）。dense 路仍由主线
+    自行处理（结构过滤前置不变）。
+    """
+    from ..retrieval import query_plan as qp
+    from ..retrieval import field_projection as fp_mod
+    base_where, base_params, _, _ = qp.AllowedScope.for_plan(plan)
+    where = list(base_where)
+    params = list(base_params)
+    if rejected:
+        ids = [r[len("memory:"):] for r in rejected
+               if r.startswith("memory:")]
+        if ids:
+            marks = ",".join("?" * len(ids))
+            where.append(f"m.memory_id NOT IN ({marks})")
+            params += ids
+    terms, phrases = qp.plan_token_groups(plan)
+    if not (terms or phrases):
+        return []  # 浏览模式由主线旧路径处理（结构化浏览不带词法）
+
+    # 复用主线的安全 FTS 编译器（terms OR 组 + phrases AND；消毒同源）
+    phrase = qp.compile_plan_lexical(plan)
+    if not phrase:
+        return []
+    cond = ("WHERE " + " AND ".join(where)) if where else ""
+    pool = conn.execute(
+        f"SELECT m.memory_id FROM memories m {cond} LIMIT 2000",
+        params).fetchall()
+
+    hits: list[dict] = []
+    stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
+    for r in pool:
+        mid = r["memory_id"]
+        ref = f"memory:{mid}"
+        if ref in rejected:
+            continue
+        try:
+            phase = pp.phase_of(mid)
+        except (pp.DataGap, pp.PolicyError):
+            stats["gap"] += 1
+            continue
+        stats[phase.stage] += 1
+        kinds = fp_mod.stage_filter_kinds(pp.eligible_fields(phase))
+        if not kinds:
+            continue
+        row = conn.execute(
+            "SELECT memory_id, field_kind FROM field_fts"
+            " WHERE field_fts MATCH ? AND memory_id=? AND field_kind IN (%s)"
+            " LIMIT 3" % ",".join("?" * len(kinds)),
+            (phrase, mid, *kinds)).fetchall()
+        if not row:
+            continue
+        matched_kinds = sorted({x["field_kind"] for x in row})
+        m = conn.execute(
+            "SELECT m.memory_id, m.memory_date, m.compression_state,"
+            " m.current_version_no, rd.projection_kind, rd.search_text,"
+            " rd.whitelist_body FROM memories m"
+            " JOIN retrieval_documents rd ON rd.memory_id=m.memory_id"
+            " WHERE m.memory_id=?", (mid,)).fetchone()
+        if m is None:
+            continue
+        hits.append({
+            "resource_ref": ref, "candidate_ref": ref,
+            "memory_id": mid, "channel": "event",
+            "representation": m["projection_kind"],
+            "content_version": str(m["current_version_no"]),
+            "representation_version": str(m["current_version_no"]),
+            "projection_version": config.PROJECTION_REVISION,
+            "memory_date": m["memory_date"],
+            "matched_by": (["summary_keyword"]
+                           if m["compression_state"] == "forgotten_summary"
+                           else ["keyword"]),
+            "matched_fields": matched_kinds,
+            "_row": dict(m),
+        })
+    coverage["event"] = "complete_within_scope"
+    coverage["stage_filter"] = stats
+    return hits
+
+
+def round2_server_facts(session: dict) -> dict:
+    """A05/F3：Round 2 gate 的服务端事实（不从客户端参数取）。"""
+    from .. import db as _db
+    with _db.recall_runtime() as rc:
+        judge_row = rc.execute(
+            "SELECT status FROM recall_attempts WHERE session_id=?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (session["session_id"],)).fetchone()
+    judge_status = judge_row["status"] if judge_row else "unknown"
+    raw_authorized = (config.RECALL_RUNTIME_ENABLED
+                      and config.RECALL_RAW_FALLBACK_ENABLED
+                      and session.get("principal_id") in ("qiaosheng",
+                                                          "jiaming"))
+    bursts_used = session.get("bursts_used", 1)
+    budget_left = bursts_used < config.RECALL_SESSION_BURSTS_MAX
+    return {"judge_status": judge_status,
+            "raw_search_authorized": raw_authorized,
+            "budget_available": budget_left}

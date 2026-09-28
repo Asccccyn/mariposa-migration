@@ -65,6 +65,9 @@ def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
                      w["expression_kind"], w["source_ref"], principal_id, now))
             audit.record(conn, "memory.our_words.appended", principal_id,
                          resource_id=memory_id, payload={"count": len(ids)})
+            # v1.7 F5：话语变更后同事务刷新分字段投影
+            from ..retrieval import field_projection as _fp
+            _fp.build_for_memory(conn, memory_id)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

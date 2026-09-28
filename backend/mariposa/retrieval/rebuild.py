@@ -55,4 +55,13 @@ def rebuild_index(actor: str = "system") -> dict:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    # v1.7 F5：派生索引全家统一重建入口（分字段投影 + words 索引）
+    from . import field_projection as _fp
+    from . import words as _words
+    from .. import db as _db
+    field_stat = _fp.rebuild_all()
+    with _db.formal() as conn:
+        words_n = _words.rebuild_words_index(conn)
+    out["field_projection"] = field_stat
+    out["words_index"] = {"rebuilt": words_n}
     return {"rebuilt": rebuilt}
