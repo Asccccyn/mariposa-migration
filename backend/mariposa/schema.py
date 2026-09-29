@@ -1256,6 +1256,35 @@ ALTER TABLE recall_operation_keys ADD COLUMN status TEXT NOT NULL DEFAULT 'compl
 ALTER TABLE recall_operation_keys ADD COLUMN payload_hash TEXT;
 ALTER TABLE recall_operation_keys ADD COLUMN updated_at TEXT;
 """),
+    (4, """
+-- ===== Recall 幂等与崩溃恢复（commit-at-end，2026-09-29）=====
+-- 预算事实源改为"成功提交的 round 记录"；session 行上的 rounds_used
+-- 不再是权威（读时由本表派生覆盖）。旧数据按 rounds_used 数量回填
+-- round 行（burst 窗口按默认 RECALL_BURST_ROUNDS=3 推算；若部署曾改
+-- 该配置，仅影响旧 session 的 burst 归属展示，不影响总量语义）。
+CREATE TABLE recall_rounds(
+  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
+  round_no INTEGER NOT NULL,
+  burst_no INTEGER NOT NULL DEFAULT 1,
+  operation_key TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, round_no)
+);
+CREATE INDEX idx_recall_rounds_op ON recall_rounds(operation_key);
+INSERT INTO recall_rounds(session_id, round_no, burst_no, operation_key, created_at)
+WITH RECURSIVE seq(sid, n) AS (
+  SELECT session_id, 1 FROM recall_sessions WHERE rounds_used > 0
+  UNION ALL
+  SELECT sid, n + 1 FROM seq
+  WHERE n < (SELECT rounds_used FROM recall_sessions WHERE session_id = sid)
+)
+SELECT sid, n, ((n - 1) / 3) + 1, NULL,
+       (SELECT updated_at FROM recall_sessions WHERE session_id = sid)
+FROM seq;
+-- commit-at-end 模型不存在中间态：清掉上一阶段的 running/failed 残留
+--（running 行的副作用状态不可知，删除后同 key 重试将重新完整计算）
+DELETE FROM recall_operation_keys WHERE status <> 'completed';
+"""),
 ]
 
 

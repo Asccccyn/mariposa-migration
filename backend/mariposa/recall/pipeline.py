@@ -134,6 +134,15 @@ def mark_round1_complete(session_id: str) -> None:
             (f"rr_{session_id[:12]}_r1", session_id, "round1:complete"))
 
 
+def mark_round1_complete_tx(conn, session_id: str) -> None:
+    """同语义的事务内版本（commit-at-end 最终事务调用）。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO recall_receipts(receipt_id, session_id,"
+        " resource_ref, valid_at, created_at)"
+        " VALUES(?,?,?,datetime('now'),datetime('now'))",
+        (f"rr_{session_id[:12]}_r1", session_id, "round1:complete"))
+
+
 def raw_deep_search(principal, plan: dict, limit: int = 20) -> dict:
     """Round 2 raw 深搜：获准 source 层（published=1，human/assistant）。
 

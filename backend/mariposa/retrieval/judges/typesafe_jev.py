@@ -254,28 +254,20 @@ class TypeSafeJevJudge(base.JudgeProvider):
     # ------------------------------------------------------------------
     # HTTP / response parsing
 
+    #: 仅这两类是"远端明确拒绝且未执行输入"的可重试信号；timeout/
+    #: connection error 等"是否已被远端执行不可判断"的错误一律不自动
+    #: 重试，避免重复发送计费输入。
+    _RETRYABLE_HTTP = frozenset({429, 529})
+    _RETRY_ATTEMPTS = 2
+    _RETRY_BACKOFF_S = (0.5, 1.0)
+
     def _judge_batch(self, query_plan: dict, candidates: list[dict],
                      projections: list[dict]) -> list[base.JudgeItem]:
         payload = self._payload_from_projections(query_plan, projections)
-        req = urllib.request.Request(
-            self.endpoint,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._api_key}",
-            })
-        try:
-            with urllib.request.urlopen(
-                    req,
-                    timeout=config.RECALL_JUDGE_TIMEOUT_MS / 1000) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            # 不把响应正文或 Authorization 带进异常/日志。
-            raise JudgeUnavailable(f"http_{e.code}") from None
-        except (urllib.error.URLError, TimeoutError, ValueError,
-                UnicodeDecodeError):
-            raise JudgeUnavailable("transport_or_json") from None
+        body = self._post_with_limited_retry(payload)
+        if not isinstance(body, dict) or not isinstance(
+                body.get("answers"), dict):
+            raise JudgeUnavailable("invalid_response_shape")
 
         if not isinstance(body, dict) or not isinstance(
                 body.get("answers"), dict):
@@ -307,6 +299,43 @@ class TypeSafeJevJudge(base.JudgeProvider):
                 receipt_id="",
             ))
         return items
+
+    def _post_with_limited_retry(self, payload: dict) -> dict:
+        """单次 HTTP POST + 有限重试。
+
+        重试边界（幂等与崩溃恢复整改 §8）：429/529 是远端明确拒绝、
+        输入未被执行的信号，允许有限次退避重试；408/其他 5xx 与
+        timeout/connection error 不自动重发——请求是否已被远端执行
+        无法判断，重复发送会产生重复的供应商输入费用。
+        """
+        import time as _time
+        req = urllib.request.Request(
+            self.endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._api_key}",
+            })
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(
+                        req,
+                        timeout=config.RECALL_JUDGE_TIMEOUT_MS / 1000
+                ) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                # 不把响应正文或 Authorization 带进异常/日志。
+                if (e.code in self._RETRYABLE_HTTP
+                        and attempt < self._RETRY_ATTEMPTS):
+                    _time.sleep(self._RETRY_BACKOFF_S[attempt])
+                    attempt += 1
+                    continue
+                raise JudgeUnavailable(f"http_{e.code}") from None
+            except (urllib.error.URLError, TimeoutError, ValueError,
+                    UnicodeDecodeError):
+                raise JudgeUnavailable("transport_or_json") from None
 
     def _unavailable_item(self, candidate: dict) -> base.JudgeItem:
         return base.JudgeItem(

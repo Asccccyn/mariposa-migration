@@ -14,6 +14,9 @@ from . import store
 
 
 def snapshot(session: dict) -> dict:
+    """预算快照。rounds_used 由成功 round 记录派生（commit-at-end：
+    session dict 的 rounds_used 已在 store.get_session 统一派生覆盖，
+    权威事实源是 recall_rounds 表，本模块不再维护平行计数）。"""
     return {
         "rounds_used": session["rounds_used"],
         "rounds_remaining_in_burst": _rounds_left_in_burst(session),
@@ -48,26 +51,29 @@ def require_round_available(session: dict) -> None:
             budget=snapshot(session))
 
 
-def consume_round(session_id: str, operation_id: str, revision: int,
-                  burst_no: int, kind: str = "retrieve") -> None:
-    """扣一个检索轮次（CAS：rounds_used+1）。"""
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = conn.execute(
-                "UPDATE recall_sessions SET rounds_used=rounds_used+1,"
-                " updated_at=datetime('now') WHERE session_id=?"
-                " AND current_revision=?", (session_id, revision))
-            if cur.rowcount != 1:
-                raise Forbidden("session revision 冲突",
-                                code="REVISION_CONFLICT",
-                                session_id=session_id)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    store.record_attempt(session_id, operation_id, revision, burst_no, kind,
-                         "completed")
+def ensure_round_available_conn(conn, session_id: str,
+                                session: dict) -> None:
+    """最终事务内的预算终检（写锁内串行化，防并发超额）。
+
+    session 由调用方在计算阶段读取；此处用写锁内的 round 记录重算
+    真实已用轮数后校验，超限抛 BUDGET_EXHAUSTED（整体回滚）。
+    """
+    rounds_used = store.count_rounds(conn, session_id)
+    total_limit = (config.RECALL_SESSION_BURSTS_MAX *
+                   config.RECALL_BURST_ROUNDS)
+    if rounds_used >= total_limit:
+        raise Forbidden(
+            "检索预算已耗尽（BUDGET_EXHAUSTED，终检）",
+            code="BUDGET_EXHAUSTED", session_id=session_id,
+            budget={"rounds_used": rounds_used,
+                    "rounds_max_total": total_limit})
+    burst = session["current_burst"]
+    used_in_burst = rounds_used - (burst - 1) * config.RECALL_BURST_ROUNDS
+    if used_in_burst >= config.RECALL_BURST_ROUNDS:
+        raise Forbidden(
+            "当前 burst 检索轮次已用完（终检）；需要显式"
+            " continue_request_ref 申请新 burst",
+            code="BUDGET_EXHAUSTED", session_id=session_id)
 
 
 def try_new_burst(session: dict, continue_request_ref: str | None) -> dict:

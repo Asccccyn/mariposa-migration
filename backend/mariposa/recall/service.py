@@ -42,6 +42,22 @@ def _op_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _virtual(session: dict, expected_revision: int, burst_no: int,
+             bursts_used: int | None) -> dict:
+    """refine 计算阶段的"虚拟前进后"session 视图（不落库）。"""
+    v = dict(session)
+    v["current_revision"] = expected_revision + 1
+    v["current_burst"] = burst_no
+    if bursts_used is not None:
+        v["bursts_used"] = bursts_used
+    return v
+
+
 # ---------- 检索执行 ----------
 
 def _event_candidates(conn, plan: dict, rejected: set[str],
@@ -195,8 +211,14 @@ def _words_evidence_insufficient(plan: dict, words_hits: list[dict]) -> bool:
         h.get("evidence") or [], "verbatim_required") for h in words_hits)
 
 
-def _run_round(session: dict, plan: dict, principal=None) -> dict:
-    """一轮检索：两路召回 → RRF → 可选精排 → 代码门控 → 证据包。"""
+def _run_round_compute(session: dict, plan: dict,
+                       principal=None) -> tuple[dict, dict]:
+    """一轮检索（纯计算）：两路召回 → RRF → 可选精排 → 代码门控 →
+    证据包组装。不写运行库；持久化材料随 effects 由最终事务提交。
+
+    session 可以是未落库的 draft（start）：session_id 仅作为内部关联
+    ID，检索只依赖排除集（新 session 为空）与 formal 库只读事实。
+    """
     sid = session["session_id"]
     from . import pipeline as _pl
     rejected = store.rejected_resource_refs(sid)
@@ -303,10 +325,11 @@ def _run_round(session: dict, plan: dict, principal=None) -> dict:
     else:
         search_status = "NO_MATCH_OBSERVED"
 
-    # 持久化候选引用（seen）与回执（不存正文）
+    # commit-at-end：以下只组装，不写库。持久化材料随 effects 返回，
+    # 由最终事务一次性提交（检索/Jev 失败时数据库零痕迹）。
     for c in all_candidates:
         c.setdefault("candidate_ref", c["resource_ref"])
-    store.upsert_candidates(sid, [
+    candidate_rows = [
         {"candidate_ref": c["candidate_ref"], "resource_ref": c["resource_ref"],
          "channel": c.get("channel", "event"),
          "representation": c.get("representation", ""),
@@ -315,14 +338,13 @@ def _run_round(session: dict, plan: dict, principal=None) -> dict:
          "state": "seen",
          "scores": {"rrf": c.get("rrf_score"),
                     "judge": c.get("judge", {}).get("relevance_signal")}}
-        for c in all_candidates], session["current_revision"])
+        for c in all_candidates]
     receipts = [{"receipt_id": f"rc_{uuid.uuid4().hex[:10]}",
                  "resource_ref": c["resource_ref"],
                  "content_version": c.get("content_version"),
                  "representation_version": c.get("representation_version"),
                  "permission_version": "owner_binding_v1"}
                 for c in sel["delivered"]]
-    store.add_receipts(sid, receipts)
     by_receipt = {r["receipt_id"]: r["resource_ref"] for r in receipts}
     for c in sel["delivered"]:
         c["version_receipt"] = next(
@@ -354,15 +376,22 @@ def _run_round(session: dict, plan: dict, principal=None) -> dict:
         "conflicts": sel["conflicts"],
         "degraded_reasons": sorted(set(degraded)),
         "continuation": continuation,
-        "budget": budget.snapshot(session),
+        # 本轮尚未落库：预算快照按"含本轮成功"预览（rounds_used+1），
+        # 最终事务成功后该预览即为事实
+        "budget": budget.snapshot(_with_round_preview(session)),
         "token_count": config.RECALL_TOKENIZER,
     }
-    store.update_status(sid, session["current_revision"], status)
-    # v1.7 A05：首轮真实执行完成（无论有无候选）即签发 ROUND1_COMPLETE
-    # 回执——这是 Round 2 gate 的服务端事实；故障/降级轮不签发
-    if search_status not in ("UNAVAILABLE", "ERROR", "DEGRADED"):
-        _pl.mark_round1_complete(sid)
-    return packet
+    effects = {
+        "candidates": candidate_rows,
+        "receipts": receipts,
+        "session_status": status,
+        "search_status": search_status,
+        # v1.7 A05：首轮真实执行完成（无论有无候选）即签发 ROUND1_COMPLETE
+        # 回执——这是 Round 2 gate 的服务端事实；故障/降级轮不签发
+        "mark_round1_complete": search_status not in (
+            "UNAVAILABLE", "ERROR", "DEGRADED"),
+    }
+    return packet, effects
 
 
 def _finalize_cards(cards: list[dict]) -> list[dict]:
@@ -392,25 +421,83 @@ def _current_principal():
     return _CURRENT["principal"]
 
 
+
+
+def _with_round_preview(session: dict) -> dict:
+    """计算阶段的预算快照视图：把本轮算作已成功（rounds_used+1）。"""
+    preview = dict(session)
+    preview["rounds_used"] = session["rounds_used"] + 1
+    return preview
+
+
+def _commit_round_effects(conn, session_id: str, revision: int,
+                          effects: dict) -> None:
+    """最终事务内的本轮派生行写入（candidates/receipts/状态/回执）。"""
+    store.upsert_candidates(conn, session_id, effects["candidates"],
+                            revision)
+    store.add_receipts(conn, session_id, effects["receipts"])
+    cur = conn.execute(
+        "UPDATE recall_sessions SET status=?, updated_at=?"
+        " WHERE session_id=? AND current_revision=?",
+        (effects["session_status"], _now_iso(), session_id, revision))
+    if cur.rowcount != 1:
+        from ..errors import Forbidden as _F
+        raise _F("session revision 冲突（最终事务）",
+                 code="REVISION_CONFLICT", session_id=session_id)
+    if effects.get("mark_round1_complete"):
+        from . import pipeline as _pl
+        _pl.mark_round1_complete_tx(conn, session_id)
+
+
 # ---------- 七个 session 动作 ----------
 
-def start(principal, a: dict) -> dict:
+def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
+    """commit-at-end：计算全部完成前不落任何正式状态。
+
+    阶段 A 只读预检 → 阶段 B 内存 draft（session_id 不落库）→
+    阶段 C 检索/Jev/组装（允许失败，失败即零痕迹返回）→
+    阶段 D 单事务提交 session/round/candidates/receipts/status/operation。
+    崩溃在阶段 C/D 之前 → 数据库无本 operation 任何痕迹，同 key 重试
+    从头计算；最终事务由 SQLite 写锁串行化，并发输家回滚并重放赢家。
+    """
     _require_enabled()
     plan = validate_query_plan(a.get("query_plan") or {})
     store.purge_expired()
-    session = store.create_session(principal.principal_id,
-                                   a.get("conversation_scope") or "",
-                                   plan)
-    budget.require_round_available(session)
-    budget.consume_round(session["session_id"], _op_id("round"),
-                         session["current_revision"], session["current_burst"])
-    session = store.require_session(session["session_id"])
-    packet = _run_round(session, plan, principal)
+    draft = store.new_session_draft(
+        principal.principal_id, a.get("conversation_scope") or "", plan)
+    budget.require_round_available(draft)
+    if op_ctx:
+        store.check_operation_conflict(op_ctx["principal_id"],
+                                       op_ctx["operation_key"],
+                                       op_ctx["payload_hash"])
+    packet, effects = _run_round_compute(draft, plan, principal)
     packet["created"] = True
+    sid = draft["session_id"]
+    op_key = op_ctx["operation_key"] if op_ctx else None
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if op_ctx:
+                store.record_operation_row(
+                    conn, op_ctx["principal_id"], op_ctx["operation_key"],
+                    op_ctx["payload_hash"], packet)
+            store.insert_session(conn, draft)
+            budget.ensure_round_available_conn(conn, sid, draft)
+            store.record_round(conn, sid, burst_no=1, operation_key=op_key)
+            _commit_round_effects(conn, sid, 1, effects)
+            store.record_attempt(conn, sid, op_key or _op_id("round"), 1, 1,
+                                 "retrieve", "completed")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return packet
 
 
-def refine(principal, a: dict) -> dict:
+def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
+    """refine 同为 commit-at-end：修订/新 burst/检索在事务外完成，
+    revision 前进（CAS）、round、candidates、receipts、operation 在
+    最终事务内一次性提交。并发 refine 输家在写锁内 CAS 失败。"""
     _require_enabled()
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
@@ -430,21 +517,63 @@ def refine(principal, a: dict) -> dict:
         grant = budget.try_new_burst(session, cont_ref)
         burst_no = grant["current_burst"]
         bursts_used = grant["bursts_used"]
-    session = store.bump_revision(a["session_id"], expected_revision,
-                                  query_plan=plan,
-                                  request_ref=plan.get("request_ref"),
-                                  change_reason="refine",
-                                  burst_no=burst_no,
-                                  bursts_used=bursts_used)
-    if budget.rounds_left_in_burst(session) > 0:
-        budget.consume_round(a["session_id"], _op_id("round"),
-                             session["current_revision"], burst_no)
-        session = store.require_session(a["session_id"])
-        return _run_round(session, plan, principal)
-    # burst 轮次已尽且无显式继续请求：允许修订条件，但不发起有成本的
-    # 新检索（v1.4 §9.3——自动自循环不产生无界额度）
-    store.update_status(a["session_id"], session["current_revision"],
-                        "BUDGET_EXHAUSTED")
+    if op_ctx:
+        store.check_operation_conflict(op_ctx["principal_id"],
+                                       op_ctx["operation_key"],
+                                       op_ctx["payload_hash"])
+    if budget.rounds_left_in_burst(_virtual(session, expected_revision,
+                                            burst_no, bursts_used)) > 0:
+        vsession = _virtual(session, expected_revision, burst_no,
+                            bursts_used)
+        packet, effects = _run_round_compute(vsession, plan, principal)
+        sid = a["session_id"]
+        op_key = op_ctx["operation_key"] if op_ctx else None
+        with db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if op_ctx:
+                    store.record_operation_row(
+                        conn, op_ctx["principal_id"], op_ctx["operation_key"],
+                        op_ctx["payload_hash"], packet)
+                store.advance_revision(
+                    conn, sid, expected_revision, query_plan=plan,
+                    request_ref=plan.get("request_ref"),
+                    change_reason="refine", burst_no=burst_no,
+                    bursts_used=bursts_used)
+                budget.ensure_round_available_conn(conn, sid, vsession)
+                store.record_round(conn, sid, burst_no=burst_no,
+                                   operation_key=op_key)
+                _commit_round_effects(conn, sid, expected_revision + 1,
+                                      effects)
+                store.record_attempt(conn, sid, op_key or _op_id("round"),
+                                     expected_revision + 1, burst_no,
+                                     "retrieve", "completed")
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return packet
+    # burst 轮次已尽且无显式继续请求：允许修订条件（revision 前进、
+    # 保存新查询计划），但不发起有成本的新检索（v1.4 §9.3——自动
+    # 自循环不产生无界额度）。设为型写入，独立小事务即可。
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            store.advance_revision(conn, a["session_id"], expected_revision,
+                                   query_plan=plan,
+                                   request_ref=plan.get("request_ref"),
+                                   change_reason="refine",
+                                   burst_no=burst_no,
+                                   bursts_used=bursts_used)
+            conn.execute(
+                "UPDATE recall_sessions SET status='BUDGET_EXHAUSTED',"
+                " updated_at=? WHERE session_id=? AND current_revision=?",
+                (_now_iso(), a["session_id"], expected_revision + 1))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    session["current_revision"] = expected_revision + 1
     return {
         "recall_session_id": a["session_id"],
         "revision": session["current_revision"],
@@ -465,7 +594,7 @@ def refine(principal, a: dict) -> dict:
     }
 
 
-def reject(principal, a: dict) -> dict:
+def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
     _require_enabled()
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
@@ -499,7 +628,7 @@ def reject(principal, a: dict) -> dict:
             "revision": session["current_revision"]}
 
 
-def accept(principal, a: dict) -> dict:
+def accept(principal, a: dict, op_ctx: dict | None = None) -> dict:
     _require_enabled()
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
@@ -517,7 +646,7 @@ def accept(principal, a: dict) -> dict:
     return out
 
 
-def navigate(principal, a: dict) -> dict:
+def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
     """沿当前 temporal_axis 取前/后相邻候选（v1.3 §5.3/§6）。"""
     _require_enabled()
     session = store.require_session(a["session_id"])
@@ -585,15 +714,23 @@ def navigate(principal, a: dict) -> dict:
                     "structured_fact", axis, "", ref,
                     structured_value={axis: r["memory_date"]})],
             })
-    for c in cards:
-        store.upsert_candidates(a["session_id"], [{
-            "candidate_ref": c["candidate_ref"],
-            "resource_ref": c["resource_ref"],
-            "channel": "event", "representation": c["representation"],
-            "content_version": c["content_version"],
-            "representation_version": c["representation_version"],
-            "state": "seen", "scores": {}}],
-            session["current_revision"])
+    # 幂等 upsert（设为型）：独立事务提交，重复执行结果不变
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for c in cards:
+                store.upsert_candidates(conn, a["session_id"], [{
+                    "candidate_ref": c["candidate_ref"],
+                    "resource_ref": c["resource_ref"],
+                    "channel": "event", "representation": c["representation"],
+                    "content_version": c["content_version"],
+                    "representation_version": c["representation_version"],
+                    "state": "seen", "scores": {}}],
+                    session["current_revision"])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"recall_session_id": a["session_id"],
             "direction": direction, "axis": axis,
             "candidates": cards, "status": session["status"],
@@ -634,7 +771,7 @@ def status(principal, a: dict) -> dict:
     }
 
 
-def close(principal, a: dict) -> dict:
+def close(principal, a: dict, op_ctx: dict | None = None) -> dict:
     _require_enabled()
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
