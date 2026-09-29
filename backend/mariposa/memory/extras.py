@@ -80,7 +80,10 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             new_event = text if text is not None else memory.version_body(v)
             old_title = v["original_title"]
             old_schema = v["schema_version"] or 1
+            # N01：hash 输入与 canonical 正文字段一致——v2 正文在
+            # event_text，只 hash hold_text(NULL) 会让不同正文同指纹
             payload = {"representation": "full", "hold_text": new_text,
+                       "event_text": new_event,
                        "why_remember": new_why, "origin": "update"}
             conn.execute(
                 "INSERT INTO memory_versions(memory_id, version_no, representation,"
