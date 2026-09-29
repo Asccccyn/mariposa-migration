@@ -112,3 +112,17 @@ class StaleOperation(MariposaError):
     可见性变化），拒绝按原样重放；调用方应基于当前状态发起新操作。"""
     code = "OPERATION_REPLAY_STALE"
     http_status = 409
+
+
+class DeleteBlocked(MariposaError):
+    """目标存在正式跨域引用（I revision 关系 / Source 绑定），不允许
+    物理删除；引用完整性优先于删除成功。应改走 archive 或先解除引用。"""
+    code = "DELETE_BLOCKED_BY_REFERENCES"
+    http_status = 409
+
+
+class AlreadyDecided(MariposaError):
+    """删除申请已被另一个决定（approve/reject）终结；状态机不允许
+    approved->rejected 或 rejected->approved。"""
+    code = "DELETION_ALREADY_DECIDED"
+    http_status = 409
