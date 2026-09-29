@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from .. import config, db
-from ..errors import Forbidden, NotFound
+from ..errors import Forbidden, IdempotencyConflict, NotFound, OperationInProgress
 
 from .models import ACTIVE_STATUSES, SESSION_STATUSES
 
@@ -318,45 +318,166 @@ def list_receipts(session_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def claim_operation(principal_id: str, operation_key: str,
-                    result_builder) -> dict:
-    """runtime 幂等（§9.4）：同 key 只执行一次副作用；重放只回结果引用。
+def claim_operation(principal_id: str, operation_key: str, result_builder,
+                    payload_hash: str | None = None,
+                    replay_guard=None) -> dict:
+    """runtime 幂等（§9.4 + 审计 F07/F26）。
 
-    与 formal 库的 idempotency_records 分离——召回结果不长期缓存到
-    正式库；session 过期后本表随清理失效。
+    - 原子认领：先 INSERT status='running' 占位，占位成功者才执行
+      副作用；并发同 key 的另一方等待终态或得到结构化冲突，
+      不再"先执行后登记"。
+    - builder 抛错 → 记 failed，允许同 key 安全重试。
+    - 重放（审计 F07）：保存的结果必须经 replay_guard 按当前状态
+      （session 有效期、候选版本、可见性、当前 phase 过滤）重校验
+      后才可出站；guard 返回修正后的数据或抛 StaleOperation 拒绝，
+      不允许旧正文绕过当前可见性判断。
+    - payload_hash（审计 F26）：同 key 异 payload → 结构化冲突，
+      不回放无关旧结果。
     """
+    claimed = False
+    saved = None
+    conflict = None
     with db.recall_runtime() as conn:
-        row = conn.execute(
-            "SELECT result_ref FROM recall_operation_keys"
-            " WHERE principal_id=? AND operation_key=?",
-            (principal_id, operation_key)).fetchone()
-        if row is not None and row["result_ref"]:
-            return {"idempotent_replay": True,
-                    "data": json.loads(row["result_ref"])}
-    data = result_builder()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT * FROM recall_operation_keys"
+                " WHERE principal_id=? AND operation_key=?",
+                (principal_id, operation_key)).fetchone()
+            if row is not None and payload_hash is not None \
+                    and row["payload_hash"] not in (None, payload_hash):
+                conflict = IdempotencyConflict(
+                    "same operation key with different payload",
+                    operation_key=operation_key)
+            elif row is not None and row["status"] == "completed" \
+                    and row["result_ref"]:
+                saved = json.loads(row["result_ref"])
+            elif row is None:
+                conn.execute(
+                    "INSERT INTO recall_operation_keys(principal_id,"
+                    " operation_key, payload_hash, status, created_at,"
+                    " updated_at) VALUES(?,?,?,?,?,?)",
+                    (principal_id, operation_key, payload_hash, "running",
+                     _now(), _now()))
+                claimed = True
+            elif row["status"] == "failed":
+                cur = conn.execute(
+                    "UPDATE recall_operation_keys SET status='running',"
+                    " payload_hash=?, updated_at=?"
+                    " WHERE principal_id=? AND operation_key=?"
+                    " AND status='failed'",
+                    (payload_hash, _now(), principal_id, operation_key))
+                claimed = cur.rowcount == 1
+            else:  # running：并发进行中
+                claimed = False
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    if conflict is not None:
+        raise conflict
+    if saved is not None:
+        if replay_guard is not None:
+            saved = replay_guard(saved)
+        return {"idempotent_replay": True, "data": saved}
+
+    if not claimed:
+        # 并发占位失败方：有界等待占位方终态
+        import time as _time
+        for _ in range(20):  # <=4s
+            _time.sleep(0.2)
+            row = _read_operation(principal_id, operation_key)
+            if row is None:
+                break
+            if row["status"] == "completed" and row["result_ref"]:
+                saved = json.loads(row["result_ref"])
+                if replay_guard is not None:
+                    saved = replay_guard(saved)
+                return {"idempotent_replay": True, "data": saved}
+            if row["status"] == "failed":
+                return claim_operation(principal_id, operation_key,
+                                       result_builder, payload_hash,
+                                       replay_guard)
+        row = _read_operation(principal_id, operation_key)
+        if row is not None and row["status"] == "completed" \
+                and row["result_ref"]:
+            saved = json.loads(row["result_ref"])
+            if replay_guard is not None:
+                saved = replay_guard(saved)
+            return {"idempotent_replay": True, "data": saved}
+        raise OperationInProgress()
+
+    try:
+        data = result_builder()
+    except Exception:
+        with db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE recall_operation_keys SET status='failed',"
+                    " updated_at=? WHERE principal_id=? AND operation_key=?"
+                    " AND status='running'",
+                    (_now(), principal_id, operation_key))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        raise
     with db.recall_runtime() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO recall_operation_keys(principal_id,"
-            " operation_key, result_ref, created_at) VALUES(?,?,?,?)",
-            (principal_id, operation_key,
-             json.dumps(data, ensure_ascii=False), _now()))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "UPDATE recall_operation_keys SET status='completed',"
+                " result_ref=?, updated_at=?"
+                " WHERE principal_id=? AND operation_key=?"
+                " AND status='running'",
+                (json.dumps(data, ensure_ascii=False), _now(),
+                 principal_id, operation_key))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"data": data}
 
 
+def _read_operation(principal_id: str, operation_key: str):
+    with db.recall_runtime() as conn:
+        return conn.execute(
+            "SELECT * FROM recall_operation_keys WHERE principal_id=?"
+            " AND operation_key=?",
+            (principal_id, operation_key)).fetchone()
+
+
 def purge_expired(limit: int = 200) -> int:
-    """有界清理：过期 session 及其子行。TTL 清理不影响正式记忆期限。"""
+    """有界清理：过期 session 及其子行。TTL 清理不影响正式记忆期限。
+
+    审计 F07：operation 幂等行同样有界清理——超过 session TTL 双倍
+    时长的行删除（重放本就必须通过当前状态重校验，清理不改变语义）。
+    """
     now = _now()
     with db.recall_runtime() as conn:
-        rows = conn.execute(
-            "SELECT session_id FROM recall_sessions WHERE status IN"
-            " ('ACTIVE','AMBIGUOUS','CONFLICT','DEGRADED','BUDGET_EXHAUSTED')"
-            " AND expires_at < ? LIMIT ?", (now, limit)).fetchall()
-        sids = [r["session_id"] for r in rows]
-        for sid in sids:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                "SELECT session_id FROM recall_sessions WHERE status IN"
+                " ('ACTIVE','AMBIGUOUS','CONFLICT','DEGRADED','BUDGET_EXHAUSTED')"
+                " AND expires_at < ? LIMIT ?", (now, limit)).fetchall()
+            sids = [r["session_id"] for r in rows]
+            for sid in sids:
+                conn.execute(
+                    "UPDATE recall_sessions SET status='EXPIRED', updated_at=?"
+                    " WHERE session_id=?", (now, sid))
+            cutoff = (datetime.now(timezone.utc) -
+                      timedelta(hours=config.RECALL_SESSION_TTL_HOURS * 2)
+                      ).isoformat()
             conn.execute(
-                "UPDATE recall_sessions SET status='EXPIRED', updated_at=?"
-                " WHERE session_id=?", (now, sid))
-        return len(sids)
+                "DELETE FROM recall_operation_keys WHERE created_at < ?",
+                (cutoff,))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return len(sids)
 
 
 def reset_for_tests() -> None:

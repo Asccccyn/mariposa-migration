@@ -758,3 +758,76 @@ def words_recall(principal, a: dict) -> dict:
     res["instruction_authority"] = "none"
     res["content_role"] = "retrieved_memory"
     return res
+
+
+# ---------- operation 幂等重放重校验（审计 F07） ----------
+
+def revalidate_replayed(fn_name: str, saved: dict) -> dict:
+    """runtime operation 重放的当前状态重校验（审计 F07）。
+
+    旧 operation 的保存响应不得绕过当前可见性与版本判断：
+    - session 必须仍存在且处于活跃状态（EXPIRED/CLOSED → 拒绝重放）；
+    - 候选卡逐张校验：memory 仍 active、卡片 content_version 与当前
+      revision 一致，并按**当前 phase** 的 AllowedFields 重过滤
+      matched_fields/evidence（WIDE→CORE 收缩后 title/words 命中失效）；
+      不满足的卡剔除，而不是把旧正文原样送出。
+    - 不含候选正文的响应（close 等）session 仍活跃即可重放。
+    """
+    from ..errors import StaleOperation
+    from .models import ACTIVE_STATUSES
+    if not isinstance(saved, dict):
+        raise StaleOperation("保存的 operation 响应结构不可识别，拒绝重放",
+                             operation=fn_name)
+    sid = saved.get("recall_session_id")
+    has_candidates = isinstance(saved.get("candidates"), list)
+    if not sid:
+        if has_candidates:
+            raise StaleOperation(
+                "保存的 operation 响应缺少 session 引用，拒绝重放",
+                operation=fn_name)
+        return saved  # 无 session、无正文的轻量响应：无泄露面
+    session = store.get_session(sid)
+    if session is None:
+        raise StaleOperation("recall session 不存在", session_id=sid,
+                             operation=fn_name)
+    session = store.expire_if_due(session)
+    if session["status"] not in ACTIVE_STATUSES:
+        raise StaleOperation(
+            "recall session 已过期/关闭，旧 operation 响应拒绝重放",
+            session_id=sid, session_status=session["status"],
+            operation=fn_name)
+    if not has_candidates:
+        return saved
+    from . import phase_policy
+    with db.formal() as conn:
+        kept = []
+        for c in saved["candidates"]:
+            if not isinstance(c, dict):
+                continue
+            mid = c.get("memory_id")
+            if not mid:
+                kept.append(c)  # raw 等独立资源卡：无 memory 正文泄露面
+                continue
+            m = conn.execute(
+                "SELECT visibility, current_version_no FROM memories"
+                " WHERE memory_id=?", (mid,)).fetchone()
+            if m is None or m["visibility"] != "active":
+                continue  # 已删除/归档：不再可见
+            if str(c.get("content_version")) != str(m["current_version_no"]):
+                continue  # 版本已前进：旧 revision 正文不得出站
+            allowed = phase_policy.eligible_fields(
+                phase_policy.phase_of(mid))
+            orig_fields = list(c.get("matched_fields") or [])
+            fields = [f for f in orig_fields if f in allowed]
+            if orig_fields and not fields:
+                continue  # 命中字段全部不再被当前 phase 允许
+            if fields != orig_fields:
+                c = dict(c)
+                c["matched_fields"] = fields
+                c["evidence"] = [e for e in (c.get("evidence") or [])
+                                 if not isinstance(e, dict)
+                                 or e.get("field") in allowed]
+            kept.append(c)
+    out = dict(saved)
+    out["candidates"] = kept
+    return out
