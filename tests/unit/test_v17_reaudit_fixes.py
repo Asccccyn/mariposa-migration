@@ -20,6 +20,7 @@ from mariposa.letters import service as letters
 from mariposa.memory import extras as memory_extras
 from mariposa.memory import service as memory
 from mariposa.raw import binding as raw_binding
+from mariposa.capabilities import registry
 from mariposa.retrieval import rebuild as retrieval_rebuild
 from tests.conftest import reset_all
 
@@ -207,3 +208,79 @@ class TestN13BindHoldSameSourceInvariant:
         active = {r["memory_id"] for r in rows}
         assert len(active) <= 1, \
             f"N13：同源区间多个 active 绑定：{active}（{results} {errors}）"
+
+
+class TestN05MutationsRegainWriteIdempotency:
+    """write=False 真实 mutation 修正（Codex B.3 十项）：同 key 重试
+    恢复单副作用；current 读取保持 fresh（F10 修复不回退）。"""
+
+    @pytest.fixture(autouse=True)
+    def _compat(self):
+        from mariposa.capabilities.v1_compat import register_v1_compat
+        register_v1_compat()  # thin 层能力（app 启动时挂载）
+
+    def test_plan_complete_same_key_retry(self, actors):
+        created = registry.invoke(
+            actors["jiaming"], "plan.create",
+            {"title": "N05 计划", "content": "内容"}, None)
+        pid = created["data"]["plan_id"]
+        args = {"plan_id": pid, "expected_version": 1}
+        r1 = registry.invoke(actors["jiaming"], "plan.complete", args,
+                             "idem-n05-plan")
+        assert r1["data"]["state"] == "done"
+        r2 = registry.invoke(actors["jiaming"], "plan.complete", args,
+                             "idem-n05-plan")
+        assert r2.get("idempotent_replay") is True, \
+            "N05：写幂等重试应重放首次结果而非 VERSION_CONFLICT"
+        assert r2["data"]["state"] == "done"
+        with db.formal() as conn:
+            versions = conn.execute(
+                "SELECT COUNT(*) c FROM plan_versions WHERE plan_id=?",
+                (pid,)).fetchone()["c"]
+        assert versions == 2, "重试不得推进新版本"
+
+    def test_workspace_candidates_create_same_key_single_item(self, actors):
+        args = {"text": "N05 候选文本"}
+        r1 = registry.invoke(actors["jiaming"],
+                             "workspace.candidates.create", args,
+                             "idem-n05-cand")
+        r2 = registry.invoke(actors["jiaming"],
+                             "workspace.candidates.create", args,
+                             "idem-n05-cand")
+        assert r2.get("idempotent_replay") is True
+        assert r1["data"]["candidate_id"] == r2["data"]["candidate_id"]
+        with db.workspace() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM work_items WHERE item_id=?",
+                (r1["data"]["candidate_id"],)).fetchone()["c"]
+        assert n == 1, "同 key 重试产生了第二个工作区候选"
+
+    def test_emotions_set_same_key_single_tag(self, actors):
+        out = hold_v2(actors["jiaming"], "情绪标签幂等正文")
+        args = {"memory_id": out["memory_id"],
+                "tags": [{"tag": "安心", "whose": "jiaming"}]}
+        r1 = registry.invoke(actors["jiaming"], "memory.emotions.set",
+                             args, "idem-n05-emo")
+        r2 = registry.invoke(actors["jiaming"], "memory.emotions.set",
+                             args, "idem-n05-emo")
+        assert r2.get("idempotent_replay") is True
+        with db.formal() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM memory_tags WHERE memory_id=?",
+                (out["memory_id"],)).fetchone()["c"]
+        assert n == 1
+
+    def test_reads_still_fresh_not_cached(self, actors):
+        """F10 修复保持：纯读能力同 key 仍每次现算。"""
+        out = hold_v2(actors["jiaming"], "读取新鲜度正文")
+        r1 = registry.invoke(actors["jiaming"], "memory.get",
+                             {"memory_id": out["memory_id"]},
+                             "idem-n05-read")
+        memory_extras.update_text(
+            actors["jiaming"].principal_id, out["memory_id"],
+            expected_version=1, text="更新后的读取新鲜度正文")
+        r2 = registry.invoke(actors["jiaming"], "memory.get",
+                             {"memory_id": out["memory_id"]},
+                             "idem-n05-read")
+        assert r2.get("idempotent_replay") is not True
+        assert r2["data"]["text"] == "更新后的读取新鲜度正文"
