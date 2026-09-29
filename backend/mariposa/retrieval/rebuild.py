@@ -11,7 +11,12 @@ def rebuild_index(actor: str = "system") -> dict:
 
     不变式：forgotten 桶只从 compressed_summary 生成投影；
     hidden/archived 无投影。重建后旧正文词不可搜（有测试钉住）。
+    审计 F04：full 投影经 memory.rebuild_full_projection 统一构造
+    （event_text 优先，v1 旧数据回退 hold_text）——v2 正文不再在
+    全库重建时从检索消失。
+    审计 F13：返回对象在所有步骤前定义；部分提交后不再引用未定义名。
     """
+    from ..memory import service as memory_service
     with db.formal() as conn:
         rows = conn.execute(
             "SELECT memory_id, current_version_no, compression_state,"
@@ -38,16 +43,8 @@ def rebuild_index(actor: str = "system") -> dict:
                             v["compressed_summary"] or ""))
                     rebuilt["forgotten_summary"] += 1
                 else:
-                    layers = [x["content"] for x in conn.execute(
-                        "SELECT content FROM memory_meanings WHERE memory_id=?"
-                        " AND layer_no<1000 ORDER BY layer_no", (r["memory_id"],))]
-                    projection.upsert(
-                        conn, r["memory_id"], r["current_version_no"], "full",
-                        projection.build_full(
-                            "\n".join([v["hold_text"] or ""] + layers),
-                            v["why_remember"]),
-                        whitelist_body=projection.normalize_search_text(
-                            v["hold_text"] or ""))
+                    memory_service.rebuild_full_projection(
+                        conn, r["memory_id"])
                     rebuilt["full"] += 1
             audit.record(conn, "retrieval.index.rebuilt", actor,
                          payload=rebuilt)
@@ -55,6 +52,7 @@ def rebuild_index(actor: str = "system") -> dict:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    out = {"rebuilt": rebuilt}
     # v1.7 F5：派生索引全家统一重建入口（分字段投影 + words 索引）
     from . import field_projection as _fp
     from . import words as _words
@@ -67,4 +65,4 @@ def rebuild_index(actor: str = "system") -> dict:
     # v1.7：source 检索投影一并重建（published 正文）
     from ..source import binding as src_binding
     out["source_projection"] = src_binding.reindex_search_docs()
-    return {"rebuilt": rebuilt}
+    return out

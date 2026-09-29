@@ -40,6 +40,46 @@ def representation_version(conn, memory_id: str) -> int:
     return m["representation_state"]
 
 
+def version_body(v) -> str | None:
+    """当前 memory revision 正文的唯一解析入口（审计 F04/F14 统一收敛）。
+
+    - full 表示：event_text 优先；v1 旧数据（无 event_text / event_text
+      为空）回退 hold_text。兼容 fallback 只允许集中在此处实现，
+      update/meaning/rebuild/history/检索投影等业务路径一律经本函数
+      取正文，不得各自决定来源，也不得让旧 hold_text 覆盖已升级的
+      event_text。
+    - forgotten_summary 表示：只认审批摘要 compressed_summary。
+    """
+    if v["representation"] == "forgotten_summary":
+        return v["compressed_summary"]
+    return v["event_text"] or v["hold_text"]
+
+
+def rebuild_full_projection(conn, memory_id: str) -> None:
+    """当前 revision 的 full 投影重建单一入口（审计 F04）。
+
+    full 投影 = 当前正文（version_body，含 v1 fallback）+ why_remember
+    + 当前有效 meaning 各层；whitelist_body 只含事件正文。
+    update / meaning 追加与替换 / 全库 rebuild 一律走本入口，
+    保证同一 revision 的投影内容来源一致。
+    """
+    m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
+                     (memory_id,)).fetchone()
+    if m is None:
+        raise NotFound("memory not found", memory_id=memory_id)
+    v = conn.execute(
+        "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
+        (memory_id, m["current_version_no"])).fetchone()
+    body = version_body(v) or ""
+    layers = [r["content"] for r in conn.execute(
+        "SELECT content FROM memory_meanings WHERE memory_id=? AND layer_no<1000"
+        " ORDER BY layer_no", (memory_id,))]
+    projection.upsert(
+        conn, memory_id, m["current_version_no"], "full",
+        projection.build_full("\n".join([body] + layers), v["why_remember"]),
+        whitelist_body=projection.normalize_search_text(body))
+
+
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     """当时心情资格（R05/§5.1）：仅周家明、仅同期 hold 可写。"""
     if not isinstance(mood, dict):
@@ -271,8 +311,7 @@ def get(conn, memory_id: str) -> dict:
         (memory_id, m["current_version_no"]),
     ).fetchone()
     is_summary = v["representation"] == "forgotten_summary"
-    body = v["compressed_summary"] if is_summary else (
-        v["event_text"] if v["event_text"] is not None else v["hold_text"])
+    body = version_body(v)
     out = {
         "memory_id": memory_id,
         "version": m["current_version_no"],
@@ -318,13 +357,24 @@ def get(conn, memory_id: str) -> dict:
 
 
 def versions_read(conn, memory_id: str) -> list[dict]:
-    """明确的按权限展开历史版本；不自动 restore，不刷新 reengagement。"""
+    """明确的按权限展开历史版本；不自动 restore，不刷新 reengagement。
+
+    审计 F14：每个 revision 的正文经 version_body 统一解析后以 `text`
+    返回；event_text/hold_text 原始列一并给出供审计对照。v2 版本行
+    hold_text 为 NULL 不再表现为"该版本无正文"。
+    """
     rows = conn.execute(
-        "SELECT version_no, representation, hold_text, compressed_summary, why_remember,"
-        " authored_by, origin_kind, payload_hash, created_at"
+        "SELECT version_no, representation, hold_text, event_text,"
+        " compressed_summary, why_remember, authored_by, origin_kind,"
+        " payload_hash, created_at, original_title, schema_version"
         " FROM memory_versions WHERE memory_id=? ORDER BY version_no",
         (memory_id,),
     ).fetchall()
     if not rows:
         raise NotFound("memory not found", memory_id=memory_id)
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["text"] = version_body(r)
+        out.append(d)
+    return out
