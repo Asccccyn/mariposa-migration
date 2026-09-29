@@ -733,18 +733,24 @@ def _recall(principal: Principal, a: dict) -> dict:
 def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
     """RUNTIME-02：同 operation_id 重试不重复建 session/扣预算/排除候选。
 
-    审计 F07/F26：claim 原子认领（并发同 key 只有一个执行副作用）；
-    payload_hash 区分同 key 异请求；重放经 recall 域 guard 按当前
-    session/版本/可见性/phase 重校验，不再原样返回旧正文。
+    commit-at-end 模型：不写任何中间态；已完成 operation 直接重放
+    （重放经 recall 域 guard 按当前 session/版本/可见性/phase 重校验，
+    不原样返回旧正文——审计 F07）；未完成的同 key 重试从头重新计算。
+    payload_hash 区分同 key 异请求。设为型动作（reject/accept/navigate/
+    close）由 run_operation 在执行成功后补写响应记录（重复执行结果
+    不变，崩溃窗口重放安全）。
     """
     op = a.get("operation_id")
     if not op:
         return fn(principal, a)
     key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
-    return recall_store.claim_operation(
+    ph = memory.canonical_hash(a)
+    ctx = {"principal_id": principal.principal_id, "operation_key": key,
+           "payload_hash": ph}
+    return recall_store.run_operation(
         principal.principal_id, key,
-        lambda: fn(principal, a),
-        payload_hash=memory.canonical_hash(a),
+        lambda: fn(principal, a, op_ctx=ctx),
+        payload_hash=ph,
         replay_guard=lambda saved: recall_service.revalidate_replayed(
             fn.__name__, saved))
 

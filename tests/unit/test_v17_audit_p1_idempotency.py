@@ -60,9 +60,16 @@ def start_op(actors, terms, op, session_id="new"):
     return inner["data"], inner.get("idempotent_replay", False)
 
 
-class TestF26AtomicClaim:
+class TestF26CommitAtEnd:
+    """commit-at-end 模型（幂等与崩溃恢复整改后语义）。
+
+    - 不存在中间态：计算失败/崩溃后数据库零痕迹，重试从头计算
+    - 同 key 并发：进程内锁避免重复昂贵计算，数据库只留一份结果
+    - 同 key 异 payload：结构化 IDEMPOTENCY_CONFLICT
+    """
+
     def test_concurrent_same_key_single_execution(self, actors):
-        """真实并发：同 key 两个线程同时 claim，builder 只执行一次。"""
+        """真实并发：同 key 两线程，builder 只执行一次，一方重放。"""
         gate = threading.Barrier(2, timeout=10)
         calls = []
         lock = threading.Lock()
@@ -70,28 +77,27 @@ class TestF26AtomicClaim:
         def builder():
             with lock:
                 calls.append(threading.get_ident())
-            time.sleep(0.6)  # 让等待方必然进入轮询路径
+            time.sleep(0.4)
             return {"value": "done"}
 
         def run(_i):
-            gate.wait()  # 两线程同时放行，真实并发进 claim
-            return store.claim_operation(
-                "jiaming", "op-concurrent-1", builder,
-                payload_hash="h1")
+            gate.wait()
+            return store.run_operation(
+                "jiaming", "op-concurrent-2", builder, payload_hash="h1")
 
         with ThreadPoolExecutor(max_workers=2) as ex:
             f1 = ex.submit(run, 0)
             f2 = ex.submit(run, 1)
             r1, r2 = f1.result(timeout=20), f2.result(timeout=20)
-        assert len(calls) == 1, "并发同 key 产生了两次副作用"
-        values = {r1.get("data", r1).get("value"),
-                  r2.get("data", r2).get("value")}
+        assert len(calls) == 1, "并发同 key 产生了两次计算/副作用"
+        values = {r1["data"]["value"], r2["data"]["value"]}
         assert values == {"done"}
         replays = [bool(r1.get("idempotent_replay")),
                    bool(r2.get("idempotent_replay"))]
         assert replays.count(True) == 1, "应有且仅有一方走重放路径"
 
-    def test_failed_operation_safe_retry(self, actors):
+    def test_failed_computation_leaves_no_trace_and_retries(self, actors):
+        """计算失败 → 无 operation 行（无 failed/中间态），重试重新执行。"""
         calls = []
 
         def failing():
@@ -99,33 +105,32 @@ class TestF26AtomicClaim:
             raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError):
-            store.claim_operation("jiaming", "op-retry-1", failing,
-                                  payload_hash="h1")
+            store.run_operation("jiaming", "op-retry-2", failing,
+                                payload_hash="h1")
         assert len(calls) == 1
-        row = store._read_operation("jiaming", "op-retry-1")
-        assert row["status"] == "failed"
-        # 失败后同 key 重试：重新执行并成功
-        out = store.claim_operation(
-            "jiaming", "op-retry-1", lambda: {"ok": True},
-            payload_hash="h1")
+        # 失败零痕迹：没有任何 operation 记录残留
+        assert store.read_operation("jiaming", "op-retry-2") is None
+        # 同 key 重试：从头重新计算并成功
+        out = store.run_operation(
+            "jiaming", "op-retry-2", lambda: {"ok": True}, payload_hash="h1")
         assert out["data"] == {"ok": True}
         assert len(calls) == 1  # 原失败不重复计
 
     def test_same_key_different_payload_conflict(self, actors):
-        out = store.claim_operation(
-            "jiaming", "op-hash-1", lambda: {"a": 1}, payload_hash="h1")
+        out = store.run_operation(
+            "jiaming", "op-hash-2", lambda: {"a": 1}, payload_hash="h1")
         assert out["data"] == {"a": 1}
         with pytest.raises(IdempotencyConflict):
-            store.claim_operation(
-                "jiaming", "op-hash-1", lambda: {"a": 2},
+            store.run_operation(
+                "jiaming", "op-hash-2", lambda: {"a": 2},
                 payload_hash="h2")
 
     def test_sequential_replay_returns_saved_result(self, actors):
         """顺序重试（RUNTIME-02 原语义保持）：同 key 同 payload 重放。"""
-        out1 = store.claim_operation(
-            "jiaming", "op-seq-1", lambda: {"n": 1}, payload_hash="h1")
-        out2 = store.claim_operation(
-            "jiaming", "op-seq-1", lambda: {"n": 2}, payload_hash="h1")
+        out1 = store.run_operation(
+            "jiaming", "op-seq-2", lambda: {"n": 1}, payload_hash="h1")
+        out2 = store.run_operation(
+            "jiaming", "op-seq-2", lambda: {"n": 2}, payload_hash="h1")
         assert out1["data"] == {"n": 1}
         assert out2["idempotent_replay"] is True
         assert out2["data"] == {"n": 1}
