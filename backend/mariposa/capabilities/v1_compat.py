@@ -160,8 +160,10 @@ def _register_thin() -> int:
             return plans.get(conn, str(a.get("plan_id", "")))
 
     add("plan.get", _plan_get)
-    add("plan.complete", lambda p, a: _plan_set_state(p, a, "done"))
-    add("plan.cancel", lambda p, a: _plan_set_state(p, a, "cancelled"))
+    add("plan.complete", lambda p, a: _plan_set_state(p, a, "done"),
+        write=True)
+    add("plan.cancel", lambda p, a: _plan_set_state(p, a, "cancelled"),
+        write=True)
 
     def _plan_set_state(p, a, state):
         from ..plans import service as plans
@@ -201,7 +203,7 @@ def _register_thin() -> int:
         return {"reminder_id": rid, "updated": True}
 
     add("reminder.get", _reminder_get)
-    add("reminder.update", _reminder_update)
+    add("reminder.update", _reminder_update, write=True)
 
     def _self_read(p, a):
         sid = str(a.get("self_id", ""))
@@ -270,7 +272,7 @@ def _register_thin() -> int:
         return {"candidate_id": item_id, "state": "draft"}
 
     add("workspace.candidates.create", _candidates_create,
-        {"worker", "qiaosheng", "jiaming"})
+        {"worker", "qiaosheng", "jiaming"}, write=True)
 
     def _candidate_confirm(p, a):
         if p.principal_id != "jiaming":
@@ -317,7 +319,7 @@ def _register_thin() -> int:
                 raise NotFound("candidate not found", candidate_id=cid)
 
     add("memory.candidates.confirm", _candidate_confirm)
-    add("memory.candidates.reject", _candidate_reject)
+    add("memory.candidates.reject", _candidate_reject, write=True)
     add("memory.candidates.rewrite", _candidate_rewrite)
 
     def _deletion_restore(p, a):
@@ -326,7 +328,7 @@ def _register_thin() -> int:
         return letters.deletion_withdraw(p.principal_id,
                                          str(a.get("resource_id", "")))
 
-    add("memory.deletion.restore", _deletion_restore)
+    add("memory.deletion.restore", _deletion_restore, write=True)
 
     def _emotions_set(p, a):
         from ..content import service as content
@@ -336,7 +338,7 @@ def _register_thin() -> int:
         return content.tags_add(p.principal_id, str(a.get("memory_id", "")),
                                 tags)
 
-    add("memory.emotions.set", _emotions_set)
+    add("memory.emotions.set", _emotions_set, write=True)
 
     # v1.7：memory.forgetting.request / proposals.list / proposals.get
     # 已随遗忘链退役（2026-09-28 决策），不再注册。
@@ -359,7 +361,7 @@ def _register_thin() -> int:
                                                                    ensure_ascii=False)))
         return {"run_id": rid, "recorded": True}
 
-    add("workspace.runs.report", _runs_report)
+    add("workspace.runs.report", _runs_report, write=True)
     return n
 
 
