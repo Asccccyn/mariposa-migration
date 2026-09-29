@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .. import audit, config, db
-from ..errors import Forbidden, LockedResource, NotFound
+from ..errors import (AlreadyDecided, DeleteBlocked, Forbidden,
+                      LockedResource, NotFound)
 from ..memory import service as memory
 from ..retrieval import projection
 
@@ -279,7 +280,12 @@ def _target_active(conn, resource_id: str, kind: str) -> bool:
 
 def deletion_decide(principal_id: str, request_id: str, decision: str,
                     ai_reason: str = "", expected_resource_id: str = "") -> dict:
-    """AI 侧（周家明）审批；approve 执行 archive/delete。"""
+    """AI 侧（周家明）审批；approve 执行 archive/delete。
+
+    审计 F38：状态迁移在写事务内以 pending 为条件做 CAS——并发的
+    approve/reject 只有一个能落定，另一个得到结构化 ALREADY_DECIDED；
+    状态更新与删除副作用同一事务提交，数据库状态与实际副作用一致。
+    """
     if principal_id != "jiaming":
         raise Forbidden("only jiaming decides deletion requests",
                         principal=principal_id)
@@ -295,25 +301,38 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
                             code="bucket_mismatch")
         if not _target_active(conn, row["resource_id"], row["resource_kind"]):
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE deletion_requests SET status='superseded', decided_at=?,"
-                " decided_by=? WHERE id=?",
-                (_now().isoformat(), principal_id, request_id))
-            conn.execute("COMMIT")
+            try:
+                cur = conn.execute(
+                    "UPDATE deletion_requests SET status='superseded',"
+                    " decided_at=?, decided_by=? WHERE id=?"
+                    " AND status='pending'",
+                    (_now().isoformat(), principal_id, request_id))
+                if cur.rowcount != 1:
+                    conn.execute("ROLLBACK")
+                    raise AlreadyDecided(
+                        "deletion request already decided by a concurrent "
+                        "decision", request_id=request_id)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
             raise Forbidden("deletion request target is no longer active",
                             code="superseded")
         conn.execute("BEGIN IMMEDIATE")
         try:
-            if decision == "approve":
-                _execute(conn, row, principal_id)
-                status = "approved"
-            else:
-                status = "rejected"
-            conn.execute(
-                "UPDATE deletion_requests SET status=?, ai_reason=?, decided_at=?,"
-                " decided_by=? WHERE id=?",
+            status = "approved" if decision == "approve" else "rejected"
+            # CAS：只有仍处于 pending 的申请能被本次决定落定
+            cur = conn.execute(
+                "UPDATE deletion_requests SET status=?, ai_reason=?,"
+                " decided_at=?, decided_by=? WHERE id=? AND status='pending'",
                 (status, str(ai_reason or "").strip(), _now().isoformat(),
                  principal_id, request_id))
+            if cur.rowcount != 1:
+                raise AlreadyDecided(
+                    "deletion request already decided by a concurrent "
+                    "decision", request_id=request_id)
+            if decision == "approve":
+                _execute(conn, row, principal_id)
             audit.record(conn, f"deletion.{status}", principal_id,
                          resource_id=request_id,
                          payload={"target": row["resource_id"],
@@ -324,6 +343,26 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
             raise
     return {"request_id": request_id, "decision": decision,
             "resource_id": row["resource_id"], "status": status}
+
+
+def _blocking_references(conn, rid: str) -> dict[str, int]:
+    """阻止物理删除的正式跨域引用（审计 F34）。
+
+    I revision 关系与 Source 绑定是跨域历史引用：物理删除 memory 会
+    破坏其完整性。返回 {引用类型: 行数}；空 dict = 无引用可删。
+    """
+    out: dict[str, int] = {}
+    n = conn.execute(
+        "SELECT COUNT(*) AS c FROM i_revision_memory_relations"
+        " WHERE memory_id=?", (rid,)).fetchone()["c"]
+    if n:
+        out["i_revision_relations"] = n
+    n = conn.execute(
+        "SELECT COUNT(*) AS c FROM memory_source_bindings"
+        " WHERE memory_id=?", (rid,)).fetchone()["c"]
+    if n:
+        out["source_bindings"] = n
+    return out
 
 
 def _execute(conn, row, actor: str) -> None:
@@ -342,6 +381,13 @@ def _execute(conn, row, actor: str) -> None:
         return
     # delete：物理删除（有审批+限额+审计门槛；继承旧 HumanDeleteExecutor 语义）
     if kind == "memory":
+        # 审计 F34：存在 I revision 关系 / Source 绑用的记忆不做物理删除，
+        # 结构化拒绝（引用完整性优先），调用方可改走 archive。
+        refs = _blocking_references(conn, rid)
+        if refs:
+            raise DeleteBlocked(
+                "memory 被正式跨域引用，不允许物理删除；请先解除引用或"
+                "改用 archive", memory_id=rid, references=refs)
         # v2 分层子表全清（B08：v1 清单不含分类/心情/话语/回忆/keep 行，
         # v2 桶会 FK 失败）
         for table in ("memory_raw_refs", "memory_categories", "memory_moods",
