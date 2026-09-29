@@ -1285,6 +1285,15 @@ FROM seq;
 --（running 行的副作用状态不可知，删除后同 key 重试将重新完整计算）
 DELETE FROM recall_operation_keys WHERE status <> 'completed';
 """),
+    (5, """
+-- ===== 审计 N08：无法验证身份/结果的旧 operation 行清理 =====
+-- commit-at-end 下重试会重新完整计算，删除这些行只是让旧缓存响应
+-- 失效，不产生副作用风险（重放本就必须通过当前状态重校验）。
+-- payload_hash 为 NULL 的旧 completed 行无法验证同 key 异请求；
+-- result_ref 为空的行无法重放。
+DELETE FROM recall_operation_keys
+ WHERE payload_hash IS NULL OR result_ref IS NULL OR result_ref = '';
+"""),
 ]
 
 
