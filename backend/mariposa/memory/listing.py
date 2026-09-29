@@ -162,18 +162,5 @@ def meanings_list(memory_id: str) -> list[dict]:
 
 
 def _rebuild_full_projection(conn, memory_id: str) -> None:
-    """full 投影 = hold_text + why_remember + 当前有效 meaning 各层。"""
-    m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
-                     (memory_id,)).fetchone()
-    v = conn.execute(
-        "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
-        (memory_id, m["current_version_no"])).fetchone()
-    layers = [r["content"] for r in conn.execute(
-        "SELECT content FROM memory_meanings WHERE memory_id=? AND layer_no<1000"
-        " ORDER BY layer_no", (memory_id,))]
-    search_text = projection.build_full(
-        "\n".join([v["hold_text"] or ""] + layers), v["why_remember"])
-    projection.upsert(conn, memory_id, m["current_version_no"], "full",
-                      search_text,
-                      whitelist_body=projection.normalize_search_text(
-                          v["hold_text"] or ""))
+    """full 投影重建统一入口的薄委托（审计 F04：正文来源不再由本层决定）。"""
+    memory.rebuild_full_projection(conn, memory_id)

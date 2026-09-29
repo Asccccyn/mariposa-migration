@@ -37,14 +37,17 @@ def _current_texts(conn, memory_id: str) -> dict[str, str]:
     if m is None:
         return {}
     v = conn.execute(
-        "SELECT original_title, event_text, hold_text FROM memory_versions"
+        "SELECT representation, original_title, event_text, hold_text"
+        " FROM memory_versions"
         " WHERE memory_id=? AND version_no=?",
         (memory_id, m["current_version_no"])).fetchone()
     out: dict[str, str] = {}
     if v is not None:
         out["original_title"] = (v["original_title"] or "").strip()
-        # event_text 优先；旧 v1 版本无 event_text 时用 hold_text 作事件正文
-        out["event_text"] = (v["event_text"] or v["hold_text"] or "").strip()
+        # F04：正文解析走 memory.service.version_body 统一入口
+        #（event_text 优先，v1 旧版本回退 hold_text；fallback 集中实现）
+        from ..memory import service as memory_service
+        out["event_text"] = (memory_service.version_body(v) or "").strip()
     words = [r["text"] for r in conn.execute(
         "SELECT text FROM memory_our_words WHERE memory_id=? ORDER BY ordinal",
         (memory_id,))]
