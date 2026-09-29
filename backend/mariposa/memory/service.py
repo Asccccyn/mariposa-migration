@@ -116,18 +116,21 @@ def _raw_ref_hash(ref: dict) -> str:
         f":{ref.get('message_to')}".encode()).hexdigest()
 
 
-def _duplicated_by_raw_ref(raw_refs: list[dict] | None) -> str | None:
-    """§9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有 memory_id。"""
+def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
+    """§9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有 memory_id。
+
+    审计 F39：接受当前写事务连接，在 BEGIN IMMEDIATE 写锁内执行——
+    两个并发同源 hold 不会都通过去重检查各建一个 memory。
+    """
     if not raw_refs:
         return None
-    with db.formal() as conn:
-        for ref in raw_refs:
-            dup = conn.execute(
-                "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
-                " AND bind_confidence<>'revoked'",
-                (_raw_ref_hash(ref),)).fetchone()
-            if dup:
-                return dup["memory_id"]
+    for ref in raw_refs:
+        dup = conn.execute(
+            "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
+            " AND bind_confidence<>'revoked'",
+            (_raw_ref_hash(ref),)).fetchone()
+        if dup:
+            return dup["memory_id"]
     return None
 
 
@@ -266,15 +269,16 @@ def hold(
     if mood is not None:
         mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
 
-    dup = _duplicated_by_raw_ref(raw_refs)
-    if dup:
-        return {"memory_id": dup, "deduplicated": True}
-
     memory_id = f"mem_{uuid.uuid4().hex[:12]}"
     now = _now()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # F39：去重在写锁内——并发同源 hold 只落一个 memory
+            dup = _duplicated_by_raw_ref(conn, raw_refs)
+            if dup:
+                conn.execute("COMMIT")
+                return {"memory_id": dup, "deduplicated": True}
             _insert_core_rows(
                 conn, memory_id=memory_id, principal_id=principal.principal_id,
                 text=text, why_remember=why_remember, memory_date=memory_date,
