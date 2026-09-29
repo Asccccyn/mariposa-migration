@@ -899,17 +899,30 @@ def words_recall(principal, a: dict) -> dict:
 
 # ---------- operation 幂等重放重校验（审计 F07） ----------
 
-def revalidate_replayed(fn_name: str, saved: dict) -> dict:
-    """runtime operation 重放的当前状态重校验（审计 F07）。
+def _norm_recall_field(field: str) -> str:
+    """候选卡字段名归一化：words 通道写 our_words.text，阶段字段集用
+    our_words（N04）——导航轴（event_time/hold_time）保持原样。"""
+    if isinstance(field, str) and field.startswith("our_words."):
+        return "our_words"
+    return field
 
-    旧 operation 的保存响应不得绕过当前可见性与版本判断：
-    - session 必须仍存在且处于活跃状态（EXPIRED/CLOSED → 拒绝重放）；
-    - 候选卡逐张校验：memory 仍 active、卡片 content_version 与当前
-      revision 一致，并按**当前 phase** 的 AllowedFields 重过滤
-      matched_fields/evidence（WIDE→CORE 收缩后 title/words 命中失效）；
-      不满足的卡剔除，而不是把旧正文原样送出。
-    - 不含候选正文的响应（close 等）session 仍活跃即可重放。
+
+def revalidate_replayed(fn_name: str, saved: dict) -> dict:
+    """runtime operation 重放的当前状态重校验（审计 F07 + 复审 N03/N04）。
+
+    旧 operation 的保存响应不得绕过当前状态判断：
+    - 能力开关：Recall 运行时被禁用后旧 key 不再出站（fresh 拒绝时
+      replay 同样拒绝）；
+    - session 必须仍存在且活跃（EXPIRED/CLOSED/RESOLVED → 拒绝重放）；
+    - 候选卡按真实资源身份逐张校验：resource_ref 可解析出 memory 的
+      （含无 memory_id 字段的导航卡），要求 memory 仍 active、卡片
+      content_version == 当前 revision、当前分类与卡内结构化事实一致、
+      并按当前 phase 的 AllowedFields 重过滤 matched_fields/evidence
+      （字段名先归一化：our_words.text → our_words）；本 session 已
+      rejected 的资源剔除；无法验证资源身份的卡一律剔除（保守）；
+    - packet 层元数据（revision/budget）以当前 session 现值刷新。
     """
+    _require_enabled()
     from ..errors import StaleOperation
     from .models import ACTIVE_STATUSES
     if not isinstance(saved, dict):
@@ -936,15 +949,22 @@ def revalidate_replayed(fn_name: str, saved: dict) -> dict:
     if not has_candidates:
         return saved
     from . import phase_policy
+    rejected = store.rejected_resource_refs(sid)
     with db.formal() as conn:
         kept = []
         for c in saved["candidates"]:
             if not isinstance(c, dict):
                 continue
+            ref = c.get("resource_ref") or ""
             mid = c.get("memory_id")
+            if not mid and isinstance(ref, str) and ref.startswith("memory:"):
+                mid = ref[len("memory:"):]  # 导航卡等只带 resource_ref 的形状
             if not mid:
-                kept.append(c)  # raw 等独立资源卡：无 memory 正文泄露面
+                # 无法解析资源身份的卡（raw/未知前缀）：一律剔除，
+                # 不允许旧正文经白放分支出站（N03）
                 continue
+            if ref and ref in rejected:
+                continue  # 本 session 已拒绝的资源不得重放
             m = conn.execute(
                 "SELECT visibility, current_version_no FROM memories"
                 " WHERE memory_id=?", (mid,)).fetchone()
@@ -952,19 +972,40 @@ def revalidate_replayed(fn_name: str, saved: dict) -> dict:
                 continue  # 已删除/归档：不再可见
             if str(c.get("content_version")) != str(m["current_version_no"]):
                 continue  # 版本已前进：旧 revision 正文不得出站
+            # 分类变更（不产生新 revision）：卡内结构化事实过期即剔卡
+            current_cats = sorted(r["category"] for r in conn.execute(
+                "SELECT category FROM memory_categories WHERE memory_id=?",
+                (mid,)))
+            stale_fact = False
+            for ev in c.get("evidence") or []:
+                if not isinstance(ev, dict):
+                    continue
+                if ev.get("field") == "categories":
+                    val = (ev.get("structured_value") or {}).get("categories")
+                    if isinstance(val, list) and sorted(val) != current_cats:
+                        stale_fact = True
+            if stale_fact:
+                continue
             allowed = phase_policy.eligible_fields(
                 phase_policy.phase_of(mid))
-            orig_fields = list(c.get("matched_fields") or [])
+            orig_fields = [_norm_recall_field(f)
+                           for f in (c.get("matched_fields") or [])]
             fields = [f for f in orig_fields if f in allowed]
             if orig_fields and not fields:
                 continue  # 命中字段全部不再被当前 phase 允许
-            if fields != orig_fields:
+            if fields != list(c.get("matched_fields") or []):
                 c = dict(c)
                 c["matched_fields"] = fields
-                c["evidence"] = [e for e in (c.get("evidence") or [])
-                                 if not isinstance(e, dict)
-                                 or e.get("field") in allowed]
+                c["evidence"] = [
+                    ev for ev in (c.get("evidence") or [])
+                    if not isinstance(ev, dict)
+                    or _norm_recall_field(ev.get("field")) in allowed]
             kept.append(c)
     out = dict(saved)
     out["candidates"] = kept
+    # packet 层元数据以当前 session 刷新（N03：refine 后旧包不再宣称
+    # 旧 revision/预算）
+    out["revision"] = session["current_revision"]
+    if isinstance(out.get("budget"), dict):
+        out["budget"] = budget.snapshot(session)
     return out

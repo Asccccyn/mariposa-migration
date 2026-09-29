@@ -381,3 +381,176 @@ class TestSourceBatch4:
             archive.sha256_file(
                 __import__("pathlib").Path(r1["raw_path"]))[0])["ok"], \
             "raw 母本应保留可校验"
+
+
+class TestReplayGuardN03N04:
+    """重放 guard 补面：words 归一化 / 资源身份校验 / reject / 开关 /
+    分类变更 / packet 头刷新。"""
+
+    def _start_words(self, actors, op):
+        from mariposa.capabilities import registry as reg
+        return reg.invoke(actors["jiaming"], "memory.recall.start",
+                          {"query_plan": {
+                              "original_request": "查询话语",
+                              "channels": ["words"],
+                              "lexical_terms": ["散散步"]},
+                           "operation_id": op}, None)
+
+    def test_n04_words_replay_keeps_cards(self, actors):
+        """words 通道合法重试：无任何状态变化时重放不丢卡（N04）。"""
+        from mariposa.memory import service as memory
+        memory.hold(actors["jiaming"], text="一次平常的傍晚",
+                    memory_date="2026-09-20", date_confidence="exact",
+                    original_title="平常傍晚",
+                    categories=["sweet"], creation_mode="contemporaneous",
+                    raw_pending=False,
+                    our_words=[{"speaker": "qiaosheng", "text": "我们去散散步吧",
+                                "expression_kind": "verbatim"}])
+        r1 = self._start_words(actors, "op-n04-w1")
+        inner = r1["data"]
+        first = inner["data"]["candidates"]
+        assert first, "前置：words 首轮应有候选"
+        r2 = self._start_words(actors, "op-n04-w1")
+        assert r2["data"].get("idempotent_replay") is True
+        replayed = r2["data"]["data"]["candidates"]
+        assert len(replayed) == len(first), \
+            f"N04：合法 words 重试丢卡 {len(first)} -> {len(replayed)}"
+
+    def test_guard_drops_unverifiable_cards(self, actors):
+        """无 memory_id 且 resource_ref 不可解析的卡一律剔除（N03）。"""
+        from mariposa.recall import service as svc
+        packet = {
+            "recall_session_id": self._active_sid(actors),
+            "revision": 1,
+            "candidates": [
+                {"resource_ref": "raw_messages:gone-1", "channel": "raw",
+                 "evidence": [{"evidence_kind": "raw_verbatim",
+                               "snippet": "被删除的原文正文"}]},
+                {"resource_ref": "source:sel-9", "channel": "source"},
+            ],
+            "budget": {"rounds_used": 1},
+        }
+        out = svc.revalidate_replayed("start", packet)
+        assert out["candidates"] == [], \
+            "N03：不可验证资源的卡经重放出站"
+
+    def test_guard_checks_rejected_and_categories_and_header(self, actors):
+        """rejected 资源剔除 / 分类变更剔卡 / packet 头刷新（N03）。"""
+        from mariposa.memory import service as memory
+        from mariposa.memory import categories as cats_mod
+        from mariposa.recall import service as svc
+        out = memory.hold(actors["jiaming"], text="分类变更场景正文",
+                          memory_date="2026-09-21", date_confidence="exact",
+                          original_title="分类场景",
+                          categories=["daily"],
+                          creation_mode="contemporaneous", raw_pending=False)
+        mid = out["memory_id"]
+        sid = self._active_sid(actors)
+        card = {
+            "resource_ref": f"memory:{mid}", "memory_id": mid,
+            "channel": "event", "content_version": "1",
+            "matched_fields": ["event_text"],
+            "evidence": [{"evidence_kind": "authored_event",
+                          "field": "event_text", "snippet": "分类变更场景正文"},
+                         {"evidence_kind": "structured_fact",
+                          "field": "categories",
+                          "structured_value": {"categories": ["daily"]}}],
+        }
+        packet = {"recall_session_id": sid, "revision": 1,
+                  "candidates": [dict(card)], "budget": {"rounds_used": 1}}
+        # 正常：卡保留
+        ok = svc.revalidate_replayed("start", packet)
+        assert len(ok["candidates"]) == 1
+        # 分类变更（不产生新版本）：结构化事实过期 → 剔卡
+        with db.formal() as conn:
+            cats_mod.replace(conn, mid, ["sweet"], actors["jiaming"].principal_id)
+        stale = svc.revalidate_replayed("start", packet)
+        assert stale["candidates"] == [], "N03：分类变更后旧分类证据仍重放"
+        # 恢复分类；rejected 资源剔除
+        with db.formal() as conn:
+            cats_mod.replace(conn, mid, ["daily"], actors["jiaming"].principal_id)
+        from mariposa.recall import store as rstore
+        with db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rstore.upsert_candidates(conn, sid, [
+                    {"candidate_ref": f"memory:{mid}",
+                     "resource_ref": f"memory:{mid}", "channel": "event",
+                     "representation": "full", "state": "rejected",
+                     "scores": {}}], 1)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        rej = svc.revalidate_replayed("start", packet)
+        assert rej["candidates"] == [], "N03：已拒绝资源经重放返回"
+
+    def test_guard_refreshes_packet_header(self, actors):
+        """refine 后旧 start 包重放：revision/budget 用当前值（N03）。"""
+        from mariposa.capabilities import registry as reg
+        from mariposa.memory import service as memory
+        memory.hold(actors["jiaming"], text="头部刷新场景正文搬家",
+                    memory_date="2026-09-22", date_confidence="exact",
+                    original_title="头部刷新",
+                    categories=["daily"], creation_mode="contemporaneous",
+                    raw_pending=False)
+        r1 = reg.invoke(actors["jiaming"], "memory.recall.start",
+                        {"query_plan": {"original_request": "查搬家",
+                                        "channels": ["event"],
+                                        "lexical_terms": ["搬家"]},
+                         "operation_id": "op-hdr-1"}, None)
+        sid = r1["data"]["data"]["recall_session_id"]
+        reg.invoke(actors["jiaming"], "memory.recall.refine",
+                   {"session_id": sid,
+                    "query_plan": {"original_request": "再查搬家",
+                                   "channels": ["event"],
+                                   "lexical_terms": ["搬家"]},
+                    "operation_id": "op-hdr-2"}, None)
+        r3 = reg.invoke(actors["jiaming"], "memory.recall.start",
+                        {"query_plan": {"original_request": "查搬家",
+                                        "channels": ["event"],
+                                        "lexical_terms": ["搬家"]},
+                         "operation_id": "op-hdr-1"}, None)
+        assert r3["data"].get("idempotent_replay") is True
+        replayed = r3["data"]["data"]
+        assert replayed["revision"] == 2, \
+            f"N03：重放包仍宣称旧 revision：{replayed['revision']}"
+        assert replayed["budget"]["rounds_used"] == 2
+
+    def test_guard_rejects_when_runtime_disabled(self, actors, monkeypatch):
+        """Recall 禁用后：fresh 拒绝，同 key 重放同样拒绝（N03）。"""
+        from mariposa.capabilities import registry as reg
+        from mariposa import config as cfg
+        from mariposa.memory import service as memory
+        memory.hold(actors["jiaming"], text="开关场景正文搬家",
+                    memory_date="2026-09-23", date_confidence="exact",
+                    original_title="开关场景",
+                    categories=["daily"], creation_mode="contemporaneous",
+                    raw_pending=False)
+        reg.invoke(actors["jiaming"], "memory.recall.start",
+                   {"query_plan": {"original_request": "查搬家",
+                                   "channels": ["event"],
+                                   "lexical_terms": ["搬家"]},
+                    "operation_id": "op-sw-1"}, None)
+        monkeypatch.setattr(cfg, "RECALL_RUNTIME_ENABLED", False)
+        from mariposa.errors import Forbidden
+        with pytest.raises(Forbidden):
+            reg.invoke(actors["jiaming"], "memory.recall.start",
+                       {"query_plan": {"original_request": "查搬家",
+                                       "channels": ["event"],
+                                       "lexical_terms": ["搬家"]},
+                        "operation_id": "op-sw-1"}, None)
+
+    def _active_sid(self, actors):
+        from mariposa.recall import store as rstore
+        draft = rstore.new_session_draft("jiaming", "", {})
+        import json as _j
+        with db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rstore.insert_session(conn, draft)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return draft["session_id"]
