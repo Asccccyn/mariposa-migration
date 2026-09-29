@@ -355,13 +355,14 @@ class TestImporter:
             stored = c.execute("SELECT COUNT(*) n FROM source_messages"
                                ).fetchone()["n"]
         assert row["status"] == "failed" and "simulated crash" in row["error"]
-        assert stored == 2  # 第一个会话已提交，第二个会话事务回滚
+        assert stored == 0  # 失败清场：中断导入不残留已提交的未发布消息
 
         monkeypatch.undo()
         r = importer.import_file("jiaming", str(p))  # 重导恢复
         assert r["status"] == "completed"
-        assert r["stats"]["messages_new"] == 10  # 只补第二个会话的消息
-        assert r["stats"]["messages_skipped_existing"] == 2
+        # 失败清场后重导：全部消息全新写入（清场不占 UUID）
+        assert r["stats"]["messages_new"] == 12
+        assert r["stats"]["messages_skipped_existing"] == 0
 
     def test_raw_archive_immutable_original(self, clean):
         r = import_ok("jiaming", "standard.json")

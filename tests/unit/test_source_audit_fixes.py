@@ -29,17 +29,19 @@ def write(tmp_path, name, data):
 class TestAuditSourceFixes:
     def test_a09_failed_batch_uuid_taken_over_same_content(self, actors,
                                                            tmp_path):
-        """A09：失败批次占 UUID，修正文件（同正文）重导后接管并可见。
+        """A09 + 失败清场：失败不占 UUID；修正文件重导后全新写入发布。
 
-        审计 F11 修正后：接管只发生在内容身份一致时——本批 raw 归档
-        确实包含该正文，published 行的 import_batch_id 才前移到本批。
+        清场后同正文重导走全新 INSERT，provenance 天然指向真正包含
+        该正文的成功批次（原"接管"语义由清场替代实现）。
         """
         bad = [conv("c-a9", [msg("a9-1")]), 42]
         r1 = importer.import_file("jiaming", write(tmp_path, "bad.json", bad))
         assert r1["status"] == "failed"
+        # 失败清场（2026-09-29 裁定）：未发布消息不残留
         with db.formal() as c:
-            assert c.execute("SELECT published FROM source_messages"
-                             ).fetchone()["published"] == 0
+            assert c.execute(
+                "SELECT COUNT(*) n FROM source_messages"
+            ).fetchone()["n"] == 0
         good = [conv("c-a9", [msg("a9-1")]), conv("c-a9b", [msg("a9-2")])]
         r2 = importer.import_file(
             "jiaming", write(tmp_path, "good.json", good))
@@ -63,17 +65,21 @@ class TestAuditSourceFixes:
             assert member_hash == rows["a9-1"]["content_hash"]
         assert query.search("正文")["hits"]
 
-    def test_f11_failed_batch_old_text_not_republished(self, actors,
-                                                       tmp_path):
-        """F11：失败批次旧正文不得被成功批次重新发布并改指新母本。
-
-        同 UUID 不同正文：旧行保持 unpublished、来源批次不动；
-        新正文按 SL-07 留不可变版本；检索面不可见旧行。
+    def test_f11_failed_batch_purged_then_new_text_published(self, actors,
+                                                             tmp_path):
+        """F11 + 失败清场（2026-09-29 裁定）：失败批次不残留占位；
+        修正文件（含同 UUID 改写正文）重导后新正文直接写入发布可见，
+        不存在"旧正文被成功批次冒名接管"的路径。
         """
         bad = [conv("c-f11", [msg("f11-1", "旧版正文字样")]), 42]
         r1 = importer.import_file(
             "jiaming", write(tmp_path, "bad.json", bad))
         assert r1["status"] == "failed"
+        # 失败清场：本批未发布消息/投影/快照/空壳会话当场清理
+        with db.formal() as c:
+            assert c.execute(
+                "SELECT COUNT(*) n FROM source_messages"
+            ).fetchone()["n"] == 0
         good = [conv("c-f11", [msg("f11-1", "新版正文完全不同")])]
         r2 = importer.import_file(
             "jiaming", write(tmp_path, "good.json", good))
@@ -83,23 +89,19 @@ class TestAuditSourceFixes:
                 "SELECT published, import_batch_id, text, content_hash"
                 " FROM source_messages WHERE provider_message_id='f11-1'"
             ).fetchone()
-            versions = c.execute(
-                "SELECT content_hash, observed_batch_id FROM"
-                " source_message_versions WHERE provider_message_id="
-                "'f11-1'").fetchall()
-        # 旧正文行不被成功批次接管：不发布、provenance 不迁移
-        assert row["published"] == 0
-        assert row["import_batch_id"] == r1["batch_id"]
-        assert row["text"] == "旧版正文字样"
-        # 新正文以不可变版本留档，观察批次 = 成功批次
-        assert r2["stats"]["version_conflicts"] == 1
-        assert any(v["observed_batch_id"] == r2["batch_id"]
-                   for v in versions)
-        # 发布门禁统计暴露 mismatch（可观测）
-        assert r2["stats"].get("publish_skipped_content_mismatch", 0) >= 1
-        # 未发布旧正文不进检索面
+            member_hash = c.execute(
+                "SELECT m.content_hash AS h FROM source_snapshot_members m"
+                " JOIN source_conversation_snapshots s"
+                " ON s.snapshot_id=m.snapshot_id"
+                " WHERE s.batch_id=? AND m.provider_message_id='f11-1'",
+                (r2["batch_id"],)).fetchone()["h"]
+        # 新正文发布可见，provenance 指向真正包含它的成功批次
+        assert row["published"] == 1
+        assert row["import_batch_id"] == r2["batch_id"]
+        assert row["text"] == "新版正文完全不同"
+        assert row["content_hash"] == member_hash
+        assert query.search("新版正文完全不同")["hits"]
         assert not query.search("旧版正文字样")["hits"]
-        assert not query.search("新版正文完全不同")["hits"]
 
     def test_a10_failed_batch_does_not_poison_new_import(self, actors,
                                                          tmp_path):

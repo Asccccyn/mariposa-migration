@@ -215,30 +215,38 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             conn.execute("BEGIN IMMEDIATE")
             try:
                 members = conn.execute(
-                    "SELECT m.provider_message_id, m.content_hash FROM"
+                    "SELECT m.provider_message_id, m.content_hash,"
+                    " c.provider_conversation_id FROM"
                     " source_snapshot_members m"
                     " JOIN source_conversation_snapshots s"
-                    " ON s.snapshot_id=m.snapshot_id WHERE s.batch_id=?",
+                    " ON s.snapshot_id=m.snapshot_id"
+                    " JOIN source_conversations c"
+                    " ON c.id=s.conversation_id WHERE s.batch_id=?",
                     (batch_id,)).fetchall()
                 published = 0
                 publish_mismatch = 0
                 for member in members:
+                    # N10：发布条件包含会话归属——同 UUID 同正文但挂在
+                    # 其他会话下的行不得迁移到不含该会话的成功母本
                     cur = conn.execute(
                         "UPDATE source_messages SET published=1,"
                         " import_batch_id=? WHERE provider=?"
-                        " AND provider_message_id=? AND published=0"
-                        " AND content_hash=?",
+                        " AND provider_message_id=?"
+                        " AND provider_conversation_id=?"
+                        " AND published=0 AND content_hash=?",
                         (batch_id, provider,
                          member["provider_message_id"],
+                         member["provider_conversation_id"],
                          member["content_hash"]))
                     published += cur.rowcount
                     if cur.rowcount == 0:
                         cur_row = conn.execute(
-                            "SELECT content_hash FROM source_messages"
+                            "SELECT published FROM source_messages"
                             " WHERE provider=? AND provider_message_id=?",
                             (provider, member["provider_message_id"])
                         ).fetchone()
-                        if cur_row is not None:
+                        # 已发布同内容（UPDATE 天然不匹配）不是 mismatch
+                        if cur_row is not None and cur_row["published"] == 0:
                             publish_mismatch += 1
                 if publish_mismatch:
                     stats["publish_skipped_content_mismatch"] = \
@@ -644,8 +652,11 @@ def _row_content_hash(row) -> str:
         "created_at": row["created_at"], "updated_at": row["updated_at"],
         "parent": row["parent_provider_message_id"],
         "text": row["text"],
-        "content": json.loads(row["content_json"])
-        if row["content_json"] else None,
+        # N09：与 _content_hash 严格同构——msg.content_json 本就是字符串
+        #（adapters.base.NormalizedMessage.content_json: str|None），不做
+        # 对象化往返；attachments 是 list，DB JSON 往返后经 outer
+        # sort_keys 序列化等价
+        "content": row["content_json"],
         "attachments": json.loads(row["attachments"] or "[]"),
         "has_thinking": bool(row["has_thinking"]),
         "has_tool_content": bool(row["has_tool_content"]),
@@ -845,18 +856,65 @@ def _set_raw_path(batch_id: str, raw_path: str, original_name: str) -> None:
             " WHERE batch_id=?", (raw_path, original_name, batch_id))
 
 
+def _purge_failed_batch_artifacts(conn, batch_id: str) -> int:
+    """失败批次清场（产品语义 2026-09-29 江乔生裁定：导入失败不留下
+    任何会话消息数据）。
+
+    只清理"本批新写且未发布"的行：消息、检索投影、快照与成员、清场
+    后不再挂任何消息的空壳会话。保留：raw 归档母本、不可变版本档案
+    （source_message_versions，SL-07）、审计事件。本批写入前已存在的
+    其他批次数据（含已发布行）不受影响。
+    """
+    unpublished = conn.execute(
+        "SELECT id FROM source_messages WHERE import_batch_id=?"
+        " AND published=0", (batch_id,)).fetchall()
+    ids = [r["id"] for r in unpublished]
+    if ids:
+        marks = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM source_fts WHERE message_id IN ({marks})",
+                     ids)
+        conn.execute(
+            f"DELETE FROM source_search_docs WHERE message_id IN ({marks})",
+            ids)
+    conn.execute(
+        "DELETE FROM source_messages WHERE import_batch_id=?"
+        " AND published=0", (batch_id,))
+    conn.execute(
+        "DELETE FROM source_snapshot_members WHERE snapshot_id IN ("
+        " SELECT snapshot_id FROM source_conversation_snapshots"
+        " WHERE batch_id=?)", (batch_id,))
+    conn.execute(
+        "DELETE FROM source_conversation_snapshots WHERE batch_id=?",
+        (batch_id,))
+    # 空壳会话：清场后不再挂任何消息的会话行
+    conn.execute(
+        "DELETE FROM source_conversations WHERE id NOT IN ("
+        " SELECT DISTINCT conversation_id FROM source_messages)")
+    return len(ids)
+
+
 def _fail_batch(batch_id: str, provider: str, error: str,
                 stats: dict | None = None) -> None:
     with db.formal() as conn:
-        # F13：租约被接管后不得覆盖接管方的终态（completed 保护）；
-        # 本进程只在批次仍处 running/failed 时写失败
-        conn.execute(
-            "UPDATE source_import_batches SET status='failed', error=?,"
-            " stats=COALESCE(?, stats), import_finished_at=?"
-            " WHERE batch_id=? AND status<>'completed'",
-            (error[:2000],
-             json.dumps(stats, ensure_ascii=False) if stats else None,
-             _now(), batch_id))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 失败清场：本批未发布数据当场清理，重导不再有残留占位
+            purged = _purge_failed_batch_artifacts(conn, batch_id)
+            # F13：租约被接管后不得覆盖接管方的终态（completed 保护）；
+            # 本进程只在批次仍处 running/failed 时写失败
+            conn.execute(
+                "UPDATE source_import_batches SET status='failed', error=?,"
+                " stats=COALESCE(?, stats), import_finished_at=?"
+                " WHERE batch_id=? AND status<>'completed'",
+                (error[:2000],
+                 json.dumps(stats, ensure_ascii=False) if stats else None,
+                 _now(), batch_id))
+            if stats is not None:
+                stats["failed_batch_purged_unpublished"] = purged
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     archive.write_metadata(provider, batch_id, {
         "status": "failed", "error": error[:2000],
         **({"stats": stats} if stats else {})})

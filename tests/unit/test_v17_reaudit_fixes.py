@@ -284,3 +284,100 @@ class TestN05MutationsRegainWriteIdempotency:
                              "idem-n05-read")
         assert r2.get("idempotent_replay") is not True
         assert r2["data"]["text"] == "更新后的读取新鲜度正文"
+
+
+class TestSourceBatch4:
+    """N09 hash 同构 / N10 跨会话归属 / 失败清场边界 / mismatch 计数。"""
+
+    def _tmp(self, tmp_path):
+        import json as _json
+
+        def conv(cid, msgs):
+            return {"uuid": cid, "chat_messages": msgs}
+
+        def msg(mid, text="正文", created="2026-07-01T00:00:00.000Z"):
+            return {"uuid": mid, "sender": "human", "created_at": created,
+                    "content": [{"type": "text", "text": text}]}
+
+        def write(name, data):
+            f = tmp_path / name
+            f.write_text(_json.dumps(data, ensure_ascii=False),
+                         encoding="utf-8")
+            return str(f)
+        return conv, msg, write
+
+    def test_n09_row_hash_roundtrip_equivalent(self, actors, tmp_path):
+        """行重算 hash 与导入时 hash 对同一行严格相等（含 content_json
+        字符串、空 content、附件三形态）。"""
+        from mariposa.source import importer
+        conv, msg, write = self._tmp(tmp_path)
+        importer.import_file("jiaming", write("ok.json", [
+            conv("c-h1", [msg("h-1", "普通正文")]),
+            conv("c-h2", [msg("h-2", "")]),
+            conv("c-h3", [{"uuid": "h-3", "sender": "human",
+                          "created_at": "2026-07-01T00:00:00.000Z",
+                          "content": [
+                              {"type": "text", "text": "带附件"},
+                              {"type": "image", "source": {
+                                  "data": "aGVsbG8=",
+                                  "media_type": "image/png"}}]}]),
+        ]))
+        from mariposa import db as _db
+        with _db.formal() as c:
+            rows = c.execute(
+                "SELECT * FROM source_messages WHERE provider_message_id"
+                " IN ('h-1','h-2','h-3')").fetchall()
+            assert len(rows) == 3
+            for r in rows:
+                assert importer._row_content_hash(r) == r["content_hash"], \
+                    f"N09：行 {r['provider_message_id']} 重算 hash 不等"
+
+    def test_n10_cross_conversation_uuid_not_relabelled(self, actors,
+                                                        tmp_path):
+        """convA 失败遗留（清场后无残留）与 convB 成功同 UUID 同正文：
+        成功批只发布 convB 的行，不得把其他会话的行迁给 B。"""
+        from mariposa.source import importer, query
+        conv, msg, write = self._tmp(tmp_path)
+        # convA 成功发布（制造一个已存在行，挂在 convA）
+        importer.import_file("jiaming", write("a.json", [
+            conv("convA", [msg("x-1", "两会话同文正文")])]))
+        # convB 成功批次含同 UUID 同正文
+        r2 = importer.import_file("jiaming", write("b.json", [
+            conv("convB", [msg("x-1", "两会话同文正文")])]))
+        assert r2["status"] == "completed"
+        from mariposa import db as _db
+        with _db.formal() as c:
+            rows = c.execute(
+                "SELECT provider_conversation_id, import_batch_id,"
+                " published FROM source_messages"
+                " WHERE provider_message_id='x-1'").fetchall()
+        # 全局 UNIQUE 使第二个批次无法插入同 UUID 行：唯一行保持 convA
+        # 归属，不被 convB 的成功批次改源
+        assert len(rows) == 1
+        assert rows[0]["provider_conversation_id"] == "convA"
+        assert rows[0]["import_batch_id"] != r2["batch_id"]
+        # 已发布同内容不计 mismatch（误计数修正）
+        assert r2["stats"].get("publish_skipped_content_mismatch", 0) == 0
+
+    def test_purge_keeps_versions_and_raw(self, actors, tmp_path):
+        """清场保留不可变版本档案与 raw 母本，只清未发布消息行。"""
+        from mariposa.source import importer
+        from mariposa import db as _db
+        conv, msg, write = self._tmp(tmp_path)
+        r1 = importer.import_file("jiaming", write("bad.json", [
+            conv("c-p1", [msg("p-1", "清场留档正文")]), 42]))
+        assert r1["status"] == "failed"
+        with _db.formal() as c:
+            msgs = c.execute("SELECT COUNT(*) n FROM source_messages"
+                             ).fetchone()["n"]
+            versions = c.execute(
+                "SELECT COUNT(*) n FROM source_message_versions"
+                " WHERE provider_message_id='p-1'").fetchone()["n"]
+        assert msgs == 0, "未发布消息行应被清"
+        assert versions >= 1, "不可变版本档案应保留（SL-07）"
+        from mariposa.source import archive
+        assert archive.verify_archived(
+            "claude", r1["batch_id"],
+            archive.sha256_file(
+                __import__("pathlib").Path(r1["raw_path"]))[0])["ok"], \
+            "raw 母本应保留可校验"

@@ -227,12 +227,11 @@ class TestFailureVisibility:
         monkeypatch.setattr(importer, "_insert_message", crash_on)
         with pytest.raises(RuntimeError):
             imp(p)
-        # c-a 已提交入库，但批次失败 → 默认检索/列表不可见
+        # 失败批次清场（2026-09-29 产品裁定：导入失败不留下消息数据）：
+        # c-a 已提交的未发布行被当场清理，检索/列表同样不可见
         with db.formal() as c:
             assert c.execute("SELECT COUNT(*) n FROM source_messages"
-                             ).fetchone()["n"] == 1
-            assert c.execute("SELECT published FROM source_messages"
-                             ).fetchone()["published"] == 0
+                             ).fetchone()["n"] == 0
         assert query.search("失败前已提交正文")["hits"] == []
         assert query.conversations_list()["conversations"] == []
 
