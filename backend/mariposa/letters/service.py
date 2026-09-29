@@ -300,6 +300,7 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
             raise Forbidden("deletion request does not match resource_id",
                             code="bucket_mismatch")
         if not _target_active(conn, row["resource_id"], row["resource_kind"]):
+            supersede_conflict = None
             conn.execute("BEGIN IMMEDIATE")
             try:
                 cur = conn.execute(
@@ -308,14 +309,17 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
                     " AND status='pending'",
                     (_now().isoformat(), principal_id, request_id))
                 if cur.rowcount != 1:
-                    conn.execute("ROLLBACK")
-                    raise AlreadyDecided(
+                    # N12：CAS 输家——不在 try 内 raise（外层 except 的
+                    # ROLLBACK 会因事务已结束再炸，掩盖真实错误）
+                    supersede_conflict = AlreadyDecided(
                         "deletion request already decided by a concurrent "
                         "decision", request_id=request_id)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+            if supersede_conflict is not None:
+                raise supersede_conflict
             raise Forbidden("deletion request target is no longer active",
                             code="superseded")
         conn.execute("BEGIN IMMEDIATE")
@@ -390,8 +394,8 @@ def _execute(conn, row, actor: str) -> None:
                 "改用 archive", memory_id=rid, references=refs)
         # v2 分层子表全清（B08：v1 清单不含分类/心情/话语/回忆/keep 行，
         # v2 桶会 FK 失败）
-        for table in ("memory_raw_refs", "memory_categories", "memory_moods",
-                      "memory_mood_tags", "memory_our_words",
+        for table in ("memory_raw_refs", "memory_categories", "memory_tags",
+                      "memory_moods", "memory_mood_tags", "memory_our_words",
                       "memory_recollections", "memory_view_receipts",
                       "memory_reengagements", "memory_meanings",
                       "memory_keeps", "field_search_docs", "field_fts",

@@ -81,38 +81,47 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
             return {"memory_id": memory_id, "source_state": "raw_pending",
                     "workspace_item": item_id,
                     "note": "低置信来源待核：未绑定，进工作区审阅"}
-        # 去重：同一范围已绑到别的桶
-        dup = conn.execute(
-            "SELECT memory_id FROM memory_raw_refs WHERE conversation_id=?"
-            " AND message_from=? AND message_to=? AND memory_id<>?"
-            " AND bind_confidence<>'revoked'",
-            (conversation_id, message_from, message_to, memory_id)).fetchone()
-        if dup:
-            raise Forbidden(
-                "same source range already bound to another memory",
-                code="DEDUPE_NEEDS_REVIEW", other_memory=dup["memory_id"])
+        dup_conflict = None
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "INSERT OR REPLACE INTO memory_raw_refs(memory_id, conversation_id,"
-                " message_from, message_to, source_hash, bind_confidence, created_at)"
-                " VALUES(?,?,?,?,?,?,?)",
-                (memory_id, conversation_id, message_from, message_to,
-                 source_hash, confidence, _now()))
-            conn.execute(
-                "UPDATE memories SET source_state='bound', updated_at=?"
-                " WHERE memory_id=?", (_now(), memory_id))
-            conn.execute(
-                "UPDATE provisional_sources SET status='bound' WHERE memory_id=?",
-                (memory_id,))
-            audit.record(conn, "raw.bound", principal_id, resource_id=memory_id,
-                         payload={"conversation_id": conversation_id,
-                                  "range": [message_from, message_to],
-                                  "confidence": confidence})
+            # 去重（审计 F39 补面）：同一范围已绑到别的桶——检查移入
+            # 写锁内，与 memory.hold 的锁内去重共享同一不变量，并发
+            # bind↔hold 不再双双通过检查产生同源双绑定
+            dup = conn.execute(
+                "SELECT memory_id FROM memory_raw_refs WHERE"
+                " conversation_id=? AND message_from=? AND message_to=?"
+                " AND memory_id<>? AND bind_confidence<>'revoked'",
+                (conversation_id, message_from, message_to, memory_id)
+            ).fetchone()
+            if dup is not None:
+                dup_conflict = Forbidden(
+                    "same source range already bound to another memory",
+                    code="DEDUPE_NEEDS_REVIEW",
+                    other_memory=dup["memory_id"])
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO memory_raw_refs(memory_id,"
+                    " conversation_id, message_from, message_to, source_hash,"
+                    " bind_confidence, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (memory_id, conversation_id, message_from, message_to,
+                     source_hash, confidence, _now()))
+                conn.execute(
+                    "UPDATE memories SET source_state='bound', updated_at=?"
+                    " WHERE memory_id=?", (_now(), memory_id))
+                conn.execute(
+                    "UPDATE provisional_sources SET status='bound'"
+                    " WHERE memory_id=?", (memory_id,))
+                audit.record(conn, "raw.bound", principal_id,
+                             resource_id=memory_id,
+                             payload={"conversation_id": conversation_id,
+                                      "range": [message_from, message_to],
+                                      "confidence": confidence})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        if dup_conflict is not None:
+            raise dup_conflict
     return {"memory_id": memory_id, "source_state": "bound",
             "source_hash": source_hash, "messages": msgs}
 

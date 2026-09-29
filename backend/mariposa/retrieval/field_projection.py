@@ -37,8 +37,8 @@ def _current_texts(conn, memory_id: str) -> dict[str, str]:
     if m is None:
         return {}
     v = conn.execute(
-        "SELECT representation, original_title, event_text, hold_text"
-        " FROM memory_versions"
+        "SELECT representation, original_title, event_text, hold_text,"
+        " compressed_summary FROM memory_versions"
         " WHERE memory_id=? AND version_no=?",
         (memory_id, m["current_version_no"])).fetchone()
     out: dict[str, str] = {}
