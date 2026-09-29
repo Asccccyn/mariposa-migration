@@ -301,7 +301,7 @@ def _register() -> dict[str, Capability]:
     add("maintenance.reminders.fire_due", _fire_due,
         {"worker", "qiaosheng", "jiaming"}, True,
         description="到期提醒结算（幂等；无常驻 scheduler，无外部副作用）")
-    add("media.upload.prepare", _media_prepare, _owners(), False,
+    add("media.upload.prepare", _media_prepare, _owners(), True,
         description="申请上传 token（字节走专用 HTTP 端点，不进工具参数）")
     add("media.upload.finalize", _media_finalize, _owners(), True, True,
         description="完成上传（hash 去重）")
