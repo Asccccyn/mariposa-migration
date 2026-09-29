@@ -1,9 +1,12 @@
 """两入口开窗（spec_v2 R20 / §11 / V2-BOOT）。
 
-v2 默认包 = 最近三个自然日桶的 标题+心情标签+心情文字 + I + 提前 0..3
+v2 默认包 = 最近三个自然日桶的 标题+心情标签+心情文字 + 当前 I + 提前 0..3
 自然日进入临近的计划/纪念日全文；进行中/逾期未完成计划单列不消失。
 普通事件不自动全文展开；**不默认附带旧版 30 条原文**（显式取源走 raw
 工具并另行确认）。开窗不产生 view confirm，不续期。
+
+I 只注入当前 revision；若某条有历史，只带 has_history/history_count 指针，
+旧 I 正文必须显式 i.item.history 才能读取。
 
 - Claude Chat / CC 两个 profile 同一基础包（entry_source 校验不变）；
 - 最近三天 = 事件日期的今天与前两天（自然日，非滚动 72 小时）；
@@ -127,6 +130,8 @@ def _i_section() -> dict:
     from ..identity_i import service as i_svc
     doc = i_svc.get()
     return {"content": doc["content"], "version": doc["version"],
+            "items": doc.get("items", []),
+            "history_policy": "旧 revision 默认不注入；has_history=true 时可按需调用 i.item.history",
             "source": "i_documents" if doc["content"] is not None else None,
             "note": None if doc["content"] is not None else
                     "I 尚未落笔（无旧Self自动映射，V2-I-03）"}

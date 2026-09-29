@@ -361,7 +361,8 @@ def purge_expired(limit: int = 200) -> int:
 
 def reset_for_tests() -> None:
     """测试清库（conftest 专用）：清空 runtime 全部运行状态。"""
-    tables = ("recall_operation_keys", "recall_receipts", "recall_attempts",
+    tables = ("jev_feature_cache", "jev_rerank_cache",
+              "recall_operation_keys", "recall_receipts", "recall_attempts",
               "recall_candidates", "recall_query_revisions", "recall_sessions")
     with db.recall_runtime() as conn:
         conn.execute("PRAGMA foreign_keys=OFF")

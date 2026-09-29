@@ -217,9 +217,11 @@ class TestJev:
         judge._allowed_data = "synthetic_only"
         payload = judge._payload(
             {"original_request": "q", "explicit_constraints": {}},
-            {"candidate_ref": "c1", "excerpt": "片段",
-             "truncated": False, "matched_by": []})
-        assert payload["question"]["candidate"]["candidate_ref"] == "c1"
+            [{"candidate_ref": "c1", "excerpt": "片段",
+              "truncated": False, "matched_by": []}])
+        assert payload["state"]["candidates"][0]["candidate_ref"] == "c1"
+        assert payload["state"]["candidates"][0]["excerpt"] == "片段"
+        assert payload["questions"]["candidate_0"]["type"] == "noul"
 
     def test_jev10(self):
         out = selection.select(

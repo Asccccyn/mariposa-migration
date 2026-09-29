@@ -407,6 +407,62 @@
       "description": "I 正本当前版（周家明写）"
     },
     {
+      "canonical_name": "i.item.create",
+      "transport_name": "mariposa_i_item_create",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "新增一条 I"
+    },
+    {
+      "canonical_name": "i.item.get",
+      "transport_name": "mariposa_i_item_get",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "读取单条当前 I"
+    },
+    {
+      "canonical_name": "i.item.history",
+      "transport_name": "mariposa_i_item_history",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "显式读取某条 I 的历史、理由和记忆关联"
+    },
+    {
+      "canonical_name": "i.item.restore",
+      "transport_name": "mariposa_i_item_restore",
+      "allowed_principals": ["jiaming"],
+      "write": true,
+      "idempotent": false,
+      "description": "恢复旧 I：复制旧版形成新 revision"
+    },
+    {
+      "canonical_name": "i.item.revise",
+      "transport_name": "mariposa_i_item_revise",
+      "allowed_principals": ["jiaming"],
+      "write": true,
+      "idempotent": false,
+      "description": "修改 I：追加 revision，可记录理由和旧版启发"
+    },
+    {
+      "canonical_name": "i.items.list",
+      "transport_name": "mariposa_i_items_list",
+      "allowed_principals": ["jiaming", "qiaosheng"],
+      "write": false,
+      "idempotent": false,
+      "description": "I 当前生效条目；旧版需显式读取"
+    },
+    {
       "canonical_name": "i.suggest",
       "transport_name": "mariposa_i_suggest",
       "allowed_principals": [
@@ -436,7 +492,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "I 版本历史（只读）"
+      "description": "兼容整篇 I 快照历史；条目历史优先用 i.item.history"
     },
     {
       "canonical_name": "i.write",
@@ -446,7 +502,7 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "写 I 正本（仅周家明；版本留底；无情绪准入）"
+      "description": "兼容单条 i_main 写入；进入多条目模式后拒绝整篇覆盖"
     },
     {
       "canonical_name": "identity.bindings.revoke",

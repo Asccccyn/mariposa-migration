@@ -124,12 +124,24 @@ RECALL_TOKENIZER = "unavailable"        # 主模型 tokenizer 接入后替换
 
 RECALL_JUDGE_PROVIDER = os.environ.get(
     "MARIPOSA_RECALL_JUDGE_PROVIDER", "disabled")  # disabled | typesafe_jev
-RECALL_JUDGE_MODEL_ID = os.environ.get("MARIPOSA_RECALL_JUDGE_MODEL_ID", "")
+RECALL_JUDGE_MODEL_ID = (
+    os.environ.get("MARIPOSA_RECALL_JUDGE_MODEL_ID")
+    or os.environ.get("TYPESAFE_DEFAULT_MODEL")
+    or "jev-latest"
+)
 RECALL_JUDGE_PROMPT_VERSION = "mariposa-relevance-v1"
+RECALL_JUDGE_SCHEMA_VERSION = "typesafe-systemone-v1"
 RECALL_JUDGE_CONCURRENCY = 2
 RECALL_JUDGE_TIMEOUT_MS = int(
     os.environ.get("MARIPOSA_RECALL_JUDGE_TIMEOUT_MS", "5000"))
 RECALL_JUDGE_ROUND_DEADLINE_MS = 20000
+RECALL_JUDGE_BATCH_SIZE = max(
+    1, _env_int("MARIPOSA_RECALL_JUDGE_BATCH_SIZE", 12))
+# query×candidate 动态精排缓存是可重建 derived metadata，不是正式记忆。
+# 绑定 query/candidate/model/prompt/policy/schema 指纹；TTL 主要防止
+# jev-latest 这类别名在服务端换代后无限复用旧判断。
+RECALL_JUDGE_CACHE_TTL_HOURS = max(
+    1, _env_int("MARIPOSA_RECALL_JUDGE_CACHE_TTL_HOURS", 168))
 
 
 def ensure_dirs() -> None:

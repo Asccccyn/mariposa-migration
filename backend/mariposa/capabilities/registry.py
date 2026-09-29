@@ -90,9 +90,21 @@ def _register() -> dict[str, Capability]:
         description="整组替换九分类（平行多选，非空必填）")
     add("i.get", _i_get, _owners(), False, description="I 正本当前版（周家明写）")
     add("i.write", _i_write, {"jiaming"}, True,
-        description="写 I 正本（仅周家明；版本留底；无情绪准入）")
+        description="兼容单条 i_main 写入；进入多条目模式后拒绝整篇覆盖")
     add("i.versions.read", _i_versions, _owners(), False,
-        description="I 版本历史（只读）")
+        description="兼容整篇 I 快照历史；条目历史优先用 i.item.history")
+    add("i.items.list", _i_items_list, _owners(), False,
+        description="I 当前生效条目；旧版需显式读取")
+    add("i.item.get", _i_item_get, _owners(), False,
+        description="读取单条当前 I")
+    add("i.item.create", _i_item_create, {"jiaming"}, True,
+        description="新增一条 I")
+    add("i.item.revise", _i_item_revise, {"jiaming"}, True,
+        description="修改 I：追加 revision，可记录理由和旧版启发")
+    add("i.item.restore", _i_item_restore, {"jiaming"}, True,
+        description="恢复旧 I：复制旧版形成新 revision")
+    add("i.item.history", _i_item_history, _owners(), False,
+        description="显式读取某条 I 的历史、理由和记忆关联")
     add("i.suggest", _i_suggest, {"qiaosheng"}, True,
         description="乔生提建议（待提议材料，不改正本）")
     add("i.suggestions.list", _i_suggestions, _owners(), False,
@@ -637,6 +649,45 @@ def _i_write(principal: Principal, a: dict) -> dict:
 def _i_versions(principal: Principal, a: dict) -> dict:
     from ..identity_i import service as i_svc
     return {"versions": i_svc.versions_read()}
+
+
+def _i_items_list(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return {"items": i_svc.items_list()}
+
+
+def _i_item_get(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.item_get(str(a.get("item_id", "")))
+
+
+def _i_item_create(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.item_create(
+        principal.principal_id, str(a.get("content", "")),
+        a.get("change_reason"), a.get("relations"))
+
+
+def _i_item_revise(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.item_revise(
+        principal.principal_id, str(a.get("item_id", "")),
+        str(a.get("content", "")), int(a.get("expected_revision")),
+        a.get("change_reason"), a.get("informed_by_revision"),
+        a.get("relations"))
+
+
+def _i_item_restore(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.item_restore(
+        principal.principal_id, str(a.get("item_id", "")),
+        int(a.get("restore_revision")), int(a.get("expected_revision")),
+        a.get("change_reason"), a.get("relations"))
+
+
+def _i_item_history(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    return i_svc.item_history(str(a.get("item_id", "")))
 
 
 def _i_suggest(principal: Principal, a: dict) -> dict:

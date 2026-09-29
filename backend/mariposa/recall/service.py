@@ -269,6 +269,11 @@ def _run_round(session: dict, plan: dict, principal=None) -> dict:
                "policy_version": config.RECALL_POLICY_VERSION}
         judge_result = provider.judge(plan, judge_candidates, ctx)
         coverage["judge"] = judge_result.provider_status
+        coverage["judge_cache"] = {
+            "hits": judge_result.cache_hits,
+            "misses": judge_result.cache_misses,
+            "requests": judge_result.request_count,
+        }
         if judge_result.degraded_reason:
             degraded.append(f"judge_{judge_result.degraded_reason}")
         by_ref = {i.candidate_ref: i for i in judge_result.items}

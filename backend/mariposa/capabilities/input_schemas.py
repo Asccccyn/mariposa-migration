@@ -205,6 +205,73 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "i.versions.read": {"type": "object", "properties": {},
                          "additionalProperties": False},
+    "i.items.list": {"type": "object", "properties": {},
+                       "additionalProperties": False},
+    "i.item.get": {
+        "type": "object", "required": ["item_id"],
+        "additionalProperties": False,
+        "properties": {"item_id": {"type": "string", "minLength": 1}},
+    },
+    "i.item.history": {
+        "type": "object", "required": ["item_id"],
+        "additionalProperties": False,
+        "properties": {"item_id": {"type": "string", "minLength": 1}},
+    },
+    "i.item.create": {
+        "type": "object", "required": ["content"],
+        "additionalProperties": False,
+        "properties": {
+            "content": {"type": "string", "minLength": 1},
+            "change_reason": {"type": "string"},
+            "relations": {"type": "array", "items": {
+                "type": "object", "required": ["memory_id", "relation_type"],
+                "additionalProperties": False,
+                "properties": {
+                    "memory_id": {"type": "string", "minLength": 1},
+                    "relation_type": {"type": "string", "enum": [
+                        "changed_because_of", "clarified_by",
+                        "informed_by", "related"]}}}},
+        },
+    },
+    "i.item.revise": {
+        "type": "object",
+        "required": ["item_id", "content", "expected_revision"],
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string", "minLength": 1},
+            "content": {"type": "string", "minLength": 1},
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "change_reason": {"type": "string"},
+            "informed_by_revision": {"type": "integer", "minimum": 1},
+            "relations": {"type": "array", "items": {
+                "type": "object", "required": ["memory_id", "relation_type"],
+                "additionalProperties": False,
+                "properties": {
+                    "memory_id": {"type": "string", "minLength": 1},
+                    "relation_type": {"type": "string", "enum": [
+                        "changed_because_of", "clarified_by",
+                        "informed_by", "related"]}}}},
+        },
+    },
+    "i.item.restore": {
+        "type": "object",
+        "required": ["item_id", "restore_revision", "expected_revision"],
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string", "minLength": 1},
+            "restore_revision": {"type": "integer", "minimum": 1},
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "change_reason": {"type": "string"},
+            "relations": {"type": "array", "items": {
+                "type": "object", "required": ["memory_id", "relation_type"],
+                "additionalProperties": False,
+                "properties": {
+                    "memory_id": {"type": "string", "minLength": 1},
+                    "relation_type": {"type": "string", "enum": [
+                        "changed_because_of", "clarified_by",
+                        "informed_by", "related"]}}}},
+        },
+    },
     "i.suggest": {
         "type": "object", "required": ["content"], "additionalProperties": False,
         "properties": {"content": {"type": "string", "minLength": 1}},

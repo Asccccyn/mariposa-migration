@@ -47,10 +47,16 @@ class JudgeBatchResult:
     items: list[JudgeItem] = field(default_factory=list)
     provider_status: str = "unavailable"  # evaluated|partial|unavailable
     degraded_reason: str | None = None
+    cache_hits: int = 0
+    cache_misses: int = 0
+    request_count: int = 0
 
     def to_dict(self) -> dict:
         return {"provider_status": self.provider_status,
                 "degraded_reason": self.degraded_reason,
+                "cache_hits": self.cache_hits,
+                "cache_misses": self.cache_misses,
+                "request_count": self.request_count,
                 "items": [i.to_dict() for i in self.items]}
 
 
