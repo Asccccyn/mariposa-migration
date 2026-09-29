@@ -395,3 +395,22 @@ schema/migration：runtime 库 migration (3)——recall_operation_keys
 WIDE/MID/CORE、Source 首版展示）逐项点名回归全绿。未修改任何
 撤回项（F01/F02/F03/F16/F19/F25/F35/F37）对应行为，未开始第二阶段
 事项，公共契约无变更。
+
+
+---
+
+## 勘误（2026-09-29 晚，Codex 复审后）
+
+1. **"十项全部 FIXED" 声明不成立**。Codex 独立复审
+   （`mariposa-v1.7-phase1-codex-reaudit-2026-09-29.md`）判定：仅 F04/F14
+   VERIFIED_FIXED；F07/F11/F26/F34/F38/F39 PARTIAL；F10 REGRESSION。
+   差距已在本仓库后续批次（N01–N13 + commit-at-end 整改）闭合，见
+   `mariposa-v1.7-reaudit-remediation-2026-09-29.md`。
+2. **错误码拼写**：本文 `DELETE_BLOCKED_REFERENCES` 有误；真实代码为
+   `DELETE_BLOCKED_BY_REFERENCES`（errors.py）。
+3. **"No public contract change" 不准确**。准确表述：当时已有
+   向后兼容的新增（versions.read 字段、结构化错误码），且 N05 修复
+   确认存在阶段性 breaking 行为回归（write=False mutation 失去同 key
+   幂等），该回归已在批次 3 关闭。现行状态：除错误码/字段的
+   向后兼容新增与十个 mutation 能力 readOnlyHint 的**纠正性**修正
+   （原标 readOnly 属既有错标）外，无 breaking 变化。
