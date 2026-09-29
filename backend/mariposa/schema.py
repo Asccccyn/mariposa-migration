@@ -1195,6 +1195,8 @@ CREATE TABLE recall_operation_keys(
   created_at TEXT NOT NULL,
   PRIMARY KEY(principal_id, operation_key)
 );
+-- status/payload_hash/updated_at 列由 migration 3 统一补出
+--（fresh 库也走 ALTER，避免双处定义漂移）
 """),
     (2, """
 -- Jev 派生缓存：只保存指纹、标量判断与版本元数据，不保存记忆正文。
@@ -1243,6 +1245,16 @@ CREATE TABLE jev_feature_cache(
 );
 CREATE INDEX idx_jev_feature_resource
   ON jev_feature_cache(resource_ref, content_version, feature_name);
+"""),
+    (3, """
+-- ===== 审计 F26/F07：runtime 操作幂等原子认领 =====
+-- 旧库补列（新库已由 migration 1 直接建出）：status 三态
+-- running/completed/failed；payload_hash 区分同 key 异请求。
+-- 既有行 result_ref 有值视为 completed（默认值兼容），NULL 行
+-- 会被当作可重新认领的失败记录，安全。
+ALTER TABLE recall_operation_keys ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
+ALTER TABLE recall_operation_keys ADD COLUMN payload_hash TEXT;
+ALTER TABLE recall_operation_keys ADD COLUMN updated_at TEXT;
 """),
 ]
 
