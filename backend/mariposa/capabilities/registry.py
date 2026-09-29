@@ -391,7 +391,12 @@ def invoke(principal: Principal, capability: str, arguments: dict,
     # 召回运行时能力例外（v1.4 §9.4）：不走 formal 幂等（不把候选包长期
     # 缓存进正式库）；operation_id 幂等由 runtime 库 recall_operation_keys
     # 承担，且重放前重检权限与版本。
-    if idempotency_key and not _is_recall_runtime(capability):
+    # 审计 F10：读取能力（write=False）不做长期幂等响应缓存——读取无
+    # 副作用、天然可重复执行；缓存完整响应会让 I current 读取在修订/
+    # rollback 后重放旧正文。读请求携带的 key 被忽略，每次按当前状态
+    # 现算。
+    if (idempotency_key and not _is_recall_runtime(capability)
+            and cap.write):
         return _idempotent_invoke(principal, cap, arguments, idempotency_key)
     return {"ok": True, "data": cap.handler(principal, arguments)}
 
@@ -726,13 +731,22 @@ def _recall(principal: Principal, a: dict) -> dict:
 # ---------- 召回运行时 handlers（runtime 幂等：operation_id） ----------
 
 def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
-    """RUNTIME-02：同 operation_id 重试不重复建 session/扣预算/排除候选。"""
+    """RUNTIME-02：同 operation_id 重试不重复建 session/扣预算/排除候选。
+
+    审计 F07/F26：claim 原子认领（并发同 key 只有一个执行副作用）；
+    payload_hash 区分同 key 异请求；重放经 recall 域 guard 按当前
+    session/版本/可见性/phase 重校验，不再原样返回旧正文。
+    """
     op = a.get("operation_id")
     if not op:
         return fn(principal, a)
     key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
-    return recall_store.claim_operation(principal.principal_id, key,
-                                        lambda: fn(principal, a))
+    return recall_store.claim_operation(
+        principal.principal_id, key,
+        lambda: fn(principal, a),
+        payload_hash=memory.canonical_hash(a),
+        replay_guard=lambda saved: recall_service.revalidate_replayed(
+            fn.__name__, saved))
 
 
 def _recall_start(principal: Principal, a: dict) -> dict:
