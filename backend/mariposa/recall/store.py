@@ -11,7 +11,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from .. import config, db
-from ..errors import Forbidden, IdempotencyConflict, NotFound, OperationInProgress
+from ..errors import Forbidden, IdempotencyConflict, NotFound
+
+
+class OperationRaceLost(Exception):
+    """commit-at-end 输家信号：最终事务写锁内发现同 key operation
+    已由并发方完成。携带已有行，调用方整体回滚后重放赢家结果。"""
+    def __init__(self, row):
+        super().__init__("operation completed concurrently")
+        self.row = row
 
 from .models import ACTIVE_STATUSES, SESSION_STATUSES
 
@@ -24,39 +32,51 @@ def new_session_id() -> str:
     return f"rs_{uuid.uuid4().hex[:12]}"
 
 
-def _check_status(status: str) -> None:
-    if status not in SESSION_STATUSES:
-        raise Forbidden(f"未知 session 状态 {status}", code="INVALID_ARGUMENT")
+def new_session_draft(principal_id: str, conversation_scope: str,
+                      query_plan: dict) -> dict:
+    """commit-at-end 阶段 B：内存生成执行上下文，不落库。
 
-
-def create_session(principal_id: str, conversation_scope: str,
-                   query_plan: dict) -> dict:
+    session_id 仅作为本轮内部关联 ID 使用；检索/精排/组装全部完成后，
+    由 commit_start 在最终事务内一次性写入 session 及其全部派生行。
+    """
     sid = new_session_id()
     now = _now()
     expires = (datetime.now(timezone.utc) +
                timedelta(hours=config.RECALL_SESSION_TTL_HOURS)).isoformat()
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "INSERT INTO recall_sessions(session_id, principal_id,"
-                " conversation_scope, status, current_revision, current_burst,"
-                " rounds_used, bursts_used, policy_version, created_at,"
-                " updated_at, expires_at)"
-                " VALUES(?,?,?,?,1,1,0,1,?,?,?,?)",
-                (sid, principal_id, conversation_scope or "", "ACTIVE",
-                 config.RECALL_POLICY_VERSION, now, now, expires))
-            conn.execute(
-                "INSERT INTO recall_query_revisions(session_id, revision,"
-                " request_ref, query_plan, change_reason, burst_no, created_at)"
-                " VALUES(?,1,?,?, 'start', 1, ?)",
-                (sid, query_plan.get("request_ref"),
-                 json.dumps(query_plan, ensure_ascii=False), now))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return require_session(sid)
+    return {
+        "session_id": sid, "principal_id": principal_id,
+        "conversation_scope": conversation_scope or "", "status": "ACTIVE",
+        "current_revision": 1, "current_burst": 1, "rounds_used": 0,
+        "bursts_used": 1, "expires_at": expires,
+        "_draft": {"query_plan": query_plan, "created_at": now},
+    }
+
+
+def insert_session(conn, draft: dict) -> None:
+    """最终事务内写入 session 与首版 query revision（commit_start 调用）。"""
+    d = draft["_draft"]
+    conn.execute(
+        "INSERT INTO recall_sessions(session_id, principal_id,"
+        " conversation_scope, status, current_revision, current_burst,"
+        " rounds_used, bursts_used, policy_version, created_at,"
+        " updated_at, expires_at)"
+        " VALUES(?,?,?,?,1,1,0,1,?,?,?,?)",
+        (draft["session_id"], draft["principal_id"],
+         draft["conversation_scope"], "ACTIVE",
+         config.RECALL_POLICY_VERSION, d["created_at"], d["created_at"],
+         draft["expires_at"]))
+    conn.execute(
+        "INSERT INTO recall_query_revisions(session_id, revision,"
+        " request_ref, query_plan, change_reason, burst_no, created_at)"
+        " VALUES(?,1,?,?, 'start', 1, ?)",
+        (draft["session_id"], d["query_plan"].get("request_ref"),
+         json.dumps(d["query_plan"], ensure_ascii=False),
+         d["created_at"]))
+
+
+def _check_status(status: str) -> None:
+    if status not in SESSION_STATUSES:
+        raise Forbidden(f"未知 session 状态 {status}", code="INVALID_ARGUMENT")
 
 
 def get_session(session_id: str) -> dict | None:
@@ -64,7 +84,21 @@ def get_session(session_id: str) -> dict | None:
         row = conn.execute(
             "SELECT * FROM recall_sessions WHERE session_id=?",
             (session_id,)).fetchone()
-    return dict(row) if row else None
+        if row is None:
+            return None
+        out = dict(row)
+        # 预算事实源 = 成功 round 记录（commit-at-end）；session 行的
+        # rounds_used 列不再是权威，读时统一派生覆盖。
+        out["rounds_used"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM recall_rounds WHERE session_id=?",
+            (session_id,)).fetchone()["c"]
+        return out
+
+
+def count_rounds(conn, session_id: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM recall_rounds WHERE session_id=?",
+        (session_id,)).fetchone()["c"]
 
 
 def require_session(session_id: str) -> dict:
@@ -125,17 +159,17 @@ def update_status(session_id: str, expected_revision: int,
     return get_session(session_id)
 
 
-def bump_revision(session_id: str, expected_revision: int,
-                  query_plan: dict | None = None,
-                  request_ref: str | None = None,
-                  change_reason: str = "refine",
-                  burst_no: int | None = None,
-                  bursts_used: int | None = None) -> dict:
-    """refine 类动作：revision+1 并落新查询计划。"""
-    session = require_session(session_id)
-    fields = {"current_revision": expected_revision + 1}
-    if burst_no is not None:
-        fields["current_burst"] = burst_no
+def advance_revision(conn, session_id: str, expected_revision: int,
+                     query_plan: dict | None = None,
+                     request_ref: str | None = None,
+                     change_reason: str = "refine",
+                     burst_no: int | None = None,
+                     bursts_used: int | None = None) -> int:
+    """refine 最终事务内的 revision 前进（CAS，写锁内）。
+
+    返回前进后的 revision；CAS 失败（并发 refine 输家）抛
+    REVISION_CONFLICT，调用方整体回滚。
+    """
     sets = ["current_revision=?", "updated_at=?"]
     params: list = [expected_revision + 1, _now()]
     if burst_no is not None:
@@ -145,31 +179,43 @@ def bump_revision(session_id: str, expected_revision: int,
         sets.append("bursts_used=?")
         params.append(bursts_used)
     params += [expected_revision, session_id]
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = conn.execute(
-                f"UPDATE recall_sessions SET {', '.join(sets)}"
-                " WHERE current_revision=? AND session_id=?", params)
-            if cur.rowcount != 1:
-                raise Forbidden("session revision 冲突",
-                                code="REVISION_CONFLICT",
-                                session_id=session_id,
-                                expected_revision=expected_revision)
-            if query_plan is not None:
-                conn.execute(
-                    "INSERT INTO recall_query_revisions(session_id, revision,"
-                    " request_ref, query_plan, change_reason, burst_no,"
-                    " created_at) VALUES(?,?,?,?,?,?,?)",
-                    (session_id, expected_revision + 1, request_ref,
-                     json.dumps(query_plan, ensure_ascii=False),
-                     change_reason, burst_no or session["current_burst"],
-                     _now()))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return get_session(session_id)
+    cur = conn.execute(
+        f"UPDATE recall_sessions SET {', '.join(sets)}"
+        " WHERE current_revision=? AND session_id=?", params)
+    if cur.rowcount != 1:
+        raise Forbidden("session revision 冲突",
+                        code="REVISION_CONFLICT",
+                        session_id=session_id,
+                        expected_revision=expected_revision)
+    if query_plan is not None:
+        conn.execute(
+            "INSERT INTO recall_query_revisions(session_id, revision,"
+            " request_ref, query_plan, change_reason, burst_no,"
+            " created_at) VALUES(?,?,?,?,?,?,?)",
+            (session_id, expected_revision + 1, request_ref,
+             json.dumps(query_plan, ensure_ascii=False), change_reason,
+             burst_no or 1, _now()))
+    return expected_revision + 1
+
+
+def record_round(conn, session_id: str, burst_no: int,
+                 operation_key: str | None = None) -> int:
+    """最终事务内登记一条成功轮记录（预算唯一事实源）。
+
+    round_no 在写锁内取 MAX+1；调用方已在此前的预算终检中确认额度。
+    """
+    round_no = conn.execute(
+        "SELECT COALESCE(MAX(round_no), 0) + 1 AS n FROM recall_rounds"
+        " WHERE session_id=?", (session_id,)).fetchone()["n"]
+    conn.execute(
+        "INSERT INTO recall_rounds(session_id, round_no, burst_no,"
+        " operation_key, created_at) VALUES(?,?,?,?,?)",
+        (session_id, round_no, burst_no, operation_key, _now()))
+    # session 行的 rounds_used 只是派生展示值，与事实源同事务对齐
+    conn.execute(
+        "UPDATE recall_sessions SET rounds_used=? WHERE session_id=?",
+        (round_no, session_id))
+    return round_no
 
 
 def add_revision_record(session_id: str, revision: int,
@@ -200,35 +246,31 @@ def get_plan(session_id: str, revision: int | None = None) -> dict | None:
     return json.loads(row["query_plan"]) if row else None
 
 
-def upsert_candidates(session_id: str, candidates: list[dict],
+def upsert_candidates(conn, session_id: str, candidates: list[dict],
                       revision: int) -> None:
-    """候选引用入 seen 池（只存引用与版本，不存正文）。"""
+    """候选引用入 seen 池（只存引用与版本，不存正文）。
+
+    commit-at-end：在调用方的最终事务内执行（conn 为事务连接）。
+    """
     now = _now()
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for c in candidates:
-                state = c.get("state", "seen")
-                conn.execute(
-                    "INSERT INTO recall_candidates(session_id, candidate_ref,"
-                    " resource_ref, channel, representation, content_version,"
-                    " representation_version, state, score_ref, reject_target,"
-                    " first_seen_revision, updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
-                    " ON CONFLICT(session_id, candidate_ref) DO UPDATE SET"
-                    " state=excluded.state, score_ref=excluded.score_ref,"
-                    " reject_target=excluded.reject_target,"
-                    " updated_at=excluded.updated_at",
-                    (session_id, c["candidate_ref"], c["resource_ref"],
-                     c["channel"], c["representation"],
-                     c.get("content_version"), c.get("representation_version"),
-                     state, json.dumps(c.get("scores") or {},
-                                       ensure_ascii=False),
-                     c.get("reject_target"), revision, now))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    for c in candidates:
+        state = c.get("state", "seen")
+        conn.execute(
+            "INSERT INTO recall_candidates(session_id, candidate_ref,"
+            " resource_ref, channel, representation, content_version,"
+            " representation_version, state, score_ref, reject_target,"
+            " first_seen_revision, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(session_id, candidate_ref) DO UPDATE SET"
+            " state=excluded.state, score_ref=excluded.score_ref,"
+            " reject_target=excluded.reject_target,"
+            " updated_at=excluded.updated_at",
+            (session_id, c["candidate_ref"], c["resource_ref"],
+             c["channel"], c["representation"],
+             c.get("content_version"), c.get("representation_version"),
+             state, json.dumps(c.get("scores") or {},
+                               ensure_ascii=False),
+             c.get("reject_target"), revision, now))
 
 
 def set_candidate_state(session_id: str, candidate_ref: str, state: str,
@@ -270,44 +312,44 @@ def rejected_resource_refs(session_id: str) -> set[str]:
     return {r["resource_ref"] for r in rows}
 
 
-def record_attempt(session_id: str, operation_id: str, revision: int,
+def record_attempt(conn, session_id: str, operation_id: str, revision: int,
                    burst_no: int, kind: str, status: str,
                    budget_snapshot: dict | None = None,
                    provider_versions: dict | None = None,
                    error: str | None = None) -> None:
+    """诊断性尝试记录（非预算事实源）；在调用方事务内执行。"""
     now = _now()
-    with db.recall_runtime() as conn:
+    conn.execute(
+        "INSERT INTO recall_attempts(session_id, operation_id, revision,"
+        " burst_no, kind, status, budget_snapshot, provider_versions,"
+        " error, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(session_id, operation_id) DO UPDATE SET"
+        " status=excluded.status, budget_snapshot=excluded.budget_snapshot,"
+        " provider_versions=excluded.provider_versions,"
+        " error=excluded.error, updated_at=excluded.updated_at",
+        (session_id, operation_id, revision, burst_no, kind, status,
+         json.dumps(budget_snapshot or {}, ensure_ascii=False),
+         json.dumps(provider_versions or {}, ensure_ascii=False),
+         error, now, now))
+
+
+def add_receipts(conn, session_id: str, receipts: list[dict]) -> None:
+    """交付回执写入；在调用方事务内执行。"""
+    now = _now()
+    for r in receipts:
         conn.execute(
-            "INSERT INTO recall_attempts(session_id, operation_id, revision,"
-            " burst_no, kind, status, budget_snapshot, provider_versions,"
-            " error, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?)"
-            " ON CONFLICT(session_id, operation_id) DO UPDATE SET"
-            " status=excluded.status, budget_snapshot=excluded.budget_snapshot,"
-            " provider_versions=excluded.provider_versions,"
-            " error=excluded.error, updated_at=excluded.updated_at",
-            (session_id, operation_id, revision, burst_no, kind, status,
-             json.dumps(budget_snapshot or {}, ensure_ascii=False),
-             json.dumps(provider_versions or {}, ensure_ascii=False),
-             error, now, now))
-
-
-def add_receipts(session_id: str, receipts: list[dict]) -> None:
-    now = _now()
-    with db.recall_runtime() as conn:
-        for r in receipts:
-            conn.execute(
-                "INSERT INTO recall_receipts(session_id, receipt_id,"
-                " resource_ref, content_version, representation_version,"
-                " permission_version, valid_at, expires_at, created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT(receipt_id) DO UPDATE SET"
-                " content_version=excluded.content_version,"
-                " representation_version=excluded.representation_version,"
-                " valid_at=excluded.valid_at",
-                (session_id, r["receipt_id"], r["resource_ref"],
-                 r.get("content_version"), r.get("representation_version"),
-                 r.get("permission_version"), now, None, now))
+            "INSERT INTO recall_receipts(session_id, receipt_id,"
+            " resource_ref, content_version, representation_version,"
+            " permission_version, valid_at, expires_at, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(receipt_id) DO UPDATE SET"
+            " content_version=excluded.content_version,"
+            " representation_version=excluded.representation_version,"
+            " valid_at=excluded.valid_at",
+            (session_id, r["receipt_id"], r["resource_ref"],
+             r.get("content_version"), r.get("representation_version"),
+             r.get("permission_version"), now, None, now))
 
 
 def list_receipts(session_id: str) -> list[dict]:
@@ -318,134 +360,137 @@ def list_receipts(session_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def claim_operation(principal_id: str, operation_key: str, result_builder,
-                    payload_hash: str | None = None,
-                    replay_guard=None) -> dict:
-    """runtime 幂等（§9.4 + 审计 F07/F26）。
-
-    - 原子认领：先 INSERT status='running' 占位，占位成功者才执行
-      副作用；并发同 key 的另一方等待终态或得到结构化冲突，
-      不再"先执行后登记"。
-    - builder 抛错 → 记 failed，允许同 key 安全重试。
-    - 重放（审计 F07）：保存的结果必须经 replay_guard 按当前状态
-      （session 有效期、候选版本、可见性、当前 phase 过滤）重校验
-      后才可出站；guard 返回修正后的数据或抛 StaleOperation 拒绝，
-      不允许旧正文绕过当前可见性判断。
-    - payload_hash（审计 F26）：同 key 异 payload → 结构化冲突，
-      不回放无关旧结果。
-    """
-    claimed = False
-    saved = None
-    conflict = None
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            row = conn.execute(
-                "SELECT * FROM recall_operation_keys"
-                " WHERE principal_id=? AND operation_key=?",
-                (principal_id, operation_key)).fetchone()
-            if row is not None and payload_hash is not None \
-                    and row["payload_hash"] not in (None, payload_hash):
-                conflict = IdempotencyConflict(
-                    "same operation key with different payload",
-                    operation_key=operation_key)
-            elif row is not None and row["status"] == "completed" \
-                    and row["result_ref"]:
-                saved = json.loads(row["result_ref"])
-            elif row is None:
-                conn.execute(
-                    "INSERT INTO recall_operation_keys(principal_id,"
-                    " operation_key, payload_hash, status, created_at,"
-                    " updated_at) VALUES(?,?,?,?,?,?)",
-                    (principal_id, operation_key, payload_hash, "running",
-                     _now(), _now()))
-                claimed = True
-            elif row["status"] == "failed":
-                cur = conn.execute(
-                    "UPDATE recall_operation_keys SET status='running',"
-                    " payload_hash=?, updated_at=?"
-                    " WHERE principal_id=? AND operation_key=?"
-                    " AND status='failed'",
-                    (payload_hash, _now(), principal_id, operation_key))
-                claimed = cur.rowcount == 1
-            else:  # running：并发进行中
-                claimed = False
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    if conflict is not None:
-        raise conflict
-    if saved is not None:
-        if replay_guard is not None:
-            saved = replay_guard(saved)
-        return {"idempotent_replay": True, "data": saved}
-
-    if not claimed:
-        # 并发占位失败方：有界等待占位方终态
-        import time as _time
-        for _ in range(20):  # <=4s
-            _time.sleep(0.2)
-            row = _read_operation(principal_id, operation_key)
-            if row is None:
-                break
-            if row["status"] == "completed" and row["result_ref"]:
-                saved = json.loads(row["result_ref"])
-                if replay_guard is not None:
-                    saved = replay_guard(saved)
-                return {"idempotent_replay": True, "data": saved}
-            if row["status"] == "failed":
-                return claim_operation(principal_id, operation_key,
-                                       result_builder, payload_hash,
-                                       replay_guard)
-        row = _read_operation(principal_id, operation_key)
-        if row is not None and row["status"] == "completed" \
-                and row["result_ref"]:
-            saved = json.loads(row["result_ref"])
-            if replay_guard is not None:
-                saved = replay_guard(saved)
-            return {"idempotent_replay": True, "data": saved}
-        raise OperationInProgress()
-
-    try:
-        data = result_builder()
-    except Exception:
-        with db.recall_runtime() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conn.execute(
-                    "UPDATE recall_operation_keys SET status='failed',"
-                    " updated_at=? WHERE principal_id=? AND operation_key=?"
-                    " AND status='running'",
-                    (_now(), principal_id, operation_key))
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        raise
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "UPDATE recall_operation_keys SET status='completed',"
-                " result_ref=?, updated_at=?"
-                " WHERE principal_id=? AND operation_key=?"
-                " AND status='running'",
-                (json.dumps(data, ensure_ascii=False), _now(),
-                 principal_id, operation_key))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"data": data}
-
-
-def _read_operation(principal_id: str, operation_key: str):
+def read_operation(principal_id: str, operation_key: str):
     with db.recall_runtime() as conn:
         return conn.execute(
             "SELECT * FROM recall_operation_keys WHERE principal_id=?"
             " AND operation_key=?",
             (principal_id, operation_key)).fetchone()
+
+
+def replay_operation_row(row, replay_guard):
+    """重放已完成 operation：guard 按当前状态重校验后出站（审计 F07）。"""
+    saved = json.loads(row["result_ref"])
+    if replay_guard is not None:
+        saved = replay_guard(saved)
+    return {"idempotent_replay": True, "data": saved}
+
+
+_OPERATION_LOCKS: dict[str, "threading.Lock"] = {}
+
+
+def _operation_lock(operation_key: str):
+    import threading
+    lock = _OPERATION_LOCKS.get(operation_key)
+    if lock is None:
+        lock = threading.Lock()
+        _OPERATION_LOCKS[operation_key] = lock
+    return lock
+
+
+def run_operation(principal_id: str, operation_key: str, builder,
+                  payload_hash: str | None = None,
+                  replay_guard=None) -> dict:
+    """runtime operation 幂等（commit-at-end 模型）。
+
+    - 不再提前落库任何中间态：没有 IN_PROGRESS，没有 failed 记录。
+      计算失败/崩溃 → 数据库无本 operation 的任何痕迹，同 key 重试
+      从头重新计算。
+    - 已完成的 operation（数据库唯一键 principal_id+operation_key）
+      直接重放保存结果；重放经 replay_guard 按当前状态重校验
+      （审计 F07：session 有效期、候选版本、可见性、当前 phase）。
+    - 同 key 异 payload → IDEMPOTENCY_CONFLICT，不回放无关旧结果。
+    - 进程内锁只用于避免同进程重复跑昂贵的检索/精排（性能优化，
+      非正确性保证）；跨进程并发由最终事务内（BEGIN IMMEDIATE 写锁
+      内）的 operation 查重 + 数据库唯一约束裁决，输家回滚自己的
+      全部写入并重放赢家的结果。
+    """
+    row = read_operation(principal_id, operation_key)
+    if row is not None:
+        if payload_hash is not None and row["payload_hash"] not in (
+                None, payload_hash):
+            raise IdempotencyConflict(
+                "same operation key with different payload",
+                operation_key=operation_key)
+        if row["result_ref"]:
+            return replay_operation_row(row, replay_guard)
+    with _operation_lock(operation_key):
+        # 锁内双检：前一个同 key 持有者可能刚完成
+        row = read_operation(principal_id, operation_key)
+        if row is not None:
+            if payload_hash is not None and row["payload_hash"] not in (
+                    None, payload_hash):
+                raise IdempotencyConflict(
+                    "same operation key with different payload",
+                    operation_key=operation_key)
+            if row["result_ref"]:
+                return replay_operation_row(row, replay_guard)
+        # builder 内部（service 层）完成全部可失败计算，并在最终
+        # 事务内写入 session/round/result/operation。跨进程并发时，
+        # 最终事务在写锁内查到已有 operation → 抛 OperationRaceLost，
+        # 由这里读出赢家结果返回。
+        try:
+            data = builder()
+        except OperationRaceLost as lost:
+            return replay_operation_row(lost.row, replay_guard)
+        # 设为型动作（service 未在最终事务内写 operation）补写响应
+        # 记录；动作本身幂等，崩溃窗口内重放结果一致
+        row = read_operation(principal_id, operation_key)
+        if row is None:
+            import sqlite3 as _sq
+            with db.recall_runtime() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    record_operation_row(conn, principal_id,
+                                         operation_key, payload_hash, data)
+                    conn.execute("COMMIT")
+                except OperationRaceLost:
+                    conn.execute("ROLLBACK")
+                except _sq.IntegrityError:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
+        return {"data": data}
+
+
+def record_operation_row(conn, principal_id: str, operation_key: str,
+                         payload_hash: str | None, result: dict) -> None:
+    """最终事务内写入完成态 operation（由 service 的 commit 函数调用）。
+
+    若写锁内发现同 key 已有完成行（跨进程并发输家），抛
+    OperationRaceLost——调用方整体 ROLLBACK 后由 run_operation 重放
+    赢家结果，数据库中只保留一份正式成功结果。
+    """
+    row = conn.execute(
+        "SELECT * FROM recall_operation_keys WHERE principal_id=?"
+        " AND operation_key=?",
+        (principal_id, operation_key)).fetchone()
+    if row is not None:
+        if payload_hash is not None and row["payload_hash"] not in (
+                None, payload_hash):
+            raise IdempotencyConflict(
+                "same operation key with different payload",
+                operation_key=operation_key)
+        raise OperationRaceLost(row)
+    conn.execute(
+        "INSERT INTO recall_operation_keys(principal_id, operation_key,"
+        " payload_hash, status, result_ref, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (principal_id, operation_key, payload_hash, "completed",
+         json.dumps(result, ensure_ascii=False), _now(), _now()))
+
+
+def check_operation_conflict(principal_id: str, operation_key: str,
+                             payload_hash: str | None) -> None:
+    """阶段 A 便宜预检：同 key 异 payload 直接结构化拒绝（读路径）。"""
+    if payload_hash is None:
+        return
+    row = read_operation(principal_id, operation_key)
+    if row is not None and row["payload_hash"] not in (None, payload_hash):
+        raise IdempotencyConflict(
+            "same operation key with different payload",
+            operation_key=operation_key)
 
 
 def purge_expired(limit: int = 200) -> int:
@@ -483,8 +528,9 @@ def purge_expired(limit: int = 200) -> int:
 def reset_for_tests() -> None:
     """测试清库（conftest 专用）：清空 runtime 全部运行状态。"""
     tables = ("jev_feature_cache", "jev_rerank_cache",
-              "recall_operation_keys", "recall_receipts", "recall_attempts",
-              "recall_candidates", "recall_query_revisions", "recall_sessions")
+              "recall_operation_keys", "recall_rounds", "recall_receipts",
+              "recall_attempts", "recall_candidates",
+              "recall_query_revisions", "recall_sessions")
     with db.recall_runtime() as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         for t in tables:
