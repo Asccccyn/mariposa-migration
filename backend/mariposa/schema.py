@@ -876,6 +876,64 @@ DROP TABLE IF EXISTS proposal_resolutions;
 DROP TABLE IF EXISTS proposal_envelopes;
 DROP TABLE IF EXISTS workspace_audit;
 """),
+    (22, """
+-- ===== I 条目级版本历史：当前态唯一生效，旧版仅显式查阅 =====
+CREATE TABLE i_items(
+  item_id TEXT PRIMARY KEY,
+  position INTEGER NOT NULL,
+  current_revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE i_item_revisions(
+  item_id TEXT NOT NULL REFERENCES i_items(item_id),
+  revision INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  authored_by TEXT NOT NULL,
+  change_type TEXT NOT NULL CHECK(change_type IN ('create','revise','restore')),
+  based_on_revision INTEGER,
+  restored_from_revision INTEGER,
+  informed_by_revision INTEGER,
+  change_reason TEXT,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(item_id, revision)
+);
+
+CREATE TABLE i_revision_memory_relations(
+  item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  relation_type TEXT NOT NULL CHECK(relation_type IN
+    ('changed_because_of','clarified_by','informed_by','related')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(item_id, revision, memory_id, relation_type),
+  FOREIGN KEY(item_id, revision) REFERENCES i_item_revisions(item_id, revision)
+);
+CREATE INDEX idx_i_revision_memory
+  ON i_revision_memory_relations(memory_id, item_id, revision);
+
+-- 已经存在的正式 I 正本安全迁成一个 i_main 条目；不碰旧 Self/Home。
+INSERT INTO i_items(item_id, position, current_revision, created_at, updated_at)
+SELECT 'i_main', 0, d.current_version_no,
+       COALESCE((SELECT MIN(v.created_at) FROM i_versions v
+                 WHERE v.doc_id=d.doc_id), d.updated_at),
+       d.updated_at
+  FROM i_documents d
+ WHERE d.doc_id='i_main' AND d.current_version_no > 0;
+
+INSERT INTO i_item_revisions(
+  item_id, revision, content, authored_by, change_type, based_on_revision,
+  restored_from_revision, informed_by_revision, change_reason,
+  payload_hash, created_at)
+SELECT 'i_main', v.version_no, v.content, v.authored_by,
+       CASE WHEN v.version_no=1 THEN 'create' ELSE 'revise' END,
+       CASE WHEN v.version_no=1 THEN NULL ELSE v.version_no-1 END,
+       NULL, NULL, NULL, v.payload_hash, v.created_at
+  FROM i_versions v
+ WHERE v.doc_id='i_main';
+"""),
 ]
 
 
@@ -1137,6 +1195,54 @@ CREATE TABLE recall_operation_keys(
   created_at TEXT NOT NULL,
   PRIMARY KEY(principal_id, operation_key)
 );
+"""),
+    (2, """
+-- Jev 派生缓存：只保存指纹、标量判断与版本元数据，不保存记忆正文。
+-- 与 Recall Session TTL 解耦；缓存可删除重建，绝不是正式记忆真源。
+CREATE TABLE jev_rerank_cache(
+  cache_key TEXT PRIMARY KEY,
+  query_fingerprint TEXT NOT NULL,
+  candidate_fingerprint TEXT NOT NULL,
+  candidate_ref TEXT NOT NULL,
+  candidate_version TEXT,
+  representation_version TEXT,
+  projection_version TEXT,
+  requested_model TEXT NOT NULL,
+  resolved_model TEXT,
+  prompt_version TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  relevance_signal REAL NOT NULL,
+  evaluation_status TEXT NOT NULL,
+  provider_receipt_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL
+);
+CREATE INDEX idx_jev_rerank_candidate
+  ON jev_rerank_cache(candidate_ref, candidate_version);
+CREATE INDEX idx_jev_rerank_last_used
+  ON jev_rerank_cache(last_used_at);
+
+-- 静态 feature 缓存底座：只供以后明确批准的 derived feature 使用。
+-- 不自动生成“心情/分类”等业务字段，更不得覆盖正式 memory 数据。
+CREATE TABLE jev_feature_cache(
+  feature_key TEXT PRIMARY KEY,
+  resource_ref TEXT NOT NULL,
+  content_version TEXT,
+  projection_version TEXT,
+  feature_name TEXT NOT NULL,
+  feature_schema_version TEXT NOT NULL,
+  requested_model TEXT NOT NULL,
+  resolved_model TEXT,
+  feature_value TEXT NOT NULL,
+  provider_receipt_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL
+);
+CREATE INDEX idx_jev_feature_resource
+  ON jev_feature_cache(resource_ref, content_version, feature_name);
 """),
 ]
 
