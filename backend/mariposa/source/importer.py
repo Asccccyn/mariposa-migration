@@ -206,28 +206,43 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                     "status": "failed", "stats": stats,
                     "error": "integrity gate", "raw_path": str(archived)}
 
-        # ---- 7) 发布可见性（SL-10 + A09）：按本批全部快照成员发布。
-        # 同 UUID 曾卡在旧 failed 批次的 unpublished 行由本成功批次接管
-        #（import_batch_id 前移到本批），修正后重导不再"成功但隐藏"。----
+        # ---- 7) 发布可见性（SL-10 + A09 + 审计 F11）：发布以内容身份为
+        # 单位——只有行 content_hash 与本批快照成员 hash 一致（本批 raw
+        # 归档确实包含该正文）才发布并前移 import_batch_id。
+        # 失败批次遗留的同 UUID 旧正文行若与本批内容不同，保持
+        # unpublished 且来源批次不动：不得把旧正文包装成"来自本成功批次"。----
         with db.formal() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 members = conn.execute(
-                    "SELECT m.provider_message_id FROM"
+                    "SELECT m.provider_message_id, m.content_hash FROM"
                     " source_snapshot_members m"
                     " JOIN source_conversation_snapshots s"
                     " ON s.snapshot_id=m.snapshot_id WHERE s.batch_id=?",
                     (batch_id,)).fetchall()
-                pids = [r["provider_message_id"] for r in members]
                 published = 0
-                if pids:
-                    marks = ",".join("?" * len(pids))
-                    published = conn.execute(
+                publish_mismatch = 0
+                for member in members:
+                    cur = conn.execute(
                         "UPDATE source_messages SET published=1,"
                         " import_batch_id=? WHERE provider=?"
-                        f" AND provider_message_id IN ({marks})"
-                        " AND published=0",
-                        [batch_id, provider] + pids).rowcount
+                        " AND provider_message_id=? AND published=0"
+                        " AND content_hash=?",
+                        (batch_id, provider,
+                         member["provider_message_id"],
+                         member["content_hash"]))
+                    published += cur.rowcount
+                    if cur.rowcount == 0:
+                        cur_row = conn.execute(
+                            "SELECT content_hash FROM source_messages"
+                            " WHERE provider=? AND provider_message_id=?",
+                            (provider, member["provider_message_id"])
+                        ).fetchone()
+                        if cur_row is not None:
+                            publish_mismatch += 1
+                if publish_mismatch:
+                    stats["publish_skipped_content_mismatch"] = \
+                        publish_mismatch
                 conn.execute(
                     "UPDATE source_import_batches SET status='completed',"
                     " import_finished_at=?, stats=?, error=NULL"
@@ -239,7 +254,9 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                                       "conversations":
                                           stats["conversations_total"],
                                       "messages_new": stats["messages_new"],
-                                      "published": published})
+                                      "published": published,
+                                      "publish_skipped_content_mismatch":
+                                          publish_mismatch})
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -466,10 +483,15 @@ def _consume_element(element: Any, provider: str, batch_id: str,
                     if msg.sequence in prev_seq_map and \
                             prev_seq_map[msg.sequence] != pid:
                         stats["sequence_conflicts"] += 1
+                    # 同文件内同 UUID 重复出现：行与快照成员一律首见定格
+                    #（F11：成员 hash 必须与实际保留的行内容一致，
+                    # 否则发布门禁会把首版正文误判为内容不符）
                     conn.execute(
-                        "INSERT OR REPLACE INTO source_snapshot_members"
+                        "INSERT INTO source_snapshot_members"
                         "(snapshot_id, provider_message_id, sequence,"
-                        " content_hash) VALUES(?,?,?,?)",
+                        " content_hash) VALUES(?,?,?,?)"
+                        " ON CONFLICT(snapshot_id, provider_message_id)"
+                        " DO NOTHING",
                         (snapshot_id, pid, msg.sequence, chash))
 
                     if pid in local_pids:
@@ -482,13 +504,21 @@ def _consume_element(element: Any, provider: str, batch_id: str,
                         continue
                     if pid in existing:
                         if existing[pid] is None:
-                            # A13：旧数据无内容身份 → 本次成功导入回填
-                            # 正式 hash，行为等同幂等（不算冲突）
+                            # A13（F11 修正）：旧数据无内容身份 → 用行自身
+                            # 内容重算身份回填；与本批 hash 是否一致交给
+                            # 下面的比较判定，不把本批 hash 直接贴给旧行
+                            old_row = conn.execute(
+                                "SELECT * FROM source_messages WHERE"
+                                " provider=? AND provider_message_id=?",
+                                (provider, pid)).fetchone()
+                            row_hash = _row_content_hash(old_row)
                             conn.execute(
                                 "UPDATE source_messages SET content_hash=?"
                                 " WHERE provider=? AND provider_message_id=?",
-                                (chash, provider, pid))
-                            existing[pid] = chash
+                                (row_hash, provider, pid))
+                            existing[pid] = row_hash
+                            stats["messages_hash_backfilled"] = \
+                                stats.get("messages_hash_backfilled", 0) + 1
                         if existing[pid] == chash:
                             stats["messages_skipped_existing"] += 1
                         else:
@@ -597,6 +627,28 @@ def _content_hash(msg: NormalizedMessage) -> str:
         "attachments": msg.attachments,
         "has_thinking": msg.has_thinking,
         "has_tool_content": msg.has_tool_content,
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+def _row_content_hash(row) -> str:
+    """从 source_messages 行重算与 _content_hash 同构的内容身份。
+
+    审计 F11（A13 回填修正）：旧行缺 content_hash 时，回填的必须是
+    行自身内容的身份，而不是本批观察到的 hash——否则文本不同的旧行
+    会被贴上"本批已验证"的标签，provenance 造假。
+    """
+    basis = json.dumps({
+        "raw_sender": row["raw_sender"],
+        "normalized_sender": row["normalized_sender"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+        "parent": row["parent_provider_message_id"],
+        "text": row["text"],
+        "content": json.loads(row["content_json"])
+        if row["content_json"] else None,
+        "attachments": json.loads(row["attachments"] or "[]"),
+        "has_thinking": bool(row["has_thinking"]),
+        "has_tool_content": bool(row["has_tool_content"]),
     }, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
