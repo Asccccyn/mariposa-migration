@@ -472,6 +472,16 @@ def record_operation_row(conn, principal_id: str, operation_key: str,
             raise IdempotencyConflict(
                 "same operation key with different payload",
                 operation_key=operation_key)
+        if not row["result_ref"]:
+            # 旧 NULL 结果行（migration 5 前残留）：本事务接管写入
+            conn.execute(
+                "UPDATE recall_operation_keys SET payload_hash=?,"
+                " result_ref=?, updated_at=?"
+                " WHERE principal_id=? AND operation_key=?"
+                " AND (result_ref IS NULL OR result_ref = '')",
+                (payload_hash, json.dumps(result, ensure_ascii=False),
+                 _now(), principal_id, operation_key))
+            return
         raise OperationRaceLost(row)
     conn.execute(
         "INSERT INTO recall_operation_keys(principal_id, operation_key,"

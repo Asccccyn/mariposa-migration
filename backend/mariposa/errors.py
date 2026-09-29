@@ -101,12 +101,6 @@ class RawContextConfirmationRequired(MariposaError):
     http_status = 428
 
 
-class OperationInProgress(MariposaError):
-    """同幂等键的执行仍在进行（runtime 侧；并发另一方尚未回填终态）。"""
-    code = "IDEMPOTENCY_IN_PROGRESS"
-    http_status = 409
-
-
 class StaleOperation(MariposaError):
     """旧 operation 的保存响应已不满足当前状态（session 失效、候选版本或
     可见性变化），拒绝按原样重放；调用方应基于当前状态发起新操作。"""
