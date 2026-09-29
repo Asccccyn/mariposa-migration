@@ -83,6 +83,7 @@ TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}
 
 FORMAL_TABLES = [
     # 子表在前，父表在后
+    "i_revision_memory_relations", "i_item_revisions", "i_items",
     "i_suggestions", "i_versions", "i_documents",
     "memory_recollections", "memory_view_receipts", "memory_our_words",
     "memory_mood_tags", "memory_moods", "memory_categories",
