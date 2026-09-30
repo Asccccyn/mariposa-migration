@@ -217,7 +217,9 @@ class TestJev:
     def test_jev09_payload_binds_candidate(self):
         from mariposa.retrieval.judges import typesafe_jev
         judge = typesafe_jev.TypeSafeJevJudge()
-        judge._allowed_data = "synthetic_only"
+        # S15：直接给许可集（synthetic 夹具）
+        judge._data_profile = frozenset(
+            {"event_excerpt", "word_excerpt", "source_excerpt"})
         payload = judge._payload(
             {"original_request": "q", "explicit_constraints": {}},
             [{"candidate_ref": "c1", "excerpt": "片段",
