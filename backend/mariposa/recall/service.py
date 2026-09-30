@@ -423,6 +423,15 @@ def _current_principal():
 
 
 
+def _record_op_in_tx(conn, op_ctx: dict | None, result: dict) -> None:
+    """最终事务内写入 operation 完成记录（P1-01：业务副作用与
+    operation 同事务，崩溃窗口内不再有"状态已变、operation 未记"）。"""
+    if op_ctx:
+        store.record_operation_row(
+            conn, op_ctx["principal_id"], op_ctx["operation_key"],
+            op_ctx["payload_hash"], result)
+
+
 def _with_round_preview(session: dict) -> dict:
     """计算阶段的预算快照视图：把本轮算作已成功（rounds_used+1）。"""
     preview = dict(session)
@@ -556,27 +565,10 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # burst 轮次已尽且无显式继续请求：允许修订条件（revision 前进、
     # 保存新查询计划），但不发起有成本的新检索（v1.4 §9.3——自动
     # 自循环不产生无界额度）。设为型写入，独立小事务即可。
-    with db.recall_runtime() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            store.advance_revision(conn, a["session_id"], expected_revision,
-                                   query_plan=plan,
-                                   request_ref=plan.get("request_ref"),
-                                   change_reason="refine",
-                                   burst_no=burst_no,
-                                   bursts_used=bursts_used)
-            conn.execute(
-                "UPDATE recall_sessions SET status='BUDGET_EXHAUSTED',"
-                " updated_at=? WHERE session_id=? AND current_revision=?",
-                (_now_iso(), a["session_id"], expected_revision + 1))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
     session["current_revision"] = expected_revision + 1
-    return {
+    out_packet = {
         "recall_session_id": a["session_id"],
-        "revision": session["current_revision"],
+        "revision": expected_revision + 1,
         "status": "BUDGET_EXHAUSTED",
         "search_status": "BUDGET_EXHAUSTED",
         "delivery_action": "no_candidates",
@@ -592,6 +584,26 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "budget": budget.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            store.advance_revision(conn, a["session_id"], expected_revision,
+                                   query_plan=plan,
+                                   request_ref=plan.get("request_ref"),
+                                   change_reason="refine",
+                                   burst_no=burst_no,
+                                   bursts_used=bursts_used)
+            conn.execute(
+                "UPDATE recall_sessions SET status='BUDGET_EXHAUSTED',"
+                " updated_at=? WHERE session_id=? AND current_revision=?",
+                (_now_iso(), a["session_id"], expected_revision + 1))
+            _record_op_in_tx(conn, op_ctx, out_packet)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return out_packet
+
 
 
 def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
@@ -611,21 +623,37 @@ def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
     if not candidate_ref:
         raise NotFound("candidate not found in session",
                        resource_ref=a.get("resource_ref"))
-    result = state_machine.reject(
-        {"session_id": a["session_id"],
-         "candidate_ref": candidate_ref,
-         "resource_ref": a.get("resource_ref") or ""},
-        target)
-    if target in ("event", "candidate") and a.get("resource_ref"):
-        # 事件级排除：同资源全部重复表示一并标记
-        for c in store.list_candidates(a["session_id"]):
-            if (c["resource_ref"] == a["resource_ref"] and
-                    c["state"] != "rejected"):
-                store.set_candidate_state(a["session_id"],
-                                          c["candidate_ref"], "rejected",
-                                          reject_target=target)
-    return {"rejected": result, "session_id": a["session_id"],
-            "revision": session["current_revision"]}
+    from .models import REJECT_TARGETS
+    if target not in REJECT_TARGETS:
+        raise Forbidden(f"reject_target 必须是 {list(REJECT_TARGETS)}",
+                        code="INVALID_ARGUMENT")
+    result = {"candidate_ref": candidate_ref,
+              "resource_ref": a.get("resource_ref") or "",
+              "reject_target": target, "scope": "session_local"}
+    out = {"rejected": result, "session_id": a["session_id"],
+           "revision": session["current_revision"]}
+    # P1-01：候选状态与 operation 记录同一事务（设为型副作用 +
+    # 幂等收据原子提交，崩溃窗口不再产生"已拒但无收据"）
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            store.set_candidate_state_tx(
+                conn, a["session_id"], candidate_ref, "rejected",
+                reject_target=target)
+            if target in ("event", "candidate") and a.get("resource_ref"):
+                # 事件级排除：同资源全部重复表示一并标记（写锁内读）
+                for c in store.list_candidates(a["session_id"], conn=conn):
+                    if (c["resource_ref"] == a["resource_ref"] and
+                            c["state"] != "rejected"):
+                        store.set_candidate_state_tx(
+                            conn, a["session_id"], c["candidate_ref"],
+                            "rejected", reject_target=target)
+            _record_op_in_tx(conn, op_ctx, out)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return out
 
 
 def accept(principal, a: dict, op_ctx: dict | None = None) -> dict:
@@ -634,15 +662,24 @@ def accept(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.expire_if_due(session)
     state_machine.require_action(session, "accept")
     _check_conversation_scope(session, a)
-    if a.get("candidate_ref"):
-        store.set_candidate_state(a["session_id"], a["candidate_ref"],
-                                  "accepted")
     out = {"accepted": a.get("candidate_ref"), "status": session["status"]}
-    if a.get("close"):
-        session = store.update_status(a["session_id"],
-                                      session["current_revision"],
-                                      "RESOLVED")
-        out["status"] = "RESOLVED"
+    # P1-01：候选状态 / 终态迁移 / operation 记录同一事务
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if a.get("candidate_ref"):
+                store.set_candidate_state_tx(
+                    conn, a["session_id"], a["candidate_ref"], "accepted")
+            if a.get("close"):
+                store.update_status_tx(conn, a["session_id"],
+                                       session["current_revision"],
+                                       "RESOLVED")
+                out["status"] = "RESOLVED"
+            _record_op_in_tx(conn, op_ctx, out)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return out
 
 
@@ -714,7 +751,11 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     "structured_fact", axis, "", ref,
                     structured_value={axis: r["memory_date"]})],
             })
-    # 幂等 upsert（设为型）：独立事务提交，重复执行结果不变
+    out = {"recall_session_id": a["session_id"],
+          "direction": direction, "axis": axis,
+          "candidates": cards, "status": session["status"],
+          "instruction_authority": "none"}
+    # 幂等 upsert（设为型）与 operation 记录同一事务（P1-01）
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -727,14 +768,12 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     "representation_version": c["representation_version"],
                     "state": "seen", "scores": {}}],
                     session["current_revision"])
+            _record_op_in_tx(conn, op_ctx, out)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"recall_session_id": a["session_id"],
-            "direction": direction, "axis": axis,
-            "candidates": cards, "status": session["status"],
-            "instruction_authority": "none"}
+    return out
 
 
 def _latest_anchor(session_id: str) -> str | None:
@@ -782,8 +821,20 @@ def close(principal, a: dict, op_ctx: dict | None = None) -> dict:
         raise Forbidden("outcome 必须是 resolved/cancelled",
                         code="INVALID_ARGUMENT")
     final = "RESOLVED" if outcome == "resolved" else "CANCELLED"
-    store.update_status(a["session_id"], session["current_revision"], final)
-    return {"session_id": a["session_id"], "status": final}
+    out = {"session_id": a["session_id"], "status": final}
+    # P1-01：终态迁移与 operation 记录同一事务——首次成功后崩溃，
+    # 同 key 重试重放首次结果，不再 INVALID_STATE
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            store.update_status_tx(conn, a["session_id"],
+                                   session["current_revision"], final)
+            _record_op_in_tx(conn, op_ctx, out)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return out
 
 
 # ---------- 读时重校验（RUNTIME-04 / §9.4） ----------

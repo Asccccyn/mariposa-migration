@@ -276,28 +276,56 @@ def upsert_candidates(conn, session_id: str, candidates: list[dict],
 def set_candidate_state(session_id: str, candidate_ref: str, state: str,
                         reject_target: str | None = None) -> None:
     with db.recall_runtime() as conn:
-        cur = conn.execute(
-            "UPDATE recall_candidates SET state=?, reject_target=?,"
-            " updated_at=? WHERE session_id=? AND candidate_ref=?",
-            (state, reject_target, _now(), session_id, candidate_ref))
-        if cur.rowcount != 1:
-            raise NotFound("candidate not found in session",
-                           candidate_ref=candidate_ref)
+        set_candidate_state_tx(conn, session_id, candidate_ref, state,
+                               reject_target)
+
+
+def set_candidate_state_tx(conn, session_id: str, candidate_ref: str,
+                           state: str,
+                           reject_target: str | None = None) -> None:
+    """事务内版：设为型候选状态写入（调用方事务）。"""
+    cur = conn.execute(
+        "UPDATE recall_candidates SET state=?, reject_target=?,"
+        " updated_at=? WHERE session_id=? AND candidate_ref=?",
+        (state, reject_target, _now(), session_id, candidate_ref))
+    if cur.rowcount != 1:
+        raise NotFound("candidate not found in session",
+                       candidate_ref=candidate_ref)
+
+
+def update_status_tx(conn, session_id: str, expected_revision: int,
+                     status: str) -> None:
+    """事务内版 CAS 状态写入（close/accept 等最终事务调用）。"""
+    _check_status(status)
+    cur = conn.execute(
+        "UPDATE recall_sessions SET status=?, updated_at=?"
+        " WHERE current_revision=? AND session_id=?",
+        (status, _now(), expected_revision, session_id))
+    if cur.rowcount != 1:
+        raise Forbidden(
+            "session revision 冲突（expected_revision 过期）；"
+            "请先 status 重读当前状态再重试",
+            code="REVISION_CONFLICT", session_id=session_id,
+            expected_revision=expected_revision)
 
 
 def list_candidates(session_id: str,
-                    states: tuple[str, ...] | None = None) -> list[dict]:
-    with db.recall_runtime() as conn:
-        if states:
-            marks = ",".join("?" * len(states))
-            rows = conn.execute(
-                f"SELECT * FROM recall_candidates WHERE session_id=?"
-                f" AND state IN ({marks})",
-                (session_id,) + states).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM recall_candidates WHERE session_id=?",
-                (session_id,)).fetchall()
+                    states: tuple[str, ...] | None = None,
+                    conn=None) -> list[dict]:
+    """候选列表；conn 直传时在调用方事务/连接内执行。"""
+    if states:
+        marks = ",".join("?" * len(states))
+        sql = (f"SELECT * FROM recall_candidates WHERE session_id=?"
+               f" AND state IN ({marks})")
+        params: tuple = (session_id,) + tuple(states)
+    else:
+        sql = "SELECT * FROM recall_candidates WHERE session_id=?"
+        params = (session_id,)
+    if conn is not None:
+        rows = conn.execute(sql, params).fetchall()
+    else:
+        with db.recall_runtime() as c:
+            rows = c.execute(sql, params).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -433,24 +461,15 @@ def run_operation(principal_id: str, operation_key: str, builder,
             data = builder()
         except OperationRaceLost as lost:
             return replay_operation_row(lost.row, replay_guard)
-        # 设为型动作（service 未在最终事务内写 operation）补写响应
-        # 记录；动作本身幂等，崩溃窗口内重放结果一致
+        # P1-01：所有 runtime 动作必须在自身最终事务内写入 operation
+        # 记录（业务副作用与收据原子）。builder 返回而库中无记录 =
+        # 实现遗漏，fail-fast 暴露而不是静默补写制造崩溃窗口。
         row = read_operation(principal_id, operation_key)
         if row is None:
-            import sqlite3 as _sq
-            with db.recall_runtime() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    record_operation_row(conn, principal_id,
-                                         operation_key, payload_hash, data)
-                    conn.execute("COMMIT")
-                except OperationRaceLost:
-                    conn.execute("ROLLBACK")
-                except _sq.IntegrityError:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    conn.execute("ROLLBACK")
-                    raise
+            raise RuntimeError(
+                "operation handler returned without recording its "
+                "operation row inside its final transaction: "
+                f"{operation_key}")
         return {"data": data}
 
 

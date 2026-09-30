@@ -60,6 +60,25 @@ def start_op(actors, terms, op, session_id="new"):
     return inner["data"], inner.get("idempotent_replay", False)
 
 
+
+def make_builder(key, payload_hash, produce):
+    """规范 operation builder：副作用与 operation 记录同事务。"""
+    from mariposa import db as _db
+
+    def builder():
+        result = produce()
+        with _db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                store.record_operation_row(conn, "jiaming", key,
+                                           payload_hash, result)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return result
+    return builder
+
 class TestF26CommitAtEnd:
     """commit-at-end 模型（幂等与崩溃恢复整改后语义）。
 
@@ -74,16 +93,17 @@ class TestF26CommitAtEnd:
         calls = []
         lock = threading.Lock()
 
-        def builder():
+        def produce():
             with lock:
                 calls.append(threading.get_ident())
-            time.sleep(0.4)
             return {"value": "done"}
 
         def run(_i):
             gate.wait()
             return store.run_operation(
                 "jiaming", "op-concurrent-2", builder, payload_hash="h1")
+
+        builder = make_builder("op-concurrent-2", "h1", produce)
 
         with ThreadPoolExecutor(max_workers=2) as ex:
             f1 = ex.submit(run, 0)
@@ -102,7 +122,7 @@ class TestF26CommitAtEnd:
 
         def failing():
             calls.append(1)
-            raise RuntimeError("boom")
+            raise RuntimeError("boom")  # 计算阶段失败：无事务无副作用
 
         with pytest.raises(RuntimeError):
             store.run_operation("jiaming", "op-retry-2", failing,
@@ -112,13 +132,17 @@ class TestF26CommitAtEnd:
         assert store.read_operation("jiaming", "op-retry-2") is None
         # 同 key 重试：从头重新计算并成功
         out = store.run_operation(
-            "jiaming", "op-retry-2", lambda: {"ok": True}, payload_hash="h1")
+            "jiaming", "op-retry-2",
+            make_builder("op-retry-2", "h1", lambda: {"ok": True}),
+            payload_hash="h1")
         assert out["data"] == {"ok": True}
         assert len(calls) == 1  # 原失败不重复计
 
     def test_same_key_different_payload_conflict(self, actors):
         out = store.run_operation(
-            "jiaming", "op-hash-2", lambda: {"a": 1}, payload_hash="h1")
+            "jiaming", "op-hash-2",
+            make_builder("op-hash-2", "h1", lambda: {"a": 1}),
+            payload_hash="h1")
         assert out["data"] == {"a": 1}
         with pytest.raises(IdempotencyConflict):
             store.run_operation(
@@ -128,9 +152,13 @@ class TestF26CommitAtEnd:
     def test_sequential_replay_returns_saved_result(self, actors):
         """顺序重试（RUNTIME-02 原语义保持）：同 key 同 payload 重放。"""
         out1 = store.run_operation(
-            "jiaming", "op-seq-2", lambda: {"n": 1}, payload_hash="h1")
+            "jiaming", "op-seq-2",
+            make_builder("op-seq-2", "h1", lambda: {"n": 1}),
+            payload_hash="h1")
         out2 = store.run_operation(
-            "jiaming", "op-seq-2", lambda: {"n": 2}, payload_hash="h1")
+            "jiaming", "op-seq-2",
+            make_builder("op-seq-2", "h1", lambda: {"n": 2}),
+            payload_hash="h1")
         assert out1["data"] == {"n": 1}
         assert out2["idempotent_replay"] is True
         assert out2["data"] == {"n": 1}

@@ -20,6 +20,7 @@ from mariposa.letters import service as letters
 from mariposa.memory import extras as memory_extras
 from mariposa.memory import service as memory
 from mariposa.raw import binding as raw_binding
+from mariposa.recall import store
 from mariposa.capabilities import registry
 from mariposa.retrieval import rebuild as retrieval_rebuild
 from tests.conftest import reset_all
@@ -554,3 +555,122 @@ class TestReplayGuardN03N04:
                 conn.execute("ROLLBACK")
                 raise
         return draft["session_id"]
+
+
+class TestP101ActionOperationAtomicity:
+    """P1-01：每个写 runtime 状态的动作，业务副作用与 operation 记录
+    同一事务——首次成功后（响应丢失/重试）同 key 重放首次结果。"""
+
+    def _hold(self, actors, text, **kw):
+        from mariposa.memory import service as memory
+        base = dict(text=text, memory_date="2026-09-01",
+                    date_confidence="exact", original_title="P101",
+                    categories=["daily"],
+                    creation_mode="contemporaneous", raw_pending=False)
+        base.update(kw)
+        return memory.hold(actors["jiaming"], **base)
+
+    def _start(self, actors, sid_terms=("搬家",), op="op-p1-s"):
+        from mariposa.capabilities import registry as reg
+        return reg.invoke(actors["jiaming"], "memory.recall.start",
+                          {"query_plan": {
+                              "original_request": "查",
+                              "channels": ["event"],
+                              "lexical_terms": list(sid_terms)},
+                           "operation_id": op}, None)
+
+    def test_close_retry_replays_first_result(self, actors):
+        self._hold(actors, "关闭幂等场景搬家正文")
+        p = self._start(actors)
+        sid = p["data"]["data"]["recall_session_id"]
+        args = {"session_id": sid, "outcome": "cancelled",
+                "operation_id": "idem-p1-close"}
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.close",
+                             args, None)
+        assert r1["data"]["data"]["status"] == "CANCELLED"
+        # 响应丢失重试：重放首次结果，不再 INVALID_STATE
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.close",
+                             args, "idem-p1-close")
+        assert r2["data"].get("idempotent_replay") is True
+        assert r2["data"]["data"]["status"] == "CANCELLED"
+
+    def test_accept_close_retry_replays(self, actors):
+        self._hold(actors, "接受幂等场景搬家正文")
+        p = self._start(actors)
+        sid = p["data"]["data"]["recall_session_id"]
+        cand = p["data"]["data"]["candidates"][0]["candidate_ref"]
+        args = {"session_id": sid, "candidate_ref": cand, "close": True,
+                "operation_id": "idem-p1-accept"}
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.accept",
+                             args, None)
+        assert r1["data"]["data"]["status"] == "RESOLVED"
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.accept",
+                             args, "idem-p1-accept")
+        assert r2["data"].get("idempotent_replay") is True
+        assert r2["data"]["data"]["status"] == "RESOLVED"
+
+    def test_no_budget_refine_retry_replays(self, actors):
+        self._hold(actors, "无余额幂等场景搬家正文")
+        p = self._start(actors)
+        sid = p["data"]["data"]["recall_session_id"]
+        base = {"session_id": sid,
+                "query_plan": {"original_request": "再查",
+                               "channels": ["event"],
+                               "lexical_terms": ["搬家"]}}
+        # 用满 burst 两轮
+        for i in range(2):
+            registry.invoke(actors["jiaming"], "memory.recall.refine",
+                            {**base, "operation_id": f"op-p1-r{i}"}, None)
+        args = {**base, "operation_id": "idem-p1-nb"}
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.refine",
+                             args, None)
+        assert r1["data"]["data"]["status"] == "BUDGET_EXHAUSTED"
+        rev_after_first = r1["data"]["data"]["revision"]
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
+                             args, None)
+        assert r2["data"].get("idempotent_replay") is True, \
+            "无余额 refine 重试应重放首次结果"
+        assert r2["data"]["data"]["revision"] == rev_after_first, \
+            "重试不得再次推进 revision"
+
+    def test_reject_retry_replays(self, actors):
+        self._hold(actors, "拒绝幂等场景搬家正文")
+        p = self._start(actors)
+        sid = p["data"]["data"]["recall_session_id"]
+        cand = p["data"]["data"]["candidates"][0]
+        args = {"session_id": sid, "candidate_ref": cand["candidate_ref"],
+                "reject_target": "candidate",
+                "operation_id": "idem-p1-reject"}
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.reject",
+                             args, None)
+        assert r1["data"]["data"]["rejected"]["candidate_ref"] == \
+            cand["candidate_ref"]
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.reject",
+                             args, "idem-p1-reject")
+        assert r2["data"].get("idempotent_replay") is True
+
+    def test_crash_before_operation_record_rolls_back_state(
+            self, actors, monkeypatch):
+        """事务内 operation 记录失败 → 业务状态一并回滚（原子性）。"""
+        self._hold(actors, "崩溃原子场景搬家正文")
+        p = self._start(actors)
+        sid = p["data"]["data"]["recall_session_id"]
+
+        def boom(conn, *a, **kw):
+            raise RuntimeError("operation record write failed")
+
+        monkeypatch.setattr(store, "record_operation_row", boom)
+        from mariposa.errors import MariposaError
+        with pytest.raises((RuntimeError, MariposaError)):
+            registry.invoke(actors["jiaming"], "memory.recall.close",
+                            {"session_id": sid, "outcome": "cancelled",
+                             "operation_id": "idem-p1-crash"}, None)
+        monkeypatch.undo()
+        # 状态未被改动：session 仍可 close（不是终态）
+        session = store.get_session(sid)
+        assert session["status"] not in ("CANCELLED", "RESOLVED"), \
+            "operation 记录失败时终态迁移必须一并回滚"
+        r = registry.invoke(actors["jiaming"], "memory.recall.close",
+                            {"session_id": sid, "outcome": "cancelled",
+                             "operation_id": "idem-p1-crash"}, None)
+        assert r["data"]["data"]["status"] == "CANCELLED"
