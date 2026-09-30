@@ -262,7 +262,10 @@ def upsert_candidates(conn, session_id: str, candidates: list[dict],
             " first_seen_revision, updated_at)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(session_id, candidate_ref) DO UPDATE SET"
-            " state=excluded.state, score_ref=excluded.score_ref,"
+            " state=CASE WHEN recall_candidates.state IN"
+            "   ('rejected','accepted') AND excluded.state='seen'"
+            " THEN recall_candidates.state ELSE excluded.state END,"
+            " score_ref=excluded.score_ref,"
             " reject_target=excluded.reject_target,"
             " updated_at=excluded.updated_at",
             (session_id, c["candidate_ref"], c["resource_ref"],
