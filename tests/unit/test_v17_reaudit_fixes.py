@@ -891,7 +891,8 @@ class TestP2Fixes:
         assert before["search_text"] == after["search_text"], \
             "P2-01：hold 与 rebuild 的投影内容不一致"
         assert before["whitelist_body"] == after["whitelist_body"]
-        assert hits_before == hits_after == 1
+        # 2026-09-30 裁定：why 为禁检来源——一致性指"两侧都不命中"
+        assert hits_before == hits_after == 0
 
     def test_plan_api_no_stale_20day_wording(self, actors):
         from mariposa.capabilities import registry as reg

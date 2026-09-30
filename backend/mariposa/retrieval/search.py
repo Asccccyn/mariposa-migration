@@ -10,6 +10,43 @@ from ..memory import relations as relations_mod
 from . import projection, semantic
 
 
+
+def _allowed_field_kinds(conn, memory_ids: list[str]) -> dict[str, set[str]]:
+    """逐桶现算阶段，返回允许参与命中的 field kinds（2026-09-30 裁定：
+    memory.search/recall 底层进入 v1.7 字段矩阵；延迟 import 避免
+    retrieval→recall 顶层循环依赖）。"""
+    from ..recall import phase_policy
+    from . import field_projection
+    out: dict[str, set[str]] = {}
+    for mid in memory_ids:
+        try:
+            fields = phase_policy.eligible_fields(phase_policy.phase_of(mid))
+        except phase_policy.DataGap:
+            # v1 存量桶（held_at 缺失）无阶段事实：保守按最小允许集
+            # （仅事件正文）处理，不用猜测的宽松阶段放大命中面
+            fields = phase_policy.CORE_FIELDS
+        out[mid] = set(field_projection.stage_filter_kinds(fields))
+    return out
+
+
+def _field_fts_hits(conn, phrase: str, where: list[str], params: list,
+                     fetch: int) -> dict[str, list]:
+    """field_fts 命中按桶聚合（返回 mid -> [field_kind,...]，首见顺序
+    即 FTS 相关性顺序）。命中面=分字段投影（title/event/words），
+    不含 why/meaning/mood 等禁检来源。"""
+    sql = ("SELECT f.memory_id AS fmid, f.field_kind AS fkind,"
+           " bm25(field_fts) AS rank FROM field_fts f"
+           f" JOIN memories m ON m.memory_id = f.memory_id"
+           f" WHERE {' AND '.join(where)} AND field_fts MATCH ?"
+           " ORDER BY rank, f.memory_id LIMIT ?")
+    rows = conn.execute(sql, params + [phrase, fetch]).fetchall()
+    agg: dict[str, list[str]] = {}
+    for r in rows:
+        agg.setdefault(r["fmid"], [])
+        if r["fkind"] not in agg[r["fmid"]]:
+            agg[r["fmid"]].append(r["fkind"])
+    return agg
+
 def _pool_where(filters: dict) -> tuple[list[str], list]:
     """结构化筛选 → (where 片段, 参数)。跨维度 AND；同维度默认 any（D04）。"""
     where = ["m.visibility='active'"]
@@ -94,33 +131,31 @@ def _recall_keyword(conn, phrase: str, where: list[str], params: list,
     """
     offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
         cursor[0]).isdigit() else 0
-    probe = phrase.strip('"')
-    sql = (
-        "SELECT m.memory_id, m.memory_date, m.compression_state,"
-        " m.current_version_no, rd.projection_kind, bm25(search_fts) AS rank,"
-        " rd.whitelist_body"
-        " FROM memories m"
-        " JOIN retrieval_documents rd ON rd.memory_id = m.memory_id"
-        " JOIN search_fts ON search_fts.memory_id = m.memory_id"
-        f" WHERE {' AND '.join(where)} AND search_fts MATCH ?"
-        " ORDER BY rank, m.memory_id LIMIT ? OFFSET ?")
-    rows = conn.execute(sql, params + [phrase, limit + 1, offset]).fetchall()
+    # 2026-09-30 裁定：池内关键词命中面=分字段投影并按当前阶段过滤；
+    # why/meaning 等禁检来源不再参与（matched_fields 如实标注真实
+    # 命中字段，阶段不允许的命中不算命中）
+    agg = _field_fts_hits(conn, phrase, where, params,
+                          fetch=(limit + 1) * 4 + offset)
+    allowed = _allowed_field_kinds(conn, list(agg))
+    ordered = []
+    for mid, kinds in agg.items():
+        eff = [k for k in kinds if k in allowed.get(mid, set())]
+        if eff:
+            ordered.append((mid, eff))
+    page = ordered[offset:offset + limit]
     hits = []
-    for r in rows[:limit]:
-        body = r["whitelist_body"]
-        if r["compression_state"] == "forgotten_summary":
-            matched_by = "summary_keyword"
-            fields = (["summary_body"] if body and probe in body
-                      else ["forget_tags"])
-        elif body is None:
-            matched_by = "keyword"
-            fields = ["projection"]  # 旧投影行未带成分，不冒充字段命中
-        else:
-            matched_by = "keyword"
-            fields = (["event_text"] if probe in body
-                      else ["legacy_projection"])
-        hits.append(_hit(r, matched_by, fields))
-    next_cursor = [str(offset + limit)] if len(rows) > limit else None
+    for mid, eff in page:
+        r = conn.execute(
+            "SELECT memory_id, memory_date, compression_state,"
+            " current_version_no FROM memories WHERE memory_id=?",
+            (mid,)).fetchone()
+        matched_by = ("summary_keyword"
+                      if r["compression_state"] == "forgotten_summary"
+                      else "keyword")
+        hits.append(_hit(r, matched_by, eff))
+    total_kept = len(ordered)
+    next_cursor = ([str(offset + limit)]
+                   if total_kept > offset + limit else None)
     return {"hits": hits, "query": phrase, "mode": "keyword",
             "filters_applied": _filters_summary(filters),
             "next_cursor": next_cursor, "limit": limit}
@@ -192,29 +227,30 @@ def search(conn, query: str, limit: int = 20,
     hits: list[dict] = []
     phrase = projection.compile_query(query)
     if phrase:
-        rows = conn.execute(
-            "SELECT f.memory_id, rd.projection_kind, rd.memory_version_no,"
-            " m.compression_state, m.visibility, bm25(search_fts) AS rank"
-            " FROM search_fts f"
-            " JOIN retrieval_documents rd ON rd.memory_id = f.memory_id"
-            " JOIN memories m ON m.memory_id = f.memory_id"
-            " WHERE search_fts MATCH ? AND m.visibility='active'"
-            " ORDER BY rank LIMIT ?",
-            (phrase, limit),
-        ).fetchall()
-        for r in rows:
-            hits.append(
-                {
-                    "memory_id": r["memory_id"],
-                    "matched_by": (
-                        "summary_keyword"
-                        if r["compression_state"] == "forgotten_summary"
-                        else "keyword"
-                    ),
-                    "projection_kind": r["projection_kind"],
-                    "memory_version": r["memory_version_no"],
-                }
-            )
+        # 2026-09-30 裁定：接口兼容（名称/参数/返回结构），底座进入
+        # v1.7 字段矩阵——命中面=分字段投影并按当前阶段过滤；
+        # why/meaning 等禁检来源不再参与
+        agg = _field_fts_hits(conn, phrase, ["m.visibility='active'"], [],
+                              fetch=limit * 4)
+        allowed = _allowed_field_kinds(conn, list(agg))
+        for mid, kinds in agg.items():
+            eff = [k for k in kinds if k in allowed.get(mid, set())]
+            if not eff:
+                continue  # 命中字段全部不在当前阶段允许集内
+            m = conn.execute(
+                "SELECT compression_state, current_version_no FROM memories"
+                " WHERE memory_id=?", (mid,)).fetchone()
+            hits.append({
+                "memory_id": mid,
+                "matched_by": ("summary_keyword"
+                               if m["compression_state"] == "forgotten_summary"
+                               else "keyword"),
+                "matched_fields": eff,
+                "projection_kind": m["compression_state"],
+                "memory_version": m["current_version_no"],
+            })
+            if len(hits) >= limit:
+                break
     if related_of:
         # SEARCH-05：合并按 memory_id 去重——关键词已命中的桶不因关联重复出现
         seen_kw = {h["memory_id"] for h in hits}
