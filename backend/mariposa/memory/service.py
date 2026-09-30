@@ -71,12 +71,13 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
         "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
         (memory_id, m["current_version_no"])).fetchone()
     body = version_body(v) or ""
-    layers = [r["content"] for r in conn.execute(
-        "SELECT content FROM memory_meanings WHERE memory_id=? AND layer_no<1000"
-        " ORDER BY layer_no", (memory_id,))]
+    # 2026-09-30 裁定（S03/十一-3）：why/meaning 属禁检来源，彻底退出
+    # searchable projection——full 投影的 search_text 只含事件正文，
+    # 与 whitelist_body 一致。meaning 层仍可通过 meanings.list 显式读取，
+    # 但不再因文本匹配参与任何召回
     projection.upsert(
         conn, memory_id, m["current_version_no"], "full",
-        projection.build_full("\n".join([body] + layers), v["why_remember"]),
+        projection.normalize_search_text(body),
         whitelist_body=projection.normalize_search_text(body))
 
 
@@ -179,9 +180,14 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
             " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
             (memory_id, text, why_remember, principal_id,
              canonical_hash(payload), now))
+        # 与 v2 同一投影语义（2026-09-30 裁定）：只索引事件正文；
+        # 同时构建分字段投影（v1 新写入与 v2 对齐，memory.search/recall
+        # 的阶段字段底座不漏新桶）
         projection.upsert(conn, memory_id, 1, "full",
-                          projection.build_full(text, why_remember),
+                          projection.normalize_search_text(text),
                           whitelist_body=projection.normalize_search_text(text))
+        from ..retrieval import field_projection as _fp
+        _fp.build_for_memory(conn, memory_id)
 
 
 def _insert_layers(conn, *, memory_id: str, principal_id: str,

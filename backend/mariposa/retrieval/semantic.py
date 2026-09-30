@@ -93,13 +93,15 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     if cached:
         return True
     text_row = conn.execute(
-        "SELECT whitelist_body, search_text FROM retrieval_documents"
+        "SELECT whitelist_body FROM retrieval_documents"
         " WHERE memory_id=?", (memory_id,)).fetchone()
-    # P1-02：v1.7 语料 = 事件正文（whitelist_body，WIDE/MID/CORE 全部
-    # 允许 event_text）；meaning/why 不再进入向量，dense 不再绕过
-    # 阶段字段矩阵。旧数据无 whitelist_body 时回退整投影（行为同旧）。
-    corpus = text_row["whitelist_body"] or text_row["search_text"]
-    vec = embed([corpus])[0]
+    # 2026-09-30 裁定（S07）：语料=事件正文；无正文即标 gap——删除旧
+    # 向量、不建新向量，禁止回退到混有禁检字段的旧整桶投影
+    if text_row is None or not text_row["whitelist_body"]:
+        conn.execute("DELETE FROM memory_embeddings WHERE memory_id=?",
+                     (memory_id,))
+        return False
+    vec = embed([text_row["whitelist_body"]])[0]
     from datetime import datetime, timezone
     conn.execute(
         "INSERT OR REPLACE INTO memory_embeddings(memory_id, model, dim,"
