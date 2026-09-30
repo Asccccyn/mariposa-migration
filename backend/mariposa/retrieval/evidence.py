@@ -56,18 +56,34 @@ def meets_requirement(evidences: list[dict],
                for e in evidences)
 
 
-def excerpt(text: str, limit: int | None = None) -> tuple[str, bool]:
-    """有界候选片段：保留完整句/完整引用边界优先，超限显式标记截断。"""
+def excerpt(text: str, limit: int | None = None,
+            anchors: list[str] | None = None) -> tuple[str, bool]:
+    """有界候选片段：保留完整句/完整引用边界优先，超限显式标记截断。
+
+    anchors（S09）：查询词命中位置优先——超长文本不再固定从头部
+    截断吞掉后段命中；窗口以首个命中文位置为中心取整窗后再做
+    句读边界收敛。找不到命中则退回头部窗。
+    """
     limit = limit or config.RECALL_EXCERPT_CHARS
     if len(text) <= limit:
         return text, False
-    # 优先在句读边界截断，找不到就从硬限截断；不截掉否定词后假装完整。
-    cut = text[:limit]
+    start = 0
+    if anchors:
+        compact = text.replace(" ", "")
+        for a in anchors:
+            if not a:
+                continue
+            pos = compact.find(a.replace(" ", ""))
+            if pos >= 0:
+                # 粗略映射回原文位置（空格偏移在窗口余量内可忽略）
+                start = max(0, min(pos - limit // 3, len(text) - limit))
+                break
+    window = text[start:start + limit]
     for sep in ("。", "！", "？", "；", ". ", "！", "\n"):
-        idx = cut.rfind(sep)
+        idx = window.rfind(sep)
         if idx > limit // 2:
-            return cut[:idx + len(sep)], True
-    return cut, True
+            return window[:idx + len(sep)], True
+    return window, True
 
 
 def content_role_banner() -> dict:
