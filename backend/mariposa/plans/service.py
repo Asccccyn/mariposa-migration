@@ -1,6 +1,7 @@
 """计划（§11.1 / spec_v2 R12、D05、§7.2）：独立实体真源。
 
-计划与事件桶彼此独立；完成/放弃从对应状态变更所在自然日起固定 20 个
+计划与事件桶彼此独立；v1.7 阶段：未终态 plan → WIDE；done/cancelled
+于状态变更当天直接进入 CORE（无 20 日到期，阅读不续期）。
 自然日到期；**任何查看/阅读都不续期、不改 terminal_revision**；只有明确
 把终结状态改回活跃（重启执行）才取消旧终结周期并 bump terminal_revision。
 """
@@ -32,7 +33,7 @@ def _tz_of(v) -> str:
 
 
 def _terminal_anchors(now: str, tzname: str) -> dict:
-    """终结自然日（v1.7：不再计算 20 日遗忘到期；终态 plan 即时 CORE）。"""
+    """终结自然日（v1.7：终态 plan 状态变更当天即 CORE；本列仅历史留痕）。"""
     from .. import biztime
     t_date = biztime.local_date(now, tzname)
     return {"terminal_date": t_date.isoformat()}
@@ -109,7 +110,8 @@ def update(principal_id: str, plan_id: str, expected_version: int, **changes) ->
     """版本冲突保护：expected_version != current -> VERSION_CONFLICT。
 
     终结锚点规则（S4/D05/§7.2）：
-    - 活跃→done/cancelled：落对应终结时刻，due=终结自然日+20，terminal_revision+1；
+    - 活跃→done/cancelled：落对应终结时刻与 terminal_revision+1（v1.7
+      起不再有 +20 到期语义，due 字段仅兼容旧客户端展示）；
     - 终结→同终结状态重复保存：锚点不动（PLAN-11）；
     - 终结→活跃（明确重启执行）：terminal_revision+1，清除旧终结锚点；
     - 任何内容/标题修改不触碰终结锚点；阅读走 get()，永不写这些字段。
@@ -201,7 +203,7 @@ def get(conn, plan_id: str) -> dict:
             "terminal_date": row["terminal_date"],
             "due_date": row["due_date"],
             "terminal_revision": row["terminal_revision"],
-            "forgetting_note": "完成/放弃后固定20自然日；查看不续期"}
+            "forgetting_note": "v1.7：完成/放弃当天即进入 CORE；查看不续期"}
 
 
 def list_plans(states: list[str] | None = None) -> list[dict]:
