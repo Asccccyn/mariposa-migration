@@ -105,8 +105,9 @@ class TestJudgeContract:
             "original_request": "找搬家", "channels": ["event"],
             "lexical_terms": ["搬家"]}})
         assert packet["coverage"]["judge"] == "not_configured"
-        assert packet["candidates"]
-        assert "judge_unavailable" not in packet["degraded_reasons"]
+        # S10（recall-closure）：judge 关闭时搜索候选正文不直出
+        assert packet["candidates"] == []
+        assert any("不直出" in m or "Jev" in m for m in packet["missing"])
 
     def test_jev04_timeout_batch_degrades(self, actors):
         """JEV-04：provider 不可用 → 有界降级，未评估候选不标 evaluated。"""

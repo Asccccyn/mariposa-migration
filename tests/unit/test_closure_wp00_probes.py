@@ -64,12 +64,19 @@ class TestSelectionHardGate:
             "S10：invalid 即使带数字分也不是低分，不得交付"
 
     def test_nan_and_out_of_range_scores_are_not_low_scores(self):
+        """非法分值（NaN/inf/越界/布尔）不是低分；合法负分（-0.5，
+        JEV-03 值域内）是 evaluated，按分排序垫底交付。"""
         plan = {"original_request": "x", "channels": ["event"]}
-        for bad in (float("nan"), float("inf"), 1.7, -0.5, True):
+        for bad in (float("nan"), float("inf"), 1.7, True):
             j = {"evaluation_status": "evaluated", "relevance_signal": bad}
             out = selection.select([_card("memory:a", judge=j)], plan,
                                    set())
             assert not out["delivered"], f"S10：非法分值 {bad!r} 不得交付"
+        j_neg = {"evaluation_status": "evaluated",
+                 "relevance_signal": -0.5}
+        out = selection.select(
+            [_card("memory:neg", judge=j_neg, rrf=0.9)], plan, set())
+        assert len(out["delivered"]) == 1, "合法负分不删除（rank_only）"
 
     def test_low_score_evaluated_delivers_rank_only(self):
         """S11 正向钉子：低分 evaluated 候选按分排序交付，标
@@ -99,6 +106,8 @@ class TestProviderFailureNoBodyLeak:
     def test_judge_unconfigured_returns_no_body(self, actors,
                                                 monkeypatch):
         """S10：Jev 未配置/全失败时，搜索候选正文不得直出。"""
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "RECALL_JUDGE_PROVIDER", "disabled")
         from mariposa.memory import service as msvc
         msvc.hold(actors["jiaming"], text="禁出正文的海雾鸥影",
                   memory_date="2026-09-25", date_confidence="exact",

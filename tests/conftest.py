@@ -73,10 +73,60 @@ os.environ.setdefault("MARIPOSA_ALLOW_CREATE", "1")
 os.environ.setdefault("MARIPOSA_RECALL_ENABLED", "1")
 os.environ.setdefault("MARIPOSA_WORDS_RECALL_ENABLED", "1")
 os.environ.setdefault("MARIPOSA_RAW_FALLBACK_ENABLED", "1")
+# recall-closure S10 出站硬门：未判断候选不得交付——测试链需要稳定
+# 判断源。确定性 fake Jev（03 验收：结构级用 fake），不联网。
+os.environ.setdefault("MARIPOSA_RECALL_JUDGE_PROVIDER", "test_deterministic")
+
+
+def _install_test_judge() -> None:
+    from mariposa.retrieval.judges import base as judge_base
+
+    class DeterministicJudge(judge_base.JudgeProvider):
+        name = "test_deterministic"
+
+        def judge(self, query_plan, candidates, execution_context):
+            items = []
+            for c in candidates:
+                ref = c.get("candidate_ref") or c["resource_ref"]
+                items.append(judge_base.JudgeItem(
+                    candidate_ref=ref,
+                    candidate_version=str(c.get("content_version") or ""),
+                    relevance_signal=0.55 + (hash(ref) % 40) / 100.0,
+                    support_signal=None, contradiction_signal=None,
+                    provider_confidence=None,
+                    confidence_kind="not_applicable",
+                    evaluation_status="evaluated",
+                    model_id="test_deterministic",
+                    prompt_version="test",
+                    input_projection_version=str(
+                        c.get("projection_version") or ""),
+                    receipt_id=""))
+            return judge_base.JudgeBatchResult(
+                items=items, provider_status="evaluated",
+                degraded_reason=None, cache_hits=0,
+                cache_misses=len(candidates), request_count=0)
+
+    judge_base.register_for_tests("test_deterministic", DeterministicJudge())
+
 
 import pytest  # noqa: E402
 
 from mariposa import db, schema  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _ensure_test_judge():
+    """任何测试 clear_injected 后自动重装（防顺序依赖连锁失败）。"""
+    from mariposa.retrieval.judges import base as _jb
+    from mariposa import config as _cfg
+    if "test_deterministic" not in _jb._INJECTED:
+        _install_test_judge()
+    # 个别测试 cleanup 会把 provider 硬置 disabled 且不还原——
+    # 每个测试的默认态恢复为确定性 judge（显式 disabled 的测试在
+    # 自身作用域内自行设置）
+    if _cfg.RECALL_JUDGE_PROVIDER != "test_deterministic":
+        _cfg.RECALL_JUDGE_PROVIDER = "test_deterministic"
+    yield
 from mariposa.identity import service as identity  # noqa: E402
 
 TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}

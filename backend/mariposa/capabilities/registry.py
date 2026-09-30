@@ -408,8 +408,8 @@ def invoke(principal: Principal, capability: str, arguments: dict,
 _RECALL_RUNTIME_CAPS = frozenset({
     "memory.recall.start", "memory.recall.refine", "memory.recall.reject",
     "memory.recall.accept", "memory.recall.navigate", "memory.recall.status",
-    "memory.recall.close", "memory.words.recall", "memory.words.get",
-    "memory.context.validate",
+    "memory.recall.close", "memory.recall.round2", "memory.words.recall",
+    "memory.words.get", "memory.context.validate",
 })
 
 
@@ -755,7 +755,7 @@ def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
         lambda: fn(principal, a, op_ctx=ctx),
         payload_hash=ph,
         replay_guard=lambda saved: recall_service.revalidate_replayed(
-            fn.__name__, saved))
+            fn.__name__, saved, a))
 
 
 def _recall_start(principal: Principal, a: dict) -> dict:
