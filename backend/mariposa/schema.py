@@ -934,6 +934,14 @@ SELECT 'i_main', v.version_no, v.content, v.authored_by,
   FROM i_versions v
  WHERE v.doc_id='i_main';
 """),
+    (23, """
+-- ===== P1-03：Source 导入租约 fencing token =====
+-- 每次认领/接管生成新 token；所有对批次的写入（会话级解析事务、
+-- 发布事务、失败清场、metadata 定稿）必须持有当前 token，过期
+-- worker 的任何写入（含失败清场）都被拒绝，不能破坏接管方的
+-- 成功证据。
+ALTER TABLE source_import_batches ADD COLUMN lease_token TEXT;
+"""),
 ]
 
 

@@ -148,8 +148,8 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             code="SOURCE_FORMAT_UNKNOWN")
 
     # ---- 3) 幂等与并发认领（租约） ----
-    batch_id, reused = _claim_batch(provider, sha256, staged, principal_id,
-                                    original_name)
+    batch_id, reused, lease = _claim_batch(provider, sha256, staged,
+                                           principal_id, original_name)
     if batch_id is None:  # already_imported
         return _already_result(provider, sha256)
     if batch_id is False:  # 新鲜 running 冲突
@@ -173,10 +173,11 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     try:
         # ---- 5) 解析归档 payload（绝不碰原始路径） ----
         try:
-            _parse_all(archived, provider, batch_id, stats)
+            _parse_all(archived, provider, batch_id, stats, lease)
         except json_stream.JsonStreamError as e:
             # 检测通过但流中后段不合规（如尾随垃圾）：同源码严格拒绝
-            _fail_batch(batch_id, provider, f"bad json: {e}", stats)
+            _fail_batch(batch_id, provider, f"bad json: {e}", stats,
+                         lease)
             raise MariposaError(f"文件不是合法的顶层 JSON 数组: {e}",
                                 code=e.code) from e
         _refresh_conversation_aggregates(batch_id, published_only=False)
@@ -201,7 +202,8 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             stats["blocking"] = blocking
             _fail_batch(batch_id, provider,
                         "导入未通过完整性门禁：" + json.dumps(
-                            blocking, ensure_ascii=False)[:1500], stats)
+                            blocking, ensure_ascii=False)[:1500], stats,
+                        lease)
             return {"batch_id": batch_id, "provider": provider,
                     "status": "failed", "stats": stats,
                     "error": "integrity gate", "raw_path": str(archived)}
@@ -214,6 +216,7 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
         with db.formal() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                _assert_lease(conn, batch_id, lease)  # P1-03 fencing
                 members = conn.execute(
                     "SELECT m.provider_message_id, m.content_hash,"
                     " c.provider_conversation_id FROM"
@@ -284,13 +287,42 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                 "verification": {**verification, "archive": archive_check},
                 "raw_path": str(archived)}
     except Exception as e:  # noqa: BLE001 —— 未预期异常必须留失败痕迹
-        _fail_batch(batch_id, provider, f"{type(e).__name__}: {e}", stats)
+        if isinstance(e, LeaseLost):
+            raise  # 本 worker 已被接管：不留痕不清理
+        try:
+            _fail_batch(batch_id, provider, f"{type(e).__name__}: {e}",
+                        stats, lease)
+        except LeaseLost:
+            pass  # 定稿瞬间被接管：接管方负责后续
         raise
+
+
+class LeaseLost(Exception):
+    """当前 worker 持有的租约已被接管（P1-03）：任何写入——包括失败
+    清场与 metadata 定稿——必须放弃，不得破坏接管方的批次状态与
+    provenance 快照。"""
+
+
+def _assert_lease(conn, batch_id: str, lease_token: str) -> None:
+    """写事务内校验租约归属；失配/批已 completed → LeaseLost。"""
+    row = conn.execute(
+        "SELECT lease_token, status FROM source_import_batches"
+        " WHERE batch_id=?", (batch_id,)).fetchone()
+    if row is None or row["lease_token"] != lease_token:
+        raise LeaseLost(f"lease lost for batch {batch_id}")
+    if row["status"] == "completed":
+        raise LeaseLost(f"batch {batch_id} already completed by "
+                        "takeover worker")
+
+
+def _new_lease_token() -> str:
+    return f"lease_{_uuid.uuid4().hex[:16]}"
 
 
 def _claim_batch(provider: str, sha256: str, staged: Path,
                  principal_id: str, original_name: str):
-    """返回 (batch_id, reused)；None=已导入幂等返回；False=租约冲突。"""
+    """返回 (batch_id, reused, lease_token)；
+    batch_id None=已导入幂等返回；False=租约冲突。"""
     now = datetime.now(timezone.utc)
     lease_cutoff = now - timedelta(minutes=config.SOURCE_IMPORT_LEASE_MINUTES)
     with db.formal() as conn:
@@ -302,31 +334,34 @@ def _claim_batch(provider: str, sha256: str, staged: Path,
             if existing:
                 if existing["status"] == "completed":
                     conn.execute("COMMIT")
-                    return None, False
+                    return None, False, None
                 started_raw = existing["import_started_at"] or ""
                 started_dt = _parse_ts(started_raw)
                 if (existing["status"] == "running" and started_dt is not None
                         and started_dt > lease_cutoff):
                     conn.execute("COMMIT")
-                    return False, False
+                    return False, False, None
                 batch_id = existing["batch_id"]  # failed / stale running
+                lease = _new_lease_token()  # 接管 = 新 fencing token
                 conn.execute(
                     "UPDATE source_import_batches SET status='running',"
-                    " error=NULL, imported_by=?, import_started_at=?"
-                    " WHERE batch_id=?", (principal_id, now.isoformat(),
-                                          batch_id))
+                    " error=NULL, imported_by=?, import_started_at=?,"
+                    " lease_token=? WHERE batch_id=?",
+                    (principal_id, now.isoformat(), lease, batch_id))
                 conn.execute("COMMIT")
-                return batch_id, True
+                return batch_id, True, lease
             batch_id = f"sib_{_uuid.uuid4().hex[:12]}"
+            lease = _new_lease_token()
             conn.execute(
                 "INSERT INTO source_import_batches(batch_id, provider,"
                 " status, original_filename, original_bytes, sha256,"
-                " raw_path, parser_version, import_started_at, imported_by)"
-                " VALUES(?,?, 'running', ?,?,?,?,?,?,?)",
+                " raw_path, parser_version, import_started_at, imported_by,"
+                " lease_token) VALUES(?,?, 'running', ?,?,?,?,?,?,?,?)",
                 (batch_id, provider, original_name, staged.stat().st_size,
-                 sha256, "", PARSER_VERSION, now.isoformat(), principal_id))
+                 sha256, "", PARSER_VERSION, now.isoformat(), principal_id,
+                 lease))
             conn.execute("COMMIT")
-            return batch_id, False
+            return batch_id, False, lease
         except Exception:
             conn.execute("ROLLBACK")
             raise
@@ -413,21 +448,22 @@ def _new_stats() -> dict:
 
 
 def _parse_all(payload: Path, provider: str, batch_id: str,
-               stats: dict) -> None:
+               stats: dict, lease: str) -> None:
     with open_element_stream(payload) as f:
         first, it = json_stream.peek_first_element(f)
         idx = 0
         if first is not None:
-            _consume_element(first, provider, batch_id, idx, stats)
+            _consume_element(first, provider, batch_id, idx, stats, lease)
             idx += 1
             for element in it:
-                _consume_element(element, provider, batch_id, idx, stats)
+                _consume_element(element, provider, batch_id, idx, stats,
+                                 lease)
                 idx += 1
     stats["conversations_total"] = idx
 
 
 def _consume_element(element: Any, provider: str, batch_id: str,
-                     index: int, stats: dict) -> None:
+                     index: int, stats: dict, lease: str) -> None:
     mod = adapters.module_for(provider)
     # 元素级 schema 校验（SL-09/01）：42/字符串/null/异构 dict 都不许伪装
     try:
@@ -446,6 +482,7 @@ def _consume_element(element: Any, provider: str, batch_id: str,
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            _assert_lease(conn, batch_id, lease)  # P1-03 fencing
             conv_row_id = _ensure_conversation(conn, provider, batch_id,
                                                draft, stats, index)
             if conv_row_id is None:
@@ -894,10 +931,19 @@ def _purge_failed_batch_artifacts(conn, batch_id: str) -> int:
 
 
 def _fail_batch(batch_id: str, provider: str, error: str,
-                stats: dict | None = None) -> None:
+                stats: dict | None = None,
+                lease: str | None = None) -> None:
+    """批次失败定稿（P1-03：持当前租约才允许写）。
+
+    事务内先校验租约（在 purge 之前）：租约已被接管或批已被接管方
+    完成时，本 worker 放弃一切写入——不清场、不改状态、不写
+    metadata，接管方的成功证据（快照/发布/metadata）不被破坏。
+    """
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if lease is not None:
+                _assert_lease(conn, batch_id, lease)
             # 失败清场：本批未发布数据当场清理，重导不再有残留占位
             purged = _purge_failed_batch_artifacts(conn, batch_id)
             # F13：租约被接管后不得覆盖接管方的终态（completed 保护）；
@@ -912,6 +958,9 @@ def _fail_batch(batch_id: str, provider: str, error: str,
             if stats is not None:
                 stats["failed_batch_purged_unpublished"] = purged
             conn.execute("COMMIT")
+        except LeaseLost:
+            conn.execute("ROLLBACK")
+            raise  # 旧 worker：不写任何东西（含 metadata）
         except Exception:
             conn.execute("ROLLBACK")
             raise
