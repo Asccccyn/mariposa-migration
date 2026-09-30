@@ -12,14 +12,40 @@ from .. import config
 from . import evidence as evidence_mod
 
 
+def _valid_signal(rel) -> bool:
+    """合法 relevance：数值（非 bool）、有限、在 provider 消毒约定
+    值域 [-1,1] 内（JEV-03 sanitize_signal 同口径）。"""
+    import math as _math
+    if not isinstance(rel, (int, float)) or isinstance(rel, bool):
+        return False
+    v = float(rel)
+    return _math.isfinite(v) and -1.0 <= v <= 1.0
+
+
 def _hard_gate(c: dict, plan: dict, rejected: set[str]) -> bool:
     ref = c["resource_ref"]
     # 用户明确 rejected：本 session 内不再作为普通候选正文返回
     if ref in rejected:
         return False
+    # S10 出站硬门：未判断（无 judge）、evaluation_status 非 evaluated、
+    # 缺项/NaN/越界/布尔分值——都不是低分，一律不得交付。
+    # 低分 evaluated 候选合法（S11 rank_only：按分排序标
+    # needs_validation），由 select 正常处理。
+    judge = c.get("judge") or {}
+    if judge.get("evaluation_status") != "evaluated":
+        return False
+    if not _valid_signal(judge.get("relevance_signal")):
+        return False
+    # S18：判断必须绑定候选实际版本；候选已前进则旧判断失效。
+    # 版本身份只在双方都非空时比对（raw 候选合法无版本，S14：
+    # 不虚构版本；unknown 版本由上游标 stale）
+    jv = judge.get("candidate_version")
+    cv = c.get("content_version")
+    if jv and cv and str(jv) != str(cv):
+        return False
     # 证据等级不满足不是淘汰条件（RAWX-01：paraphrase 候选仍作为线索
     # 交付并标 evidence_requirement_met=false，触发后续 raw 补查判定）；
-    # 硬门只管权限/表示/版本/明确约束/用户 rejected。
+    # 硬门只管判断有效性/版本/用户 rejected/权限。
     return True
 
 
@@ -64,12 +90,14 @@ def select(candidates: list[dict], plan: dict, rejected: set[str],
 
     if not delivered:
         action = "no_candidates"
-    elif requirement_met and len(delivered) == 1:
-        # 未校准前不启用自动高置信单条；唯一候选也标 needs_validation
-        action = ("needs_validation"
-                  if not config.RECALL_AUTO_TOP1 else "confident_top1")
     else:
-        action = "needs_validation" if not requirement_met else "deliver"
+        # S11 rank_only_until_calibrated：没有已批准的阈值 profile 前，
+        # 一切交付（无论证据等级）都标 needs_validation；自动
+        # confident_top1 仅在显式批准 profile 后启用
+        action = ("confident_top1"
+                  if (config.RECALL_AUTO_TOP1 and requirement_met
+                      and len(delivered) == 1)
+                  else "needs_validation")
 
     missing: list[str] = []
     if (plan.get("evidence_requirement") == "verbatim_required"

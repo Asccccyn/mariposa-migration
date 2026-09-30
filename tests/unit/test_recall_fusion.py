@@ -82,7 +82,12 @@ class TestSelection:
     def _card(self, ref, evidence_kind="authored_event", **kw):
         ev = [evidence_mod.make_evidence(evidence_kind, "f", "s", ref)]
         card = {"resource_ref": ref, "candidate_ref": ref, "channel": "event",
-                "evidence": ev, "rrf_score": 0.5}
+                "evidence": ev, "rrf_score": 0.5,
+                "content_version": "1",
+                # S10 出站硬门：单测候选默认携带 evaluated 判断
+                "judge": {"evaluation_status": "evaluated",
+                          "relevance_signal": 0.7,
+                          "candidate_version": "1"}}
         card.update(kw)
         return card
 

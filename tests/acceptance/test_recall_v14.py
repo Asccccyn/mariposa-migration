@@ -87,7 +87,7 @@ class TestHybrid:
             def judge(self, plan, candidates, ctx):
                 self.blob = str(plan) + str(candidates)
                 return jb.JudgeBatchResult(
-                    items=[jb.JudgeItem(c["candidate_ref"],
+                    items=[jb.JudgeItem(c.get("candidate_ref") or c["resource_ref"],
                                         c.get("content_version"))
                            for c in candidates])
         probe = Probe()
@@ -176,11 +176,14 @@ class TestJev:
         assert p["coverage"]["judge"] == "partial"
         assert "judge_timeout" in p["degraded_reasons"]
 
-    def test_jev05(self, actors):
+    def test_jev05(self, actors, monkeypatch):
+        from mariposa import config as _cfg
+        monkeypatch.setattr(_cfg, "RECALL_JUDGE_PROVIDER", "disabled")
         hold(actors, "搬家事件", "2026-08-10")
-        p = start(actors)  # judge 默认 disabled
+        p = start(actors)  # judge 显式 disabled
         assert p["coverage"]["judge"] == "not_configured"
-        assert p["candidates"]
+        # S10（recall-closure）：judge 关闭时搜索候选正文不直出
+        assert p["candidates"] == []
 
     def test_jev06(self, actors):
         class P(jb.JudgeProvider):
@@ -229,12 +232,16 @@ class TestJev:
               "evidence": [em.make_evidence("authored_event", "f", "s",
                                             "m")], "rrf_score": 1}],
             {"delivery_limit": 3}, set())
-        assert out["delivered"]  # 低 judge 分不淘汰，交由周家明判断
+        # S10：无判断候选不得交付（低分 evaluated 才可 rank_only）
+        assert not out["delivered"]
 
 
 class TestPack:
     def _card(self, ref, **kw):
         c = {"resource_ref": ref, "candidate_ref": ref, "channel": "event",
+             "content_version": "1",
+             "judge": {"evaluation_status": "evaluated",
+                       "relevance_signal": 0.7, "candidate_version": "1"},
              "evidence": [em.make_evidence("authored_event", "f", "s",
                                            ref)], "rrf_score": 0.5}
         c.update(kw)

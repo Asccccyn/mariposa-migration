@@ -286,9 +286,14 @@ def _run_round_compute(session: dict, plan: dict,
         elif "words" in channels:
             coverage["raw"] = "not_executed"
 
-    # Jev 精排（可关闭/可替换；只评价被交付的候选）
+    # Jev 精排（可关闭/可替换；只评价被交付的候选）。
+    # S10/WP01：words 与 raw-fallback 候选同样过一层 Jev——未判断
+    # 候选不得出站（完整 mixed 各 20/cap40 与 RRF 合序送判归
+    # WP02/WP04/WP05 精化）
     judge_result = None
-    judge_candidates = event_fused[:config.RECALL_JUDGE_CANDIDATE_CAP]
+    raw_pre = raw_result["hits"] if raw_result else []
+    judge_candidates = (event_fused + words_hits + raw_pre)[
+        :config.RECALL_JUDGE_CANDIDATE_CAP]
     provider = judge_base.get_provider()
     if isinstance(provider, judge_base.DisabledJudge):
         coverage["judge"] = "not_configured"
@@ -305,7 +310,7 @@ def _run_round_compute(session: dict, plan: dict,
         if judge_result.degraded_reason:
             degraded.append(f"judge_{judge_result.degraded_reason}")
         by_ref = {i.candidate_ref: i for i in judge_result.items}
-        for c in event_fused:
+        for c in judge_candidates:
             ji = by_ref.get(c.get("candidate_ref") or c["resource_ref"])
             if ji:
                 c["judge"] = ji.to_dict()
@@ -359,6 +364,13 @@ def _run_round_compute(session: dict, plan: dict,
     status = state_machine.derive_status(search_status,
                                          len(sel["delivered"]),
                                          bool(sel["conflicts"]))
+    # S10：Jev 不可用/未配置时正文不直出——交付为空必须是显式结构化
+    # 状态，不是静默空结果
+    if not sel["delivered"] and coverage.get("judge") in (
+            "not_configured", "unavailable"):
+        sel["missing"].append(
+            "Jev 判断不可用（not_configured/unavailable）：候选正文"
+            "不直出（S10）；可配置 judge 后重试")
     continuation = None
     if raw_result and raw_result.get("continuation"):
         continuation = {"available": True, "action": "raw_scan_continue",
@@ -964,7 +976,8 @@ def _norm_recall_field(field: str) -> str:
     return field
 
 
-def revalidate_replayed(fn_name: str, saved: dict) -> dict:
+def revalidate_replayed(fn_name: str, saved: dict,
+                        request_args: dict | None = None) -> dict:
     """runtime operation 重放的当前状态重校验（审计 F07 + 复审 N03/N04）。
 
     旧 operation 的保存响应不得绕过当前状态判断：
@@ -977,7 +990,10 @@ def revalidate_replayed(fn_name: str, saved: dict) -> dict:
       并按当前 phase 的 AllowedFields 重过滤 matched_fields/evidence
       （字段名先归一化：our_words.text → our_words）；本 session 已
       rejected 的资源剔除；无法验证资源身份的卡一律剔除（保守）；
-    - packet 层元数据（revision/budget）以当前 session 现值刷新。
+    - packet 层元数据（revision/budget）以当前 session 现值刷新；
+    - WP01：重放同样核对可信 scope——请求携带的 session 归属与
+      conversation_scope 必须与 session 绑定一致（省略不等于绕过，
+      不一致拒绝）。
     """
     _require_enabled()
     from ..errors import StaleOperation
@@ -1003,6 +1019,15 @@ def revalidate_replayed(fn_name: str, saved: dict) -> dict:
             "recall session 已过期/关闭，旧 operation 响应拒绝重放",
             session_id=sid, session_status=session["status"],
             operation=fn_name)
+    # WP01 scope 归属：重放与首次同权——session 动作必须核对
+    # conversation_scope（请求省略 scope 时以 session 绑定为准，
+    # 显式携带且不一致则拒绝）
+    if request_args is not None:
+        req_scope = request_args.get("conversation_scope")
+        if req_scope and req_scope != session["conversation_scope"]:
+            raise StaleOperation(
+                "重放请求的 conversation_scope 与 session 绑定不一致",
+                session_id=sid, operation=fn_name)
     if not has_candidates:
         return saved
     from . import phase_policy
