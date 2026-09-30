@@ -139,16 +139,22 @@ def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
                 ref = f"memory:{s['memory_id']}"
                 if ref in rejected:
                     continue
+                # P1-02：dense 卡携带真实版本与 v1.7 字段身份——
+                # matched_fields=event_text（三阶段全部允许），
+                # replay guard / receipt 重校验不再误杀 dense 卡
                 dense_hits.append({
                     "resource_ref": ref, "candidate_ref": ref,
                     "memory_id": s["memory_id"], "channel": "event",
                     "representation": s.get("projection_kind", "full"),
-                    "content_version": None,
-                    "representation_version": None,
+                    "content_version": s.get("content_version"),
+                    "representation_version": s.get("content_version"),
                     "projection_version": config.PROJECTION_REVISION,
                     "matched_by": ["semantic"],
-                    "matched_fields": ["projection"],
+                    "matched_fields": ["event_text"],
                     "score": s.get("score"),
+                    # 事件正文证据由 _attach_event_evidence 按此生成
+                    "_row": {"whitelist_body": s.get("whitelist_body"),
+                             "compression_state": "full"},
                 })
             coverage["dense_event"] = "complete_within_scope"
         else:
