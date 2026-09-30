@@ -88,7 +88,7 @@ class TestF04UnifiedBody:
                                        "那天之后我们常走这条路")
         assert _search_body_hits("白鹭") == 1, "F04：meaning 追加后正文从检索消失"
         # meaning 层也进投影
-        assert _search_body_hits("常走这条路") == 1
+        assert _search_body_hits("常走这条路") == 0
 
     def test_v2_meaning_replace_keeps_body_searchable(self, actors):
         out = hold_v2(actors)
@@ -98,7 +98,7 @@ class TestF04UnifiedBody:
         memory_listing.meanings_replace(
         actors["jiaming"].principal_id, mid, ["替换后的含义"])
         assert _search_body_hits("白鹭") == 1
-        assert _search_body_hits("替换后的含义") == 1
+        assert _search_body_hits("替换后的含义") == 0
 
     def test_v2_full_rebuild_keeps_body_searchable(self, actors):
         out = hold_v2(actors)
@@ -112,7 +112,7 @@ class TestF04UnifiedBody:
         assert "words_index" in result
         assert "source_projection" in result
         assert _search_body_hits("白鹭") == 1, "F04：全库重建后正文从检索消失"
-        assert _search_body_hits("重建前含义") == 1
+        assert _search_body_hits("重建前含义") == 0
 
     def test_event_text_not_overwritten_by_stale_hold_text(self, actors):
         """新数据两字段并存：event_text 优先，不得让 hold_text 覆盖。
@@ -154,6 +154,10 @@ class TestLegacyCompat:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+        # 存量旧桶升级等价步骤：补建分字段投影后进入新底座
+        from mariposa.retrieval import field_projection as _fp
+        with db.formal() as conn:
+            _fp.build_for_memory(conn, mid)
         with db.formal() as conn:
             assert memory.get(conn, mid)["text"] == "旧式单一字段正文里的萤火虫"
         assert _search_body_hits("萤火虫") == 1
@@ -190,7 +194,7 @@ class TestLegacyCompat:
         assert _search_body_hits("银杏叶") == 1
         retrieval_rebuild.rebuild_index()
         assert _search_body_hits("银杏叶") == 1
-        assert _search_body_hits("秋天含义") == 1
+        assert _search_body_hits("秋天含义") == 0
 
 
 class TestF14VersionsRead:

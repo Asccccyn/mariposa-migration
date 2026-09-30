@@ -104,7 +104,18 @@ class TestForbiddenProbes:
     """独有探针：各禁检字段独有词不得经任何普通召回途径命中。"""
 
     def test_title_only_probe_search06(self, actors):
+        """2026-09-30 裁定：memory.search/recall 底座进入 v1.7 字段矩阵
+        ——WIDE 阶段 title 命中合法；推进 CORE 后不再命中。"""
         m = hold_v2(actors, original_title="翾骓标题词", text="完全无关的正文")
+        assert m["memory_id"] in hit_ids(recall(actors, "翾骓"))
+        with db.formal() as conn:
+            hits = rsearch.search(conn, "翾骓")["hits"]
+        assert any(h["memory_id"] == m["memory_id"] and
+                   "original_title" in h.get("matched_fields", [])
+                   for h in hits)
+        with db.formal() as c:
+            c.execute("UPDATE memories SET held_at='2026-01-01T00:00:00+00:00'"
+                      " WHERE memory_id=?", (m["memory_id"],))
         assert m["memory_id"] not in hit_ids(recall(actors, "翾骓"))
         with db.formal() as conn:
             assert not rsearch.search(conn, "翾骓")["hits"]
@@ -115,8 +126,13 @@ class TestForbiddenProbes:
         assert m["memory_id"] not in hit_ids(recall(actors, "惘湎"))
 
     def test_our_words_only_probe_search08(self, actors):
+        """同 SEARCH-06：words 在 WIDE 经字段矩阵合法命中；CORE 退出。"""
         m = hold_v2(actors, text="普通正文", our_words=[
             {"speaker": "jiaming", "text": "瓯缶话语词"}])
+        assert m["memory_id"] in hit_ids(recall(actors, "瓯缶"))
+        with db.formal() as c:
+            c.execute("UPDATE memories SET held_at='2026-01-01T00:00:00+00:00'"
+                      " WHERE memory_id=?", (m["memory_id"],))
         assert m["memory_id"] not in hit_ids(recall(actors, "瓯缶"))
 
     def test_recollection_only_probe_search09(self, actors):

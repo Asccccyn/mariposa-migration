@@ -52,11 +52,14 @@ class TestListing:
 
 class TestMeanings:
     def test_append_into_projection_and_replace_archive(self, actors):
+        """2026-09-30 裁定：meaning 为禁检来源——写入/替换/留底语义
+        保留，但不再参与检索（旧"纳入投影"断言已按裁定反转）。"""
         h = _hold(actors, "一起看了日出")
         listing.meanings_append("jiaming", h["memory_id"], "日出是她的侧脸形状")
         with db.formal() as conn:
             hits = retrieval.search(conn, "侧脸形状")["hits"]
-        assert any(x["memory_id"] == h["memory_id"] for x in hits)  # 纳入投影
+        assert not any(x["memory_id"] == h["memory_id"] for x in hits), \
+            "meaning 不得因文本匹配参与检索（裁定 S03/十一-3）"
         out = listing.meanings_replace("jiaming", h["memory_id"], ["新的理解层"])
         assert out["archived_old"] == 1
         layers = listing.meanings_list(h["memory_id"])
