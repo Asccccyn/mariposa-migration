@@ -404,16 +404,28 @@ def replay_operation_row(row, replay_guard):
     return {"idempotent_replay": True, "data": saved}
 
 
-_OPERATION_LOCKS: dict[str, "threading.Lock"] = {}
+_OPERATION_LOCKS: dict[str, tuple] = {}  # key -> (Lock, waiter_count)
+_OPERATION_LOCKS_GUARD = __import__("threading").Lock()
 
 
 def _operation_lock(operation_key: str):
+    """进程内 per-key 锁（性能优化）。有界：无人等待时从 registry
+    淘汰，长跑进程不再无界增长（复审 P3）。返回 [lock, waiters]。"""
     import threading
-    lock = _OPERATION_LOCKS.get(operation_key)
-    if lock is None:
-        lock = threading.Lock()
-        _OPERATION_LOCKS[operation_key] = lock
-    return lock
+    with _OPERATION_LOCKS_GUARD:
+        entry = _OPERATION_LOCKS.get(operation_key)
+        if entry is None:
+            entry = [threading.Lock(), 0]
+            _OPERATION_LOCKS[operation_key] = entry
+        entry[1] += 1
+    return entry
+
+
+def _release_operation_lock(operation_key: str, entry) -> None:
+    with _OPERATION_LOCKS_GUARD:
+        entry[1] -= 1
+        if entry[1] <= 0 and _OPERATION_LOCKS.get(operation_key) is entry:
+            del _OPERATION_LOCKS[operation_key]
 
 
 def run_operation(principal_id: str, operation_key: str, builder,
@@ -442,35 +454,41 @@ def run_operation(principal_id: str, operation_key: str, builder,
                 operation_key=operation_key)
         if row["result_ref"]:
             return replay_operation_row(row, replay_guard)
-    with _operation_lock(operation_key):
-        # 锁内双检：前一个同 key 持有者可能刚完成
-        row = read_operation(principal_id, operation_key)
-        if row is not None:
-            if payload_hash is not None and row["payload_hash"] not in (
-                    None, payload_hash):
-                raise IdempotencyConflict(
-                    "same operation key with different payload",
-                    operation_key=operation_key)
-            if row["result_ref"]:
-                return replay_operation_row(row, replay_guard)
-        # builder 内部（service 层）完成全部可失败计算，并在最终
-        # 事务内写入 session/round/result/operation。跨进程并发时，
-        # 最终事务在写锁内查到已有 operation → 抛 OperationRaceLost，
-        # 由这里读出赢家结果返回。
-        try:
-            data = builder()
-        except OperationRaceLost as lost:
-            return replay_operation_row(lost.row, replay_guard)
-        # P1-01：所有 runtime 动作必须在自身最终事务内写入 operation
-        # 记录（业务副作用与收据原子）。builder 返回而库中无记录 =
-        # 实现遗漏，fail-fast 暴露而不是静默补写制造崩溃窗口。
-        row = read_operation(principal_id, operation_key)
-        if row is None:
-            raise RuntimeError(
-                "operation handler returned without recording its "
-                "operation row inside its final transaction: "
-                f"{operation_key}")
-        return {"data": data}
+    entry = _operation_lock(operation_key)
+    try:
+        with entry[0]:
+            # 锁内双检：前一个同 key 持有者可能刚完成
+            row = read_operation(principal_id, operation_key)
+            if row is not None:
+                if payload_hash is not None \
+                        and row["payload_hash"] not in (
+                            None, payload_hash):
+                    raise IdempotencyConflict(
+                        "same operation key with different payload",
+                        operation_key=operation_key)
+                if row["result_ref"]:
+                    return replay_operation_row(row, replay_guard)
+            # builder 内部（service 层）完成全部可失败计算，并在最终
+            # 事务内写入 session/round/result/operation。跨进程并发时，
+            # 最终事务在写锁内查到已有 operation → 抛 OperationRaceLost，
+            # 由这里读出赢家结果返回。
+            try:
+                data = builder()
+            except OperationRaceLost as lost:
+                return replay_operation_row(lost.row, replay_guard)
+            # P1-01：所有 runtime 动作必须在自身最终事务内写入
+            # operation 记录（业务副作用与收据原子）。builder 返回而
+            # 库中无记录 = 实现遗漏，fail-fast 暴露而不是静默补写
+            # 制造崩溃窗口。
+            row = read_operation(principal_id, operation_key)
+            if row is None:
+                raise RuntimeError(
+                    "operation handler returned without recording its "
+                    "operation row inside its final transaction: "
+                    f"{operation_key}")
+            return {"data": data}
+    finally:
+        _release_operation_lock(operation_key, entry)
 
 
 def record_operation_row(conn, principal_id: str, operation_key: str,

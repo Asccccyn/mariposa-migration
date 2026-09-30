@@ -857,3 +857,49 @@ class TestP102DenseWiring:
         replayed = [c for c in r2["data"]["data"]["candidates"]
                     if c.get("memory_id") == mid]
         assert replayed, "P1-02：dense 卡被自己的 replay guard 误删"
+
+
+class TestP2Fixes:
+    """P2-01 投影一致性（hold 即含 why/meaning，与 update/rebuild 一致）
+    + P2-02 plan 对外口径不再宣称 20 天。"""
+
+    def test_hold_projection_consistent_with_rebuild(self, actors):
+        """刚 hold 的 v2 记忆：why 可检索（与 update/rebuild 后一致），
+        不再有"先不可搜、rebuild 后突然可搜"的漂移。"""
+        from mariposa.memory import service as memory
+        from mariposa.retrieval import rebuild as rr
+        from mariposa.retrieval import search as rs
+        out = memory.hold(
+            actors["jiaming"], text="一致性场景正文内容",
+            memory_date="2026-09-01", date_confidence="exact",
+            original_title="一致性", categories=["daily"],
+            creation_mode="contemporaneous", raw_pending=False,
+            why_remember="独特的纪念理由蓝风铃")
+        with db.formal() as conn:
+            before = conn.execute(
+                "SELECT search_text, whitelist_body FROM"
+                " retrieval_documents WHERE memory_id=?",
+                (out["memory_id"],)).fetchone()
+            hits_before = len(rs.search(conn, "蓝风铃", 10)["hits"])
+        rr.rebuild_index()
+        with db.formal() as conn:
+            after = conn.execute(
+                "SELECT search_text, whitelist_body FROM"
+                " retrieval_documents WHERE memory_id=?",
+                (out["memory_id"],)).fetchone()
+            hits_after = len(rs.search(conn, "蓝风铃", 10)["hits"])
+        assert before["search_text"] == after["search_text"], \
+            "P2-01：hold 与 rebuild 的投影内容不一致"
+        assert before["whitelist_body"] == after["whitelist_body"]
+        assert hits_before == hits_after == 1
+
+    def test_plan_api_no_stale_20day_wording(self, actors):
+        from mariposa.capabilities import registry as reg
+        created = reg.invoke(actors["jiaming"], "plan.create",
+                             {"title": "口径计划", "content": "x"}, None)
+        pid = created["data"]["plan_id"]
+        got = reg.invoke(actors["jiaming"], "plan.get",
+                         {"plan_id": pid}, None)
+        assert "20" not in got["data"]["forgetting_note"], \
+            f"P2-02：对外仍宣称 20 天口径：{got['data']['forgetting_note']}"
+        assert "CORE" in got["data"]["forgetting_note"]

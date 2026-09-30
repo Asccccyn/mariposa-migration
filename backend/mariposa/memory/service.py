@@ -166,10 +166,11 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
             "?,?,2)",
             (memory_id, why_remember, principal_id, canonical_hash(payload),
              now, original_title, text))
-        # v2 投影白名单：只索引事件正文；标题/心情/话语/回忆一律不进
-        projection.upsert(conn, memory_id, 1, "full",
-                          projection.build_full(text, None),
-                          whitelist_body=projection.normalize_search_text(text))
+        # v2 投影：走统一 full 投影入口（P2-01——hold/update/meaning/
+        # rebuild 一致：正文 + why + 当前 meaning 层；whitelist 只含
+        # 事件正文。不再出现"刚 hold 时 why 搜不到、rebuild 后又能
+        # 搜到"的投影内容漂移）
+        rebuild_full_projection(conn, memory_id)
     else:
         conn.execute(
             "INSERT INTO memory_versions(memory_id, version_no, representation,"
