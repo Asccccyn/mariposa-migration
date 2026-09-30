@@ -674,3 +674,100 @@ class TestP101ActionOperationAtomicity:
                             {"session_id": sid, "outcome": "cancelled",
                              "operation_id": "idem-p1-crash"}, None)
         assert r["data"]["data"]["status"] == "CANCELLED"
+
+
+class TestP103LeaseFencing:
+    """P1-03：过期 worker 复活后不得破坏接管方的成功证据。"""
+
+    def _mkbatch(self, status="running", sha="sha-take"):
+        import uuid as _u
+        bid = f"sib_{_u.uuid4().hex[:8]}"
+        with db.formal() as c:
+            c.execute(
+                "INSERT INTO source_import_batches(batch_id, provider,"
+                " status, original_filename, original_bytes, sha256,"
+                " raw_path, parser_version, import_started_at, imported_by,"
+                " lease_token) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (bid, "claude", status, "f.json", 10, sha, "",
+                 "p1", "2026-09-29T00:00:00Z", "jiaming", "lease-A"))
+        return bid
+
+    def test_stale_worker_cannot_destroy_takeover_success(self, actors):
+        """A 卡死→B 接管并完成→A 复活调 _fail_batch：
+        B 的快照/消息/状态/metadata 全部完好。"""
+        from mariposa.source import importer
+        bid = self._mkbatch(status="running")
+        # 模拟 B 接管：换 lease + 完成发布（含快照与已发布消息）
+        with db.formal() as c:
+            c.execute(
+                "UPDATE source_import_batches SET lease_token='lease-B',"
+                " status='completed' WHERE batch_id=?", (bid,))
+            c.execute(
+                "INSERT INTO source_conversations(id, provider,"
+                " provider_conversation_id, first_import_batch_id,"
+                " last_import_batch_id) VALUES('sc-f1','claude','convF',"
+                " ?, ?)", (bid, bid))
+            c.execute(
+                "INSERT INTO source_conversation_snapshots(snapshot_id,"
+                " conversation_id, batch_id, created_at)"
+                " VALUES('snap-f1','sc-f1',?, '2026-09-29T00:00:00Z')",
+                (bid,))
+            c.execute(
+                "INSERT INTO source_snapshot_members(snapshot_id,"
+                " provider_message_id, sequence, content_hash)"
+                " VALUES('snap-f1','fm-1',1,'h1')")
+            c.execute(
+                "INSERT INTO source_messages(id, conversation_id, provider,"
+                " provider_conversation_id, provider_message_id, raw_sender,"
+                " normalized_sender, text, sequence, import_batch_id,"
+                " published, content_hash)"
+                " VALUES('sm-f1','sc-f1','claude','convF','fm-1','human',"
+                " 'human','B 完成的正文',1,?,1,'h1')", (bid,))
+        # A（旧 lease）复活，尝试失败定稿
+        with pytest.raises(importer.LeaseLost):
+            importer._fail_batch(bid, "claude", "stale worker crash",
+                                 {"x": 1}, lease="lease-A")
+        # B 的一切完好
+        with db.formal() as c:
+            b = c.execute(
+                "SELECT status, lease_token FROM source_import_batches"
+                " WHERE batch_id=?", (bid,)).fetchone()
+            snaps = c.execute(
+                "SELECT COUNT(*) n FROM source_conversation_snapshots"
+                " WHERE batch_id=?", (bid,)).fetchone()["n"]
+            members = c.execute(
+                "SELECT COUNT(*) n FROM source_snapshot_members"
+                " WHERE snapshot_id='snap-f1'").fetchone()["n"]
+            msgs = c.execute(
+                "SELECT COUNT(*) n FROM source_messages"
+                " WHERE import_batch_id=? AND published=1",
+                (bid,)).fetchone()["n"]
+        assert b["status"] == "completed" and b["lease_token"] == "lease-B"
+        assert snaps == 1 and members == 1 and msgs == 1, \
+            "P1-03：旧 worker 毁掉了接管方的成功证据"
+
+    def test_takeover_issues_new_lease_token(self, actors, tmp_path):
+        """真实 _claim_batch 接管路径：接管生成新 token，旧 token 失效。"""
+        from mariposa.source import importer
+        import json as _json
+        bid = self._mkbatch(status="running")
+        # 把 started_at 拨到过期
+        with db.formal() as c:
+            c.execute(
+                "UPDATE source_import_batches SET import_started_at='2020-01-01T00:00:00Z'"
+                " WHERE batch_id=?", (bid,))
+        f = tmp_path / "takeover.json"
+        f.write_text(_json.dumps([{"uuid": "c-t1", "chat_messages": [
+            {"uuid": "t-1", "sender": "human",
+             "created_at": "2026-07-01T00:00:00.000Z",
+             "content": [{"type": "text", "text": "接管正文"}]}]}],
+            ensure_ascii=False), encoding="utf-8")
+        # _claim_batch 需要 staged 文件存在（sha256 读取）
+        r = importer._claim_batch("claude", "sha-take", f, "jiaming", "t.json")
+        new_bid, reused, lease = r
+        assert new_bid == bid and reused is True
+        assert lease and lease != "lease-A", "接管必须换发新 fencing token"
+        # 旧 token 立即失效
+        with db.formal() as c:
+            with pytest.raises(importer.LeaseLost):
+                importer._assert_lease(c, bid, "lease-A")
