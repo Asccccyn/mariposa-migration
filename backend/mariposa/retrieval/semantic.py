@@ -93,9 +93,13 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     if cached:
         return True
     text_row = conn.execute(
-        "SELECT search_text FROM retrieval_documents WHERE memory_id=?",
-        (memory_id,)).fetchone()
-    vec = embed([text_row["search_text"]])[0]
+        "SELECT whitelist_body, search_text FROM retrieval_documents"
+        " WHERE memory_id=?", (memory_id,)).fetchone()
+    # P1-02：v1.7 语料 = 事件正文（whitelist_body，WIDE/MID/CORE 全部
+    # 允许 event_text）；meaning/why 不再进入向量，dense 不再绕过
+    # 阶段字段矩阵。旧数据无 whitelist_body 时回退整投影（行为同旧）。
+    corpus = text_row["whitelist_body"] or text_row["search_text"]
+    vec = embed([corpus])[0]
     from datetime import datetime, timezone
     conn.execute(
         "INSERT OR REPLACE INTO memory_embeddings(memory_id, model, dim,"
@@ -149,8 +153,10 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
     np = _np()
     qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
     scored = []
-    score_sql = ("SELECT e.memory_id, e.vector, e.projection_hash, rd.search_text_hash,"
-                 " rd.projection_kind, m.compression_state FROM memory_embeddings e"
+    score_sql = ("SELECT e.memory_id, e.vector, e.projection_hash,"
+                 " rd.search_text_hash, rd.projection_kind,"
+                 " m.compression_state, rd.whitelist_body,"
+                 " m.current_version_no FROM memory_embeddings e"
                  " JOIN retrieval_documents rd ON rd.memory_id = e.memory_id"
                  " JOIN memories m ON m.memory_id = e.memory_id"
                  " WHERE e.model=? AND m.visibility='active'"
@@ -168,6 +174,8 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
                                else "semantic"),
                 "projection_kind": r["projection_kind"],
                 "score": round(score, 4),
+                "whitelist_body": r["whitelist_body"],
+                "content_version": str(r["current_version_no"]),
             })
     scored.sort(key=lambda x: -x["score"])
     # 相对间距窗：只保留与最优结果显著同层（>= best - RELATIVE_WINDOW）的命中，

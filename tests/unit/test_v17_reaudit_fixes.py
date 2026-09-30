@@ -771,3 +771,89 @@ class TestP103LeaseFencing:
         with db.formal() as c:
             with pytest.raises(importer.LeaseLost):
                 importer._assert_lease(c, bid, "lease-A")
+
+
+class TestP102DenseWiring:
+    """P1-02：dense 路遵守 v1.7 字段矩阵，卡片携带版本与证据。"""
+
+    def _enable_dense(self, monkeypatch):
+        from mariposa import config as cfg
+        from mariposa.retrieval import semantic
+
+        monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "local_bge_zh")
+
+        def fake_embed(texts):
+            import numpy as np
+            out = []
+            for t in texts:
+                # 伪向量：含目标词 → [1, 0]；查询含目标词 → [1, 0]
+                compact = t.replace(" ", "")
+                v = [1.0, 0.0] if "极光" in compact else [0.0, 1.0]
+                out.append(np.asarray(v, dtype=np.float32))
+            return out
+
+        monkeypatch.setattr(semantic, "embed", fake_embed)
+
+    def test_dense_ignores_meaning_and_respects_core(self, actors,
+                                                     monkeypatch):
+        """CORE 记忆的 meaning 含目标词、正文不含 → dense 不召回。"""
+        self._enable_dense(monkeypatch)
+        from mariposa.capabilities import registry as reg
+        from mariposa.memory import service as memory
+        from mariposa.memory import listing as mlisting
+        out = memory.hold(actors["jiaming"], text="一段完全无关的日常叙述",
+                          memory_date="2026-09-01",
+                          date_confidence="exact", original_title="无关",
+                          categories=["daily"],
+                          creation_mode="contemporaneous", raw_pending=False)
+        mlisting.meanings_append(actors["jiaming"].principal_id,
+                                 out["memory_id"], "我们聊过极光与雪")
+        with db.formal() as conn:
+            conn.execute(
+                "UPDATE memories SET held_at='2026-01-01T00:00:00+00:00'"
+                " WHERE memory_id=?", (out["memory_id"],))
+        r = reg.invoke(actors["jiaming"], "memory.recall.start",
+                       {"query_plan": {
+                           "original_request": "找极光",
+                           "channels": ["event"],
+                           "semantic_query": "极光",
+                           "lexical_terms": ["极光"]}}, None)
+        candidates = r["data"]["candidates"]
+        assert all(c.get("memory_id") != out["memory_id"] for c in                    candidates), \
+            "P1-02：CORE 记忆经 meaning 的语义相似度被 dense 拉回"
+
+    def test_dense_card_has_version_field_and_evidence(self, actors,
+                                                       monkeypatch):
+        """正文含目标词 → dense 召回，且卡携带版本、event_text 字段、
+        真实 snippet；同 operation 重放不被 guard 删。"""
+        self._enable_dense(monkeypatch)
+        from mariposa.capabilities import registry as reg
+        from mariposa.memory import service as memory
+        out = memory.hold(actors["jiaming"], text="深夜山顶看见极光铺满天空",
+                          memory_date="2026-09-01",
+                          date_confidence="exact", original_title="极光夜",
+                          categories=["daily"],
+                          creation_mode="contemporaneous", raw_pending=False)
+        mid = out["memory_id"]
+        args = {"query_plan": {
+            "original_request": "找极光", "channels": ["event"],
+            "semantic_query": "极光", "lexical_terms": ["zzz不存在的词"]},
+            "operation_id": "op-dense-1"}
+        r1 = reg.invoke(actors["jiaming"], "memory.recall.start", args, None)
+        cards = [c for c in r1["data"]["data"]["candidates"]
+                 if c.get("memory_id") == mid]
+        assert cards, "前置：dense 应召回正文命中的记忆"
+        card = cards[0]
+        assert card["content_version"] == "1", \
+            "dense 卡必须携带真实 revision（replay/receipt 校验依据）"
+        assert "event_text" in card["matched_fields"]
+        ev = card["evidence"][0]
+        assert ev["evidence_kind"] == "authored_event"
+        assert "极" in (ev.get("snippet") or "").replace(" ", ""), \
+            "dense 卡证据必须携带真实事件正文片段"
+        # 同 operation 重放：dense 卡不被 guard 删除
+        r2 = reg.invoke(actors["jiaming"], "memory.recall.start", args, None)
+        assert r2["data"].get("idempotent_replay") is True
+        replayed = [c for c in r2["data"]["data"]["candidates"]
+                    if c.get("memory_id") == mid]
+        assert replayed, "P1-02：dense 卡被自己的 replay guard 误删"
