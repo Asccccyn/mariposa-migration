@@ -36,7 +36,7 @@ class TypeSafeJevJudge(base.JudgeProvider):
             os.environ.get("MARIPOSA_TYPESAFE_API_KEY", "").strip()
             or os.environ.get("TYPESAFE_API_KEY", "").strip()
         )
-        self._allowed_data = os.environ.get(
+        self._allowed_data_raw = os.environ.get(
             "MARIPOSA_RECALL_JUDGE_ALLOWED_DATA", "").strip()
         self.model_id = config.RECALL_JUDGE_MODEL_ID
         base_url = (
@@ -45,9 +45,16 @@ class TypeSafeJevJudge(base.JudgeProvider):
             or "https://api.typesafe.ai"
         ).rstrip("/")
         self.endpoint = f"{base_url}/v1/systemone"
-        if not self._allowed_data:
-            # 原文可交给周家明 ≠ 默认允许外发到另一供应商。
-            self._disabled_reason = "allowed_data_policy_missing"
+        # S15：显式 provider data profile——逐字段外发许可。
+        # 未知值 fail closed（比"缺失即禁用"更强：拼错也禁）。
+        self._data_profile = self._parse_data_profile(self._allowed_data_raw)
+        if self._data_profile is None:
+            # 原文可交给周家明 ≠ 默认允许外发到另一供应商；
+            # 且 profile 非法（未知字段）同样禁用
+            self._disabled_reason = (
+                "allowed_data_profile_invalid"
+                if self._allowed_data_raw else
+                "allowed_data_policy_missing")
 
     # ------------------------------------------------------------------
     # Public provider contract
@@ -190,11 +197,62 @@ class TypeSafeJevJudge(base.JudgeProvider):
     # ------------------------------------------------------------------
     # Payload normalization / cache fingerprints
 
+    #: S15 合法外发字段集（provider data profile）
+    PROFILE_FIELDS = frozenset({
+        "event_excerpt",   # 事件正文片段
+        "title_cue",       # 标题提示
+        "word_excerpt",    # our_words 原话片段
+        "source_excerpt",  # 原文（raw/source）片段
+        "structured_metadata",  # 分类/日期等结构化元数据
+    })
+
+    @staticmethod
+    def _parse_data_profile(raw: str):
+        """解析 ALLOWED_DATA → 许可集；空=None（禁用）；含未知值=None
+        （fail closed）。兼容精确映射 event_excerpt_only。"""
+        if not raw:
+            return None
+        if raw == "event_excerpt_only":
+            return frozenset({"event_excerpt"})
+        fields = {x.strip() for x in raw.split(",") if x.strip()}
+        if not fields or not fields <= TypeSafeJevJudge.PROFILE_FIELDS:
+            return None
+        return frozenset(fields)
+
+    def _outbound_excerpt(self, candidate: dict, excerpt: str,
+                          truncated: bool) -> tuple[str, bool]:
+        """S15：按候选来源类型核对对应字段的外发许可；
+        无许可的字段不外发（置空），不是删候选。"""
+        if not excerpt:
+            return excerpt, truncated
+        channel = candidate.get("channel") or "event"
+        fields = candidate.get("matched_fields") or []
+        if channel == "word":
+            need = "word_excerpt"
+        elif channel == "raw" or channel == "source":
+            need = "source_excerpt"
+        elif "original_title" in fields and "event_text" not in fields:
+            need = "title_cue"
+        else:
+            need = "event_excerpt"
+        if need in (self._data_profile or frozenset()):
+            return excerpt, truncated
+        return "", truncated
+
     def _query_projection(self, query_plan: dict) -> dict:
+        """S09/S18：实际检索目标与全部约束进入投影与缓存指纹——
+        semantic_query/exact_phrases/负条件/时间轴/intent 任一变化
+        都构成新判断，不复用旧分。"""
         return {
             "original_request": query_plan.get("original_request", ""),
+            "semantic_query": query_plan.get("semantic_query", ""),
             "explicit_constraints": query_plan.get(
                 "explicit_constraints", {}),
+            "explicit_negative_constraints": query_plan.get(
+                "explicit_negative_constraints", {}),
+            "exact_phrases": query_plan.get("exact_phrases", []),
+            "temporal_axis": query_plan.get("temporal_axis"),
+            "intent": query_plan.get("intent"),
             "evidence_requirement": query_plan.get("evidence_requirement"),
         }
 
@@ -212,13 +270,22 @@ class TypeSafeJevJudge(base.JudgeProvider):
 
     def _candidate_projection(self, candidate: dict) -> dict:
         excerpt, truncated = self._candidate_excerpt(candidate)
+        excerpt, truncated = self._outbound_excerpt(
+            candidate, excerpt, truncated)
+        matched = candidate.get("matched_fields", [])
+        if ("structured_metadata" not in (self._data_profile or frozenset())
+                and matched):
+            # 无结构化许可：仍外发命中字段名（可核验出处，S09），
+            # 但不带其内容载荷——当前投影本就只含字段名列表
+            pass
         return {
-            "candidate_ref": candidate["candidate_ref"],
+            "candidate_ref": candidate.get("candidate_ref")
+            or candidate["resource_ref"],
             "channel": candidate.get("channel"),
             "excerpt": excerpt,
             "truncated": truncated,
             "matched_by": candidate.get("matched_by", []),
-            "matched_fields": candidate.get("matched_fields", []),
+            "matched_fields": matched,
         }
 
     def _payload(self, query_plan: dict, candidates: list[dict]) -> dict:
