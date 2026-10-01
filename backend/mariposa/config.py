@@ -112,6 +112,11 @@ RECALL_RELATION_NEIGHBOR_CAP = 10
 RECALL_LEXICAL_K = 20
 RECALL_DENSE_K = 20
 RECALL_CANDIDATE_UNION_CAP = 60
+# S19：scope 候选池安全阀——词法路 keyset 分页本可取尽全库，
+# 此上限只防失控规模（内存/时延）；触顶时 coverage 诚实标
+# partial_pool_truncated，不签 complete_within_scope
+RECALL_POOL_MAX_BUCKETS = int(
+    os.environ.get("MARIPOSA_RECALL_POOL_MAX_BUCKETS", "20000"))
 RECALL_JUDGE_CANDIDATE_CAP = 40
 RECALL_JUDGE_HTTP_ATTEMPTS = 40
 RECALL_DELIVERY_LIMIT = 3
