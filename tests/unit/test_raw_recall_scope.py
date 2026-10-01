@@ -110,11 +110,12 @@ class TestScopedRaw:
             "lexical_terms": ["窗帘"],
             "evidence_requirement": "verbatim_required",
             "raw_fallback": "when_evidence_insufficient"}})
-        # words 只有 paraphrase：候选交付但未满足原话等级，raw 补查已执行
-        assert packet["coverage"].get("raw") == "complete_within_scope"
-        raw_hits = [c for c in packet["candidates"] if c["channel"] == "raw"]
-        assert raw_hits
-        assert raw_hits[0]["evidence"][0]["evidence_kind"] == "raw_verbatim"
+        # 闭环复审 P1-2：第一轮不查 raw（S12/S13）——原文升级唯一
+        # 通路是 round2 门禁；证据不足以 continuation 提示
+        assert packet["coverage"].get("raw") == "round2_only"
+        assert not [c for c in packet["candidates"]
+                    if c["channel"] == "raw"], "第一轮不得直出 raw 候选"
+        assert packet["continuation"]["action"] == "round2_raw"
 
     def test_safe02_raw_system_marker_is_data(self, actors):
         """SAFE-02：授权 raw 中 system 字样仍是 raw_verbatim 资料。"""

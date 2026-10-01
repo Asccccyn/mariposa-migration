@@ -80,6 +80,13 @@ class TypeSafeJevJudge(base.JudgeProvider):
 
         for candidate in candidates[:config.RECALL_JUDGE_CANDIDATE_CAP]:
             candidate_projection = self._candidate_projection(candidate)
+            # 闭环复审 P1-5：必要证据段全空（profile 剥空/无来源）→
+            # 不发送该候选、标 unavailable——没有证据就没有有效判断
+            if not candidate_projection["segments"]:
+                items_by_ref[candidate.get("candidate_ref")
+                             or candidate["resource_ref"]] = \
+                    self._unavailable_item(candidate)
+                continue
             identity = cache.rerank_identity(
                 query_projection=query_projection,
                 candidate_projection=candidate_projection,
@@ -319,7 +326,8 @@ class TypeSafeJevJudge(base.JudgeProvider):
             segments.append({"field": field, "roles": roles,
                              "text": text, "truncated": truncated})
 
-        is_word_target = channel in ("word",) or "our_words" in fields
+        is_word_channel = channel in ("words", "word")
+        is_word_target = is_word_channel or "our_words" in fields
         event_body = row.get("whitelist_body") or ""
         title = row.get("original_title") or ""
         match_snippet, match_trunc = self._candidate_excerpt(candidate)
@@ -329,9 +337,21 @@ class TypeSafeJevJudge(base.JudgeProvider):
                 match_snippet, match_trunc)
             return segments
 
-        if is_word_target:
+        if is_word_channel:
+            # words 专项（intent=find_words）：话语本体即目标——
+            # match+primary 同段（r2 S09）
             add("our_words", ["match_evidence", "primary_evidence"],
                 match_snippet, match_trunc)
+            return segments
+
+        if is_word_target and not is_word_channel:
+            # 闭环复审 P1-4：普通 recall 中 our_words 只是命中线索——
+            # 话语段标 match_evidence，同时必须附当前 event_text 作为
+            # event_evidence（事件事实主体不得缺失；r2 中秋反例同型）
+            add("our_words", ["match_evidence"], match_snippet,
+                match_trunc)
+            ev_text, ev_tr = _excerpt(event_body, anchors=anchors)
+            add("event_text", ["event_evidence"], ev_text, ev_tr)
             return segments
 
         # 普通 memory 候选（r2 S09）：
@@ -356,8 +376,15 @@ class TypeSafeJevJudge(base.JudgeProvider):
         return segments
 
     def _candidate_projection(self, candidate: dict) -> dict:
-        """r2：CandidateEnvelope v2 投影（segments+roles+metadata）。"""
+        """r2：CandidateEnvelope v2 投影（segments+roles+metadata）。
+
+        闭环复审 P1-5：structured_metadata 无许可时元数据字段
+        不外发（null）；必要证据段全空 → segments 为空列表，
+        调用方（judge）据此把该候选标 unavailable，不产生有效判断。
+        """
         segments = self._candidate_segments(candidate)
+        meta_grant = "structured_metadata" in (
+            self._data_profile or frozenset())
         return {
             "schema_version": "candidate-envelope-v2",
             "candidate_ref": candidate.get("candidate_ref")
@@ -367,12 +394,14 @@ class TypeSafeJevJudge(base.JudgeProvider):
             "segments": segments,
             "matched_by": candidate.get("matched_by", []),
             "matched_fields": candidate.get("matched_fields", []),
-            "metadata": {
-                "memory_id": candidate.get("memory_id"),
-                "word_id": candidate.get("word_id"),
-                "speaker": candidate.get("speaker"),
-                "event_date": candidate.get("memory_date"),
-            },
+            "metadata": (
+                {"memory_id": candidate.get("memory_id"),
+                 "word_id": candidate.get("word_id"),
+                 "speaker": candidate.get("speaker"),
+                 "event_date": candidate.get("memory_date")}
+                if meta_grant else
+                {"memory_id": None, "word_id": None, "speaker": None,
+                 "event_date": None}),
         }
 
     def _payload(self, query_plan: dict, candidates: list[dict]) -> dict:

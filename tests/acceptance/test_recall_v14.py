@@ -336,8 +336,10 @@ class TestRawx:
             "lexical_terms": ["目标词"],
             "evidence_requirement": "verbatim_required",
             "raw_fallback": "when_evidence_insufficient"}})
-        assert p["coverage"].get("raw") == "complete_within_scope"
-        assert any(c["channel"] == "raw" for c in p["candidates"])
+        # 闭环复审 P1-2：第一轮不查 raw——升级唯一通路是 round2 门禁
+        assert p["coverage"].get("raw") == "round2_only"
+        assert not any(c["channel"] == "raw" for c in p["candidates"])
+        assert p["continuation"]["action"] == "round2_raw"
 
     def test_rawx02(self):
         self._raw(600, target_i=30)

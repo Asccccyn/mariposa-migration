@@ -51,12 +51,25 @@ def _seed_source(text="原文里的崧蓝染色记忆"):
 
 
 def _start(actors, terms=("崧蓝",), op="op-w4-s"):
+    """Round1 场景：verbatim 要求下仅有 paraphrase 话语——真实
+    证据不足（requirement_met=False），round2 升级合法。"""
     return registry.invoke(actors["jiaming"], "memory.recall.start",
                            {"query_plan": {
-                               "original_request": "找崧蓝",
-                               "channels": ["event"],
-                               "lexical_terms": list(terms)},
+                               "original_request": "我当时的原话",
+                               "channels": ["words"],
+                               "lexical_terms": list(terms),
+                               "evidence_requirement":
+                                   "verbatim_required"},
                             "operation_id": op}, None)
+
+
+def _seed_word(principal, text="复述：崧蓝染色的傍晚"):
+    return memory.hold(principal, text="崧蓝事件正文", memory_date="2026-09-25",
+                       date_confidence="exact", original_title="w",
+                       categories=["daily"],
+                       creation_mode="contemporaneous", raw_pending=False,
+                       our_words=[{"speaker": "qiaosheng", "text": text,
+                                   "expression_kind": "paraphrase"}])
 
 
 def _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT", op="op-w4-r2"):
@@ -112,7 +125,7 @@ class TestRound2FullChain:
         raw 候选经同一层 Jev 交付（≤3），事务留痕 kind='raw'。"""
         old = _grant_source_excerpt(monkeypatch)
         try:
-            hold(actors["jiaming"], "正文里的崧蓝染色记忆")
+            _seed_word(actors["jiaming"], "复述：崧蓝染色的傍晚")
             r1 = _start(actors)
             sid = r1["data"]["data"]["recall_session_id"]
             _seed_source()
@@ -127,8 +140,11 @@ class TestRound2FullChain:
                     "SELECT kind FROM recall_rounds WHERE session_id=?",
                     (sid,))]
                 receipt = store.read_round1_receipt(conn, sid, 1)
-            assert "raw" in kinds and "memory" in kinds
+            assert "raw" in kinds and "words" in kinds
             assert receipt and receipt["judged_count"] > 0
+            facts = receipt["coverage"].get("_first_round_facts")
+            assert facts and facts["requirement_met"] is False, \
+                "P1-3：升级依据是真实证据不足事实"
         finally:
             from mariposa import config as cfg
             cfg.RECALL_JUDGE_PROVIDER = old
@@ -169,7 +185,7 @@ class TestRound2FullChain:
                                                 monkeypatch):
         old = _grant_source_excerpt(monkeypatch)
         try:
-            hold(actors["jiaming"], "事实支持场景崧蓝正文")
+            _seed_word(actors["jiaming"], "复述：事实支持场景的崧蓝")
             r1 = _start(actors)
             sid = r1["data"]["data"]["recall_session_id"]
             # 闭集外
@@ -201,7 +217,7 @@ class TestRound2FullChain:
     def test_same_operation_replays(self, actors, monkeypatch):
         old = _grant_source_excerpt(monkeypatch)
         try:
-            hold(actors["jiaming"], "重放场景崧蓝正文")
+            _seed_word(actors["jiaming"], "复述：重放场景的崧蓝")
             r1 = _start(actors)
             sid = r1["data"]["data"]["recall_session_id"]
             _seed_source()
@@ -222,7 +238,7 @@ class TestRound2FullChain:
         """S13-5：同 burst 已有 raw 轮——换 operation_id 也不无界重跑。"""
         old = _grant_source_excerpt(monkeypatch)
         try:
-            hold(actors["jiaming"], "防重跑场景崧蓝正文")
+            _seed_word(actors["jiaming"], "复述：防重跑场景的崧蓝")
             r1 = _start(actors)
             sid = r1["data"]["data"]["recall_session_id"]
             _seed_source()
