@@ -128,7 +128,12 @@ class TestRET:
                     " memory_id=?", (h["memory_id"],)).fetchone()
             models = {r["model"]: r["projection_hash"] for r in rows}
             assert models["__late_job__"] == "stale"  # 迟到行从未被安装
-            assert models.get("BAAI/bge-small-zh-v1.5") == proj["search_text_hash"]
+            # WP03：有效向量的 model 身份=名|语料 generation
+            assert models.get(
+                "BAAI/bge-small-zh-v1.5|eventbody-v1") == proj[
+                "search_text_hash"]
+            assert models.get(
+                "BAAI/bge-small-zh-v1.5|eventbody-v1") == proj["search_text_hash"]
             assert h["memory_id"] in {x["memory_id"] for x in hits}  # 自愈用新向量
         finally:
             _cfg.SEMANTIC_PROVIDER = old
