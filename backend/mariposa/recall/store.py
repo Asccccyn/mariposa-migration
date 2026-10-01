@@ -250,6 +250,37 @@ def issue_raw_continuation(conn, *, session_id: str, revision: int,
     return token
 
 
+def replace_raw_continuation(conn, *, session_id: str, revision: int,
+                             burst_no: int, expect_token: str,
+                             next_offset: int) -> str | None:
+    """自审（2026-10-01）：翻页签发的 CAS——只有仍持有被消费 token
+    的请求才能重签（并发双花时恰一赢家）；输家返回 None。
+
+    校验（计算前）与签发（最终事务）之间无锁，commit-at-end 语义：
+    竞态输家在此回滚拒 CONTINUATION_INVALID；崩溃在事务前的重试
+    不受影响（行未被动过，旧 token 仍有效）。
+    """
+    token = uuid.uuid4().hex
+    cur = conn.execute(
+        "UPDATE recall_raw_continuations SET token=?, next_offset=?,"
+        " issued_at=? WHERE session_id=? AND revision=? AND burst_no=?"
+        " AND token=?",
+        (token, next_offset, _now(), session_id, revision, burst_no,
+         expect_token))
+    return token if cur.rowcount == 1 else None
+
+
+def clear_raw_continuation_if(conn, *, session_id: str, revision: int,
+                              burst_no: int,
+                              expect_token: str) -> bool:
+    """翻尽清游标（CAS：仅当仍持有被消费 token 时清）。"""
+    cur = conn.execute(
+        "DELETE FROM recall_raw_continuations WHERE session_id=?"
+        " AND revision=? AND burst_no=? AND token=?",
+        (session_id, revision, burst_no, expect_token))
+    return cur.rowcount == 1
+
+
 def read_raw_continuation(conn, session_id: str, revision: int,
                           burst_no: int) -> dict | None:
     row = conn.execute(
@@ -257,14 +288,6 @@ def read_raw_continuation(conn, session_id: str, revision: int,
         " AND revision=? AND burst_no=?",
         (session_id, revision, burst_no)).fetchone()
     return dict(row) if row else None
-
-
-def clear_raw_continuation(conn, session_id: str, revision: int,
-                           burst_no: int) -> None:
-    conn.execute(
-        "DELETE FROM recall_raw_continuations WHERE session_id=?"
-        " AND revision=? AND burst_no=?",
-        (session_id, revision, burst_no))
 
 
 def record_round(conn, session_id: str, burst_no: int,
