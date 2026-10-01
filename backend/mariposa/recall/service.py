@@ -10,11 +10,14 @@ runtime 库；检索 = 查询校验 → 授权范围内 BM25+向量粗召回 →
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 
 from .. import config, db
 from ..errors import Forbidden, NotFound
+from ..memory import service as _mem_svc
+canonical_hash = _mem_svc.canonical_hash
 from ..retrieval import evidence as evidence_mod
 from ..retrieval import query_plan as qp
 from ..retrieval import semantic, selection, words as words_mod
@@ -422,15 +425,32 @@ def _run_round_compute(session: dict, plan: dict,
         "token_count": config.RECALL_TOKENIZER,
     }
     packet = _enforce_output_budget(packet)
+    # S13：judge 统计（Round1 回执依据——attempts 的 completed 不算）
+    judged_n = sum(
+        1 for i in (judge_result.items if judge_result else [])
+        if i.evaluation_status == "evaluated")
+    unavailable_n = sum(
+        1 for i in (judge_result.items if judge_result else [])
+        if i.evaluation_status != "evaluated")
     effects = {
         "candidates": candidate_rows,
         "receipts": receipts,
         "session_status": status,
         "search_status": search_status,
+        "judge_stats": {
+            "judged": judged_n,
+            "unavailable": unavailable_n,
+            "unjudged": max(0, unjudged),
+            "methods": {k: v for k, v in coverage.items()
+                        if k in ("event", "dense_event", "words_lexical",
+                                 "judge", "raw")},
+        },
         # v1.7 A05：首轮真实执行完成（无论有无候选）即签发 ROUND1_COMPLETE
         # 回执——这是 Round 2 gate 的服务端事实；故障/降级轮不签发
         "mark_round1_complete": search_status not in (
             "UNAVAILABLE", "ERROR", "DEGRADED"),
+        "delivery_action": sel["delivery_action"],
+        "coverage": coverage,
     }
     return packet, effects
 
@@ -562,11 +582,30 @@ def _with_round_preview(session: dict) -> dict:
 
 
 def _commit_round_effects(conn, session_id: str, revision: int,
-                          effects: dict) -> None:
-    """最终事务内的本轮派生行写入（candidates/receipts/状态/回执）。"""
+                          effects: dict, *, plan: dict | None = None,
+                          scope: str = "", kind: str = "memory") -> None:
+    """最终事务内的本轮派生行写入（candidates/receipts/状态/回执/
+    Round1 成功回执——S13）。"""
     store.upsert_candidates(conn, session_id, effects["candidates"],
                             revision)
     store.add_receipts(conn, session_id, effects["receipts"])
+    if plan is not None:
+        js = effects.get("judge_stats") or {}
+        store.record_round1_receipt(
+            conn, session_id=session_id, revision=revision,
+            plan_hash=canonical_hash(plan),
+            scope_hash=hashlib.sha256(
+                (session_id + ":" + (scope or "")).encode()).hexdigest(),
+            policy_version=config.RECALL_POLICY_VERSION,
+            round_kind=kind,
+            methods=js.get("methods") or {},
+            coverage=effects.get("coverage") or {},
+            candidate_set_hash=canonical_hash(
+                [c["candidate_ref"] for c in effects["candidates"]]),
+            judged_count=js.get("judged", 0),
+            unavailable_count=js.get("unavailable", 0),
+            unjudged_count=js.get("unjudged", 0),
+            delivery_action=effects.get("delivery_action", ""))
     cur = conn.execute(
         "UPDATE recall_sessions SET status=?, updated_at=?"
         " WHERE session_id=? AND current_revision=?",
@@ -614,8 +653,11 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     op_ctx["payload_hash"], packet)
             store.insert_session(conn, draft)
             budget.ensure_round_available_conn(conn, sid, draft)
-            store.record_round(conn, sid, burst_no=1, operation_key=op_key)
-            _commit_round_effects(conn, sid, 1, effects)
+            store.record_round(conn, sid, burst_no=1,
+                               operation_key=op_key, kind="memory")
+            _commit_round_effects(conn, sid, 1, effects, plan=plan,
+                                  scope=draft["conversation_scope"],
+                                  kind="memory")
             store.record_attempt(conn, sid, op_key or _op_id("round"), 1, 1,
                                  "retrieve", "completed")
             conn.execute("COMMIT")
@@ -673,9 +715,11 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     bursts_used=bursts_used)
                 budget.ensure_round_available_conn(conn, sid, vsession)
                 store.record_round(conn, sid, burst_no=burst_no,
-                                   operation_key=op_key)
+                                   operation_key=op_key, kind="memory")
                 _commit_round_effects(conn, sid, expected_revision + 1,
-                                      effects)
+                                      effects, plan=plan,
+                                      scope=session["conversation_scope"],
+                                      kind="memory")
                 store.record_attempt(conn, sid, op_key or _op_id("round"),
                                      expected_revision + 1, burst_no,
                                      "retrieve", "completed")
@@ -1195,3 +1239,206 @@ def revalidate_replayed(fn_name: str, saved: dict,
     if isinstance(out.get("budget"), dict):
         out["budget"] = budget.snapshot(session)
     return out
+
+
+# ---------- Round 2（S13 完整门禁 + commit-at-end，WP04 重写） ----------
+
+#: S13 冻结闭集
+_ROUND2_REASONS = frozenset({
+    "NO_DELIVERABLE_CANDIDATE", "EVIDENCE_INSUFFICIENT",
+    "VERBATIM_REQUIRED_NOT_MET", "SOURCE_DISAMBIGUATION_NEEDED",
+    "EXPLICIT_REJECT_AFTER_DELIVERY"})
+
+
+def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
+    """六条件全部以服务端事实核验（S13）。返回 (allowed, gate 详情)。"""
+    sid = session["session_id"]
+    rev = session["current_revision"]
+    gate: dict = {"reason_in_closed_set": reason in _ROUND2_REASONS}
+
+    # 3. 当前范围的有效 Round1 完成事实
+    receipt = store.read_round1_receipt(conn, sid, rev)
+    gate["round1_receipt"] = receipt is not None
+    if receipt is not None:
+        gate["unjudged_zero"] = receipt["unjudged_count"] == 0
+        empty_input = (receipt["judged_count"] == 0
+                       and receipt["unavailable_count"] == 0
+                       and receipt["candidate_set_hash"]
+                       == canonical_hash([]))
+        gate["judge_no_fault"] = (
+            receipt["unavailable_count"] == 0
+            and receipt["coverage"].get("judge") in (
+                "evaluated", "not_configured")
+            and (receipt["judged_count"] > 0 or empty_input))
+        # 6. 理由的服务端事实支持（不信客户端字符串）
+        da = receipt["delivery_action"]
+        rejected = store.rejected_resource_refs(sid)
+        fact_ok = (
+            (reason == "NO_DELIVERABLE_CANDIDATE"
+             and da == "no_candidates")
+            or (reason in ("EVIDENCE_INSUFFICIENT",
+                          "VERBATIM_REQUIRED_NOT_MET")
+                and da == "needs_validation")
+            or (reason == "EXPLICIT_REJECT_AFTER_DELIVERY"
+                and bool(rejected))
+            or reason == "SOURCE_DISAMBIGUATION_NEEDED")
+        gate["reason_fact_supported"] = fact_ok
+
+    # 4. raw 搜索 + 当前 Jev 供应商外发授权（S15：无 source_excerpt
+    #    许可则 raw 不开始）
+    from ..retrieval.judges import base as judge_base
+    from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
+    provider = judge_base.get_provider()
+    profile_ok = False
+    if isinstance(provider, TypeSafeJevJudge):
+        profile_ok = "source_excerpt" in (provider._data_profile
+                                          or frozenset())
+    gate["raw_search_authorized"] = bool(
+        config.RECALL_RUNTIME_ENABLED
+        and config.RECALL_RAW_FALLBACK_ENABLED)
+    gate["judge_outbound_authorized"] = profile_ok
+
+    # 5. 预算（真实 burst 计数）+ 同 burst 无既有 raw 轮
+    gate["budget_available"] = (
+        store.count_rounds(conn, sid)
+        < config.RECALL_SESSION_BURSTS_MAX * config.RECALL_BURST_ROUNDS)
+    gate["no_prior_raw_round"] = not store.has_raw_round(
+        conn, sid, session["current_burst"])
+
+    allowed = all([
+        gate["reason_in_closed_set"],
+        gate.get("round1_receipt"),
+        gate.get("unjudged_zero"),
+        gate.get("judge_no_fault"),
+        gate.get("reason_fact_supported"),
+        gate["raw_search_authorized"],
+        gate["judge_outbound_authorized"],
+        gate["budget_available"],
+        gate["no_prior_raw_round"],
+    ])
+    return allowed, gate
+
+
+def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
+    """Round 2 raw 深搜（S13）：服务端 plan、六条件门禁、raw 候选过
+    同一层 Jev 出站、commit-at-end 单事务提交。"""
+    from .. import db as _db
+    from . import pipeline as _pl
+    from ..errors import Forbidden as _F, StaleOperation
+    _require_enabled()
+    sid = str(a.get("session_id", ""))
+    session = store.require_session(sid)
+    session = store.expire_if_due(session)
+    state_machine.require_action(session, "refine")  # 活跃族状态
+    _check_conversation_scope(session, a)
+    reason = str(a.get("reason", ""))
+    if op_ctx:
+        store.check_operation_conflict(op_ctx["principal_id"],
+                                       op_ctx["operation_key"],
+                                       op_ctx["payload_hash"])
+    with _db.recall_runtime() as conn:
+        allowed, gate = _round2_gate(conn, session, reason)
+    if not allowed:
+        raise _F("Round 2 gate 未满足（S13）",
+                 code="ROUND2_GATE_DENIED", gate=gate)
+
+    # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
+    plan = store.get_plan(sid) or {}
+    # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
+    raw_out = _pl.raw_deep_search(principal, plan,
+                                  limit=config.RECALL_DELIVERY_LIMIT + 2)
+    raw_cards = []
+    for h in raw_out.get("hits", []):
+        raw_cards.append({
+            "resource_ref": h["resource_ref"],
+            "candidate_ref": h["resource_ref"],
+            "channel": "raw",
+            "representation": "raw_source",
+            "content_version": None,
+            "representation_version": None,
+            "projection_version": config.PROJECTION_REVISION,
+            "memory_date": h.get("occurred_at", "")[:10] or None,
+            "matched_by": ["raw_deep"],
+            "matched_fields": ["raw_messages"],
+            "excerpt": h.get("excerpt"),
+            "speaker": h.get("speaker"),
+            "evidence": [evidence_mod.make_evidence(
+                "raw_verbatim", "raw_messages", h.get("excerpt") or "",
+                h["resource_ref"])],
+        })
+    # Jev 一层出站（fake/真实 provider 由此过 S10 硬门）
+    from ..retrieval.judges import base as judge_base
+    provider = judge_base.get_provider()
+    coverage = {"raw": "complete_within_scope", "judge": "evaluated"}
+    degraded: list[str] = []
+    judge_candidates = raw_cards[:config.RECALL_JUDGE_CANDIDATE_CAP]
+    if isinstance(provider, judge_base.DisabledJudge):
+        coverage["judge"] = "not_configured"
+    else:
+        judge_result = provider.judge(plan, judge_candidates,
+                                      {"session_id": sid,
+                                       "revision": session[
+                                           "current_revision"]})
+        by_ref = {i.candidate_ref: i for i in judge_result.items}
+        for c in judge_candidates:
+            ji = by_ref.get(c.get("candidate_ref")
+                            or c["resource_ref"])
+            if ji:
+                c["judge"] = ji.to_dict()
+        coverage["judge"] = judge_result.provider_status
+        if judge_result.degraded_reason:
+            degraded.append(f"judge_{judge_result.degraded_reason}")
+    sel = selection.select(judge_candidates, plan,
+                           store.rejected_resource_refs(sid))
+    cards = _finalize_cards(sel["delivered"])
+    packet = {
+        "recall_session_id": sid,
+        "revision": session["current_revision"],
+        "round": 2,
+        "status": session["status"],
+        "search_status": "FOUND" if cards else "NO_MATCH_OBSERVED",
+        "delivery_action": sel["delivery_action"],
+        "instruction_authority": "none",
+        "content_role": "retrieved_memory",
+        "coverage": coverage,
+        "candidates": cards,
+        "missing": sel["missing"],
+        "conflicts": sel["conflicts"],
+        "degraded_reasons": sorted(set(degraded)),
+        "continuation": None,
+        "budget": budget.snapshot(session),
+        "token_count": config.RECALL_TOKENIZER,
+    }
+    packet = _enforce_output_budget(packet)
+    op_key = op_ctx["operation_key"] if op_ctx else None
+    with _db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if op_ctx:
+                store.record_operation_row(
+                    conn, op_ctx["principal_id"], op_ctx["operation_key"],
+                    op_ctx["payload_hash"], packet)
+            budget.ensure_round_available_conn(conn, sid, session)
+            store.record_round(conn, sid,
+                               burst_no=session["current_burst"],
+                               operation_key=op_key, kind="raw")
+            store.upsert_candidates(
+                conn, sid,
+                [{"candidate_ref": c["candidate_ref"],
+                  "resource_ref": c["resource_ref"],
+                  "channel": "raw", "representation": "raw_source",
+                  "content_version": c.get("content_version"),
+                  "representation_version": c.get(
+                      "representation_version"),
+                  "state": "seen", "scores": {}}
+                 for c in raw_cards],
+                session["current_revision"])
+            store.record_attempt(conn, sid, op_key or _op_id("round2"),
+                                 session["current_revision"],
+                                 session["current_burst"],
+                                 "raw_round2", "completed")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return packet
