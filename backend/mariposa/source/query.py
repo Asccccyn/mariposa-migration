@@ -567,15 +567,6 @@ def _anchors_excerpt(text: str, keyword: str, anchors: list[str] | None,
     return head
 
 
-def _body_excerpt(text: str, keyword: str, radius: int = 60) -> str:
-    """单关键词命中窗（兼容旧调用；正文生成，绝不取自 evidence）。"""
-    if not text:
-        return ""
-    if not keyword:
-        return text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
-    return _anchors_excerpt(text, keyword, [keyword], radius)
-
-
 def _evidence_excerpt(row, keyword: str, radius: int = 60) -> str:
     """证据面（显式 system/tool/unknown）专用摘录；正文路径绝不调用。"""
     raw = row["content_json"] if "content_json" in row.keys() else None
