@@ -36,17 +36,13 @@ def round1_candidates(conn, plan: dict, *, limit: int = None) -> dict:
     ec = (plan.get("explicit_constraints") or {})
     where, params = _structure_filters(ec)
 
-    # 桶集合：结构过滤后的 memories（有界 2000）
-    cond = ("WHERE " + " AND ".join(where)) if where else ""
-    rows = conn.execute(
-        f"SELECT m.memory_id FROM memories m {cond} LIMIT 2000",
-        params).fetchall()
+    # 桶集合：结构过滤后的 memories（S19：keyset 分页取尽 + 安全阀）
+    pool_ids, _pool_truncated = _scope_pool_ids(conn, where, params)
     refs, stats = [], {"WIDE": 0, "MID": 0, "CORE": 0, "skipped_gap": 0}
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)
-    all_facts = pp.facts_for_many(conn, [r["memory_id"] for r in rows])
-    for r in rows:
-        mid = r["memory_id"]
+    all_facts = pp.facts_for_many(conn, pool_ids)
+    for mid in pool_ids:
         try:
             phase = pp.phase_from_facts(all_facts.get(mid, {}), now=_now)
         except (pp.DataGap, pp.PolicyError, KeyError):
@@ -65,6 +61,44 @@ def round1_candidates(conn, plan: dict, *, limit: int = None) -> dict:
             if len(refs) >= limit:
                 break
     return {"candidates": refs, "stage_field_stats": stats}
+
+
+def _scope_pool_ids(conn, where: list[str], params: list,
+                    batch: int = 500) -> tuple[list[str], bool]:
+    """S19（四轮复审前提前收口）：scope 候选池 keyset 分页取尽。
+
+    旧实现的 `LIMIT 2000` 会让第 2001+ 个作用域桶永远不被检索、
+    coverage 却仍签 complete_within_scope（林石见两轮如实申报的
+    已知未闭项）。现在分页迭代到取尽；RECALL_POOL_MAX_BUCKETS 是
+    防失控安全阀，触顶前先探针确认还有下一桶才标 truncated=True
+    ——调用方对 truncated 池不得再签 complete。返回 (ids, truncated)。
+    """
+    cap = max(1, config.RECALL_POOL_MAX_BUCKETS)
+    w = list(where or []) + ["m.memory_id > ?"]
+    cond = "WHERE " + " AND ".join(w)
+    base = list(params or [])
+    ids: list[str] = []
+    cursor = ""
+    truncated = False
+    while True:
+        rows = conn.execute(
+            f"SELECT m.memory_id FROM memories m {cond}"
+            " ORDER BY m.memory_id LIMIT ?",
+            base + [cursor, batch]).fetchall()
+        if not rows:
+            break
+        ids.extend(r["memory_id"] for r in rows)
+        if len(ids) >= cap:
+            del ids[cap:]
+            more = conn.execute(
+                f"SELECT 1 FROM memories m {cond} LIMIT 1",
+                base + [ids[-1]]).fetchone()
+            truncated = more is not None
+            break
+        if len(rows) < batch:
+            break
+        cursor = ids[-1]
+    return ids, truncated
 
 
 def _kinds_of(stage_fields) -> list[str]:
@@ -244,17 +278,13 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
     if not (terms or phrases):
         return []  # 浏览模式由主线处理
 
-    cond = ("WHERE " + " AND ".join(where)) if where else ""
-    pool = conn.execute(
-        f"SELECT m.memory_id FROM memories m {cond} LIMIT 2000",
-        params).fetchall()
+    pool_ids, pool_truncated = _scope_pool_ids(conn, where, params)
 
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)
     stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
     allowed_by_mid: dict[str, set] = {}
-    for r in pool:
-        mid = r["memory_id"]
+    for mid in pool_ids:
         if f"memory:{mid}" in rejected:
             continue
         try:
@@ -268,8 +298,12 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
             allowed_by_mid[mid] = set(kinds)
 
     if not allowed_by_mid:
-        coverage["event"] = "complete_within_scope"
+        # S19：truncated 池不签 complete（说得过头 = 假"完整搜过"）
+        coverage["event"] = ("partial_pool_truncated" if pool_truncated
+                             else "complete_within_scope")
         coverage["stage_filter"] = stats
+        coverage["event_pool"] = {"scanned": len(pool_ids),
+                                  "truncated": pool_truncated}
         return []
 
     # 批量取 scope 内全部分字段文档，内存按每桶允许字段过滤后评分
@@ -292,9 +326,14 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
 
     flat_terms = [g for g in terms]
     scored = scoped_bm25.score_documents(docs, flat_terms, phrases)
-    coverage["event"] = "complete_within_scope"
+    # S19：全量迭代 + 安全阀诚实化——metadata（event_pool）按三轮#1
+    # 白名单语义不参与 family 完整性判断
+    coverage["event"] = ("partial_pool_truncated" if pool_truncated
+                         else "complete_within_scope")
     coverage["stage_filter"] = stats
     coverage["lexical_scorer"] = scoped_bm25.SCORER_VERSION
+    coverage["event_pool"] = {"scanned": len(pool_ids),
+                              "truncated": pool_truncated}
 
     hits: list[dict] = []
     if not scored:
