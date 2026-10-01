@@ -83,7 +83,21 @@ def score_documents(
         # phrases：AND 语义——任一 phrase 不满足即该文档不命中
         ok_phrases = all(_contains_seq(toks, p) for p in phrases) if \
             phrases else True
-        matched_terms = [t for t in q_tokens if t in set(toks)]
+        # 复审#7：term group 整组连续命中才计分（S04：同一个 term 内
+        # 保持顺序与连续；组间 OR）——"小路灯"不再被只有"小"的文档
+        # 命中；exact_phrase AND (terms OR) 语义由两段共同保证
+        doc_set = set(toks)
+        matched_terms = []
+        if term_groups:
+            for g in term_groups:
+                g2 = [t for t in g if t]
+                if not g2:
+                    continue
+                if _contains_seq(toks, g2):
+                    matched_terms.extend(
+                        t for t in g2 if t not in matched_terms)
+        else:
+            matched_terms = [t for t in q_tokens if t in doc_set]
         if not ok_phrases or not matched_terms:
             continue
         tf = {t: toks.count(t) for t in matched_terms}
@@ -94,12 +108,30 @@ def score_documents(
             score += idf[t] * tf[t] * (K1 + 1) / denom
         entry = by_owner.setdefault(
             d["owner"], {"owner": d["owner"], "fields": [],
-                         "score": 0.0, "hits": {}})
+                         "score": 0.0, "hits": {},
+                         "excerpt_by_field": {}})
         entry["fields"].append(d["field"])
         entry["hits"][d["field"]] = round(score, 6)
         entry["score"] = max(entry["score"], round(score, 6))
+        # 命中窗原文（复审#1）：围绕首个命中 token 的 ±窗口——真实
+        # matched_excerpt 由检索层产生，Jev 不再猜内容
+        if d["field"] not in entry["excerpt_by_field"]:
+            win = _hit_window(d["tokens"], q_tokens)
+            if win is not None:
+                entry["excerpt_by_field"][d["field"]] = win
     out = sorted(by_owner.values(),
                  key=lambda e: (-e["score"], e["owner"]))
     for e in out:
         e["fields"] = sorted(set(e["fields"]))
     return out
+
+
+def _hit_window(tokens: list[str], q_tokens: list[str],
+                width: int = 120) -> str | None:
+    """首个命中 token 周围的有界窗（token 空格拼接）。"""
+    for i, t in enumerate(tokens):
+        if t in q_tokens:
+            lo = max(0, i - width // 3)
+            hi = min(len(tokens), lo + width)
+            return " ".join(tokens[lo:hi])
+    return None

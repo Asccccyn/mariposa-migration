@@ -176,12 +176,20 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
     constraints = plan.get("explicit_constraints") or {}
     speaker = constraints.get("speaker")
     date_rng = constraints.get("source_date") or constraints.get("event_date")
+    # 复审#5：负向 speaker/date 硬过滤（稀疏路）
+    neg = plan.get("explicit_negative_constraints") or {}
+    sp_ex = [x for x in (neg.get("speaker_excluded") or [])
+             if isinstance(x, str) and x]
 
     where = ["m.visibility='active'", "m.compression_state='full'"]
     params: list = []
     if speaker:
         where.append("w.speaker=?")
         params.append(speaker)
+    if sp_ex:
+        marks = ",".join("?" * len(sp_ex))
+        where.append(f"w.speaker NOT IN ({marks})")
+        params += sp_ex
     if date_rng and isinstance(date_rng, dict):
         if date_rng.get("from"):
             where.append("m.memory_date >= ?")

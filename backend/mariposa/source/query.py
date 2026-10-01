@@ -36,23 +36,34 @@ _COLS = ("id, provider, provider_conversation_id, provider_message_id,"
 def search(query: str | None = None, *, senders: list[str] | None = None,
            provider: str | None = None, conversation_id: str | None = None,
            date_from: str | None = None, date_to: str | None = None,
-           limit: int = 20, offset: int = 0) -> dict:
-    """原文专项搜索：关键词 + 说话人 + 日期区间 + 会话过滤（同集分页）。"""
+           limit: int = 20, offset: int = 0,
+           fts_expr: str | None = None,
+           speaker: str | None = None) -> dict:
+    """原文专项搜索：关键词 + 说话人 + 日期区间 + 会话过滤（同集分页）。
+
+    fts_expr：已编译的 FTS 表达式（含 OR 等布尔组合）直接使用，不再
+    二次安全编译（复审#2：调用方的多词 OR 不能被吃掉）。
+    speaker：正式身份（qiaosheng/jiaming）硬过滤。
+    """
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     sender_filter = _resolve_senders(senders)
     where, params = _base_filters(provider, conversation_id,
                                   date_from, date_to)
     where.append("m.published=1")
+    if speaker:
+        where.append("m.speaker=?")
+        params.append(speaker)
 
-    keyword = (query or "").strip()
+    keyword = (fts_expr or (query or "").strip())
     matched_by = None
     if keyword:
         if set(sender_filter) <= set(_DEFAULT_SENDERS):
             # FTS 匹配作为主查询条件参与同一候选集（SL-08），不先截断取 ID
             where.append("m.id IN (SELECT message_id FROM source_fts"
                          " WHERE source_fts MATCH ?)")
-            params.append(projection.compile_query(keyword))
+            params.append(fts_expr if fts_expr
+                          else projection.compile_query(keyword))
             matched_by = "fts_text"
         else:
             like = "%" + _escape_like(keyword) + "%"

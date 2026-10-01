@@ -140,9 +140,7 @@ class TestRound2Gate:
         with pytest.raises(Forbidden) as ei:
             registry.invoke(actors["jiaming"], "memory.recall.round2", {
                 "session_id": packet["recall_session_id"],
-                "reason": "EVIDENCE_INSUFFICIENT",
-                "judge_status": "complete",
-                "raw_search_authorized": True}, None)
+                "reason": "EVIDENCE_INSUFFICIENT"}, None)
         assert ei.value.code == "ROUND2_GATE_DENIED"
 
     def test_raw_deep_search_hits_published_source(self, actors, tmp_path):

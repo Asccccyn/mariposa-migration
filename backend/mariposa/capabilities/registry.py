@@ -793,7 +793,8 @@ def _recall_close(principal: Principal, a: dict) -> dict:
 
 
 def _words_recall(principal: Principal, a: dict) -> dict:
-    return recall_service.words_recall(principal, a)
+    # 复审#5：operation_id 幂等（runtime 集；重放按专项 intent 重校验）
+    return _with_operation_id(principal, a, recall_service.words_recall)
 
 
 def _words_get(principal: Principal, a: dict) -> dict:

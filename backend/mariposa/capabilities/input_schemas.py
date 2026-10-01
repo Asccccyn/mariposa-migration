@@ -315,10 +315,21 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "tags": {"type": "array", "items": {"type": "string"}}
         }
     },
+    "memory.recall.round2": {
+        "type": "object", "required": ["session_id", "reason"],
+        "additionalProperties": False,
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "reason": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string"},
+            "offset": {"type": "integer"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
     "memory.recall.start": {
         "type": "object", "required": ["query_plan"],
         "additionalProperties": False,
-        "properties": {
+        "conversation_scope": {"type": "string"},
+            "properties": {
             "query_plan": {"type": "object"},
             "conversation_scope": {"type": "string"},
             "operation_id": {"type": "string", "minLength": 1}},
@@ -371,7 +382,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "memory.recall.status": {
         "type": "object", "required": ["session_id"],
         "additionalProperties": False,
-        "properties": {"session_id": {"type": "string", "minLength": 1}},
+        "properties": {
+            "session_id": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string"}},
     },
     "memory.recall.close": {
         "type": "object", "required": ["session_id"],
@@ -395,6 +408,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                "items": {"type": "string", "minLength": 1}},
             "explicit_constraints": {"type": "object"},
             "explicit_negative_constraints": {"type": "object"},
+            "operation_id": {"type": "string", "minLength": 1},
             "limit": {"type": "integer"}},
     },
     "memory.words.get": {

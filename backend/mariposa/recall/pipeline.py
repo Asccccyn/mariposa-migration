@@ -143,14 +143,15 @@ def mark_round1_complete_tx(conn, session_id: str) -> None:
         (f"rr_{session_id[:12]}_r1", session_id, "round1:complete"))
 
 
-def raw_deep_search(principal, plan: dict, limit: int = 20) -> dict:
+def raw_deep_search(principal, plan: dict, limit: int = 20,
+                    offset: int = 0) -> dict:
     """Round 2 raw 深搜：获准 source 层（published=1，human/assistant）。
 
     候选仍须经同一层 Jev 出站（由调用方装配）；本函数只做检索与证据
     定位。旧 raw_* 层（合成导入）不在 v1.7 深搜范围（见 FIX_REPORT §5）。
     """
-    # 闭环复审 P2-7：多 lexical_terms 是软词 OR（S04/S14），不得
-    # join 成一个连续必需长短语；limit 取满额深搜预算
+    # 复审#2：多词 OR 以已编译 FTS 表达式传入（source_query 不再
+    # 二次编译吃掉 OR）；speaker 硬过滤；offset 分页 + has_more
     terms = [t for t in (plan.get("lexical_terms") or [])
              if isinstance(t, str) and t.strip()]
     from ..retrieval import projection as _proj
@@ -160,10 +161,11 @@ def raw_deep_search(principal, plan: dict, limit: int = 20) -> dict:
     ec = plan.get("explicit_constraints") or {}
     dr = ec.get("source_date") or ec.get("event_date") or {}
     res = source_query.search(
-        fts_query,
+        None, fts_expr=fts_query or None,
         senders=["human", "assistant"],
+        speaker=ec.get("speaker"),
         date_from=dr.get("from"), date_to=dr.get("to"),
-        limit=limit)
+        limit=limit, offset=offset)
     hits = []
     for h in res["hits"]:
         hits.append({
@@ -179,6 +181,9 @@ def raw_deep_search(principal, plan: dict, limit: int = 20) -> dict:
             "instruction_authority": "none",
         })
     return {"hits": hits, "source": "source_layer",
+            "has_more": bool(res.get("has_more")),
+            "next_offset": (offset + limit) if res.get("has_more")
+            else None,
             "boundary": "Round 2 原文深搜；候选需经同一层 Jev 出站"}
 
 
@@ -303,6 +308,13 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
         m = meta.get(e["owner"])
         if m is None:
             continue
+        matched = dict(e.get("excerpt_by_field") or {})
+        # our_words 字段命中：定位具体话语原文（复审#1——拼接字段
+        # 的命中窗不能冒充原话；word_id 可反查）
+        if "our_words" in matched:
+            word_txt = _locate_word_text(conn, e["owner"], terms)
+            if word_txt:
+                matched["our_words"] = word_txt
         card = {
             "resource_ref": f"memory:{e['owner']}",
             "candidate_ref": f"memory:{e['owner']}",
@@ -317,10 +329,32 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
                            else ["keyword"]),
             "matched_fields": e["fields"],
             "bm25_score": e["score"],
+            "_matched": matched,
             "_row": m,
         }
         hits.append(card)
     return hits
+
+
+def _locate_word_text(conn, memory_id: str, term_groups) -> str | None:
+    """在该桶的 our_words 里找包含任一 term（token 交叠）的具体话语。"""
+    best = None
+    for r in conn.execute(
+            "SELECT text FROM memory_our_words WHERE memory_id=?"
+            " ORDER BY ordinal", (memory_id,)).fetchall():
+        toks = set(t for t in r["text"].replace(" ", "")) | set(
+            r["text"].split())
+        for g in term_groups or []:
+            for tk in g:
+                if tk and (tk in r["text"] or tk in toks):
+                    if best is None:
+                        best = r["text"]
+                    break
+            if best:
+                break
+        if best:
+            break
+    return best
 
 
 def round2_server_facts(session: dict) -> dict:
