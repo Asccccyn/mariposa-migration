@@ -1514,7 +1514,10 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
             offset = int(cont["next_offset"])
         else:
             allowed, gate = _round2_gate(conn, session, reason)
-            offset = max(0, int(a.get("offset") or 0))
+            # 自审（2026-10-01）：raw round 的起始页 offset 一律由
+            # 服务端定（0）——翻页位置只经服务端游标流转，客户端
+            # 传 offset 不再被采纳（与服务端签发模型矛盾的自由起跳）
+            offset = 0
             if not allowed:
                 raise _F("Round 2 gate 未满足（S13）",
                          code="ROUND2_GATE_DENIED", gate=gate)
@@ -1596,21 +1599,37 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         try:
             # 游标先行：翻尽清除、未翻尽签发/重签（单活跃），packet 的
-            # continuation 在 operation 行落库前定型
+            # continuation 在 operation 行落库前定型。自审（2026-10-01）：
+            # 翻页签发走 CAS——校验与最终事务之间无锁，并发双花恰一
+            # 赢家，输家在此回滚拒 CONTINUATION_INVALID
             if raw_has_more:
-                token = store.issue_raw_continuation(
-                    conn, session_id=sid,
-                    revision=session["current_revision"],
-                    burst_no=session["current_burst"],
-                    next_offset=raw_out["next_offset"])
+                if cont_token:
+                    token = store.replace_raw_continuation(
+                        conn, session_id=sid,
+                        revision=session["current_revision"],
+                        burst_no=session["current_burst"],
+                        expect_token=cont_token,
+                        next_offset=raw_out["next_offset"])
+                    if token is None:
+                        raise _F("continuation 已被并发翻页消费",
+                                 code="CONTINUATION_INVALID")
+                else:
+                    token = store.issue_raw_continuation(
+                        conn, session_id=sid,
+                        revision=session["current_revision"],
+                        burst_no=session["current_burst"],
+                        next_offset=raw_out["next_offset"])
                 packet["continuation"] = {
                     "available": True, "action": "round2_raw_continue",
                     "offset": raw_out["next_offset"],
                     "continuation_token": token}
-            else:
-                store.clear_raw_continuation(
-                    conn, sid, session["current_revision"],
-                    session["current_burst"])
+            elif cont_token and not store.clear_raw_continuation_if(
+                    conn, session_id=sid,
+                    revision=session["current_revision"],
+                    burst_no=session["current_burst"],
+                    expect_token=cont_token):
+                raise _F("continuation 已被并发翻页消费",
+                         code="CONTINUATION_INVALID")
             if op_ctx:
                 store.record_operation_row(
                     conn, op_ctx["principal_id"], op_ctx["operation_key"],
