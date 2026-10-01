@@ -419,6 +419,7 @@ def _run_round_compute(session: dict, plan: dict,
         "budget": budget.snapshot(_with_round_preview(session)),
         "token_count": config.RECALL_TOKENIZER,
     }
+    packet = _enforce_output_budget(packet)
     effects = {
         "candidates": candidate_rows,
         "receipts": receipts,
@@ -468,6 +469,87 @@ def _record_op_in_tx(conn, op_ctx: dict | None, result: dict) -> None:
         store.record_operation_row(
             conn, op_ctx["principal_id"], op_ctx["operation_key"],
             op_ctx["payload_hash"], result)
+
+
+#: S16 输出预算（版本化工程参数）
+OUTPUT_MAX_JSON_BYTES = 24576
+OUTPUT_MAX_BODY_CHARS = 4000
+OUTPUT_MAX_PER_CANDIDATE_CHARS = 600
+
+
+def _enforce_output_budget(packet: dict) -> dict:
+    """S16：输出预算实际计算——完整 packet 的 UTF-8 序列化 ≤24576
+    字节、候选正文合计 ≤4000 字符、卡数 ≤3、单候选文本 ≤600——
+    超限时按序裁剪证据片段并显式标 truncated/budget_truncated，
+    不是只依赖 config 常量。"""
+    import json as _json
+
+    def total_body(p):
+        n = 0
+        for c in p.get("candidates") or []:
+            for ev in c.get("evidence") or []:
+                n += len(ev.get("snippet") or "")
+        return n
+
+    # 单候选窗
+    for c in packet.get("candidates") or []:
+        over = None
+        for ev in c.get("evidence") or []:
+            snip = ev.get("snippet")
+            if isinstance(snip, str) and \
+                    len(snip) > OUTPUT_MAX_PER_CANDIDATE_CHARS:
+                from .retrieval import evidence as _em
+                cut, _tr = _em.excerpt(
+                    snip, limit=OUTPUT_MAX_PER_CANDIDATE_CHARS)
+                ev["snippet"] = cut
+                ev["truncated"] = True
+                over = True
+        if over:
+            c.setdefault("budget_flags", []).append("candidate_600")
+    # 正文总量
+    if total_body(packet) > OUTPUT_MAX_BODY_CHARS:
+        room = OUTPUT_MAX_BODY_CHARS
+        for c in packet.get("candidates") or []:
+            for ev in c.get("evidence") or []:
+                snip = ev.get("snippet")
+                if not isinstance(snip, str) or not snip:
+                    continue
+                if len(snip) > room:
+                    ev["snippet"] = snip[:max(0, room)]
+                    ev["truncated"] = True
+                    c.setdefault("budget_flags", []).append("body_4000")
+                room -= len(ev.get("snippet") or "")
+                if room <= 0:
+                    break
+    # 完整 JSON 字节
+    for _ in range(4):
+        blob = _json.dumps(packet, ensure_ascii=False).encode("utf-8")
+        if len(blob) <= OUTPUT_MAX_JSON_BYTES:
+            break
+        cands = packet.get("candidates") or []
+        trimmed = False
+        for c in reversed(cands):
+            for ev in reversed(c.get("evidence") or []):
+                snip = ev.get("snippet")
+                if isinstance(snip, str) and len(snip) > 60:
+                    ev["snippet"] = snip[:max(60, len(snip) // 2)]
+                    ev["truncated"] = True
+                    c.setdefault("budget_flags", []).append("json_24576")
+                    trimmed = True
+                    break
+            if trimmed:
+                break
+        if not trimmed:
+            packet["budget_truncated"] = True
+            packet["candidates"] = []
+            break
+    packet.setdefault("budget", {}).setdefault(
+        "output_limits", {
+            "json_bytes": OUTPUT_MAX_JSON_BYTES,
+            "body_chars": OUTPUT_MAX_BODY_CHARS,
+            "candidates": config.RECALL_DELIVERY_LIMIT,
+            "per_candidate_chars": OUTPUT_MAX_PER_CANDIDATE_CHARS})
+    return packet
 
 
 def _with_round_preview(session: dict) -> dict:
