@@ -837,24 +837,10 @@ def _find_words(principal: Principal, a: dict) -> dict:
 
 
 def _recall_round2(principal: Principal, a: dict) -> dict:
-    from ..recall import pipeline as pl
-    from ..recall import store as recall_store
-    from ..errors import Forbidden as _F
-    sid = str(a.get("session_id", ""))
-    session = recall_store.require_session(sid)
-    revision = int(a.get("query_revision", session["current_revision"]))
-    # F3 修复：judge/授权/预算全部取服务端事实，客户端布尔不再采信
-    facts = pl.round2_server_facts(session)
-    gate = pl.round2_gate(
-        session, revision, str(a.get("reason", "")),
-        facts["judge_status"], facts["raw_search_authorized"],
-        facts["budget_available"])
-    if not gate["allowed"]:
-        raise _F("Round 2 gate 未满足（§6.4）",
-                 code="ROUND2_GATE_DENIED", gate=gate["gate"])
-    return {"gate": gate, "server_facts": facts,
-            **pl.raw_deep_search(principal, dict(a.get("query_plan") or {}),
-                                 int(a.get("limit", 20)))}
+    """S13/WP04：服务端 plan + 六条件门禁 + raw 候选过同一层 Jev +
+    commit-at-end 单事务；operation_id 幂等（runtime 集，不走 formal
+    响应缓存）。"""
+    return _with_operation_id(principal, a, recall_service.round2)
 
 
 def _keep_revoke(principal: Principal, a: dict) -> dict:

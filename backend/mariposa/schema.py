@@ -1302,6 +1302,30 @@ DELETE FROM recall_operation_keys WHERE status <> 'completed';
 DELETE FROM recall_operation_keys
  WHERE payload_hash IS NULL OR result_ref IS NULL OR result_ref = '';
 """),
+    (6, """
+-- ===== WP04/S13：Round1 成功回执 + round 逻辑类别 =====
+-- 回执绑定 session/revision/plan hash/scope hash/policy/覆盖/judge
+-- 统计——recall_attempts 的 completed 不再被当作 Jev 正常证据。
+CREATE TABLE recall_round1_receipts(
+  session_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  plan_hash TEXT NOT NULL,
+  scope_hash TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  round_kind TEXT NOT NULL DEFAULT 'memory',
+  methods TEXT NOT NULL DEFAULT '{}',
+  coverage TEXT NOT NULL DEFAULT '{}',
+  candidate_set_hash TEXT NOT NULL,
+  judged_count INTEGER NOT NULL DEFAULT 0,
+  unavailable_count INTEGER NOT NULL DEFAULT 0,
+  unjudged_count INTEGER NOT NULL DEFAULT 0,
+  delivery_action TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, revision)
+);
+-- S17：区分 logical kind（memory/words/raw）与记录序号
+ALTER TABLE recall_rounds ADD COLUMN kind TEXT NOT NULL DEFAULT 'memory';
+"""),
 ]
 
 

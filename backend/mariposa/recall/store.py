@@ -198,8 +198,49 @@ def advance_revision(conn, session_id: str, expected_revision: int,
     return expected_revision + 1
 
 
+def record_round1_receipt(conn, *, session_id: str, revision: int,
+                          plan_hash: str, scope_hash: str,
+                          policy_version: str, round_kind: str,
+                          methods: dict, coverage: dict,
+                          candidate_set_hash: str, judged_count: int,
+                          unavailable_count: int, unjudged_count: int,
+                          delivery_action: str) -> None:
+    """S13/WP04：Round1 成功回执——绑定 plan/scope/policy/覆盖与
+    judge 统计，供 Round2 门禁核验（不新建独立服务，复用 runtime）。"""
+    conn.execute(
+        "INSERT OR REPLACE INTO recall_round1_receipts(session_id,"
+        " revision, plan_hash, scope_hash, policy_version, round_kind,"
+        " methods, coverage, candidate_set_hash, judged_count,"
+        " unavailable_count, unjudged_count, delivery_action, created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (session_id, revision, plan_hash, scope_hash, policy_version,
+         round_kind, json.dumps(methods, ensure_ascii=False),
+         json.dumps(coverage, ensure_ascii=False), candidate_set_hash,
+         judged_count, unavailable_count, unjudged_count,
+         delivery_action, _now()))
+
+
+def read_round1_receipt(conn, session_id: str, revision: int):
+    row = conn.execute(
+        "SELECT * FROM recall_round1_receipts WHERE session_id=?"
+        " AND revision=?", (session_id, revision)).fetchone()
+    out = dict(row) if row else None
+    if out:
+        out["methods"] = json.loads(out["methods"] or "{}")
+        out["coverage"] = json.loads(out["coverage"] or "{}")
+    return out
+
+
+def has_raw_round(conn, session_id: str, burst_no: int) -> bool:
+    """同 burst 已有 raw 轮 → 不因换 operation_id 无界重跑（S13-5）。"""
+    return bool(conn.execute(
+        "SELECT 1 FROM recall_rounds WHERE session_id=? AND burst_no=?"
+        " AND kind='raw'", (session_id, burst_no)).fetchone())
+
+
 def record_round(conn, session_id: str, burst_no: int,
-                 operation_key: str | None = None) -> int:
+                 operation_key: str | None = None,
+                 kind: str = "memory") -> int:
     """最终事务内登记一条成功轮记录（预算唯一事实源）。
 
     round_no 在写锁内取 MAX+1；调用方已在此前的预算终检中确认额度。
@@ -209,8 +250,8 @@ def record_round(conn, session_id: str, burst_no: int,
         " WHERE session_id=?", (session_id,)).fetchone()["n"]
     conn.execute(
         "INSERT INTO recall_rounds(session_id, round_no, burst_no,"
-        " operation_key, created_at) VALUES(?,?,?,?,?)",
-        (session_id, round_no, burst_no, operation_key, _now()))
+        " operation_key, created_at, kind) VALUES(?,?,?,?,?,?)",
+        (session_id, round_no, burst_no, operation_key, _now(), kind))
     # session 行的 rounds_used 只是派生展示值，与事实源同事务对齐
     conn.execute(
         "UPDATE recall_sessions SET rounds_used=? WHERE session_id=?",
@@ -578,7 +619,8 @@ def purge_expired(limit: int = 200) -> int:
 def reset_for_tests() -> None:
     """测试清库（conftest 专用）：清空 runtime 全部运行状态。"""
     tables = ("jev_feature_cache", "jev_rerank_cache",
-              "recall_operation_keys", "recall_rounds", "recall_receipts",
+              "recall_operation_keys", "recall_rounds",
+              "recall_round1_receipts", "recall_receipts",
               "recall_attempts", "recall_candidates",
               "recall_query_revisions", "recall_sessions")
     with db.recall_runtime() as conn:
