@@ -85,7 +85,15 @@ class TestHybrid:
         class Probe(jb.JudgeProvider):
             name = "probe_h5"
             def judge(self, plan, candidates, ctx):
-                self.blob = str(plan) + str(candidates)
+                # r2 S09：出站白名单以 typesafe 投影为准（卡内 _row
+                # 是内部数据不外发）
+                from mariposa.retrieval.judges import typesafe_jev
+                inner = typesafe_jev.TypeSafeJevJudge()
+                inner._data_profile = frozenset(
+                    {"event_excerpt", "title_cue", "word_excerpt",
+                     "source_excerpt"})
+                inner._current_terms = plan.get("lexical_terms") or []
+                self.blob = str(inner._payload(plan, candidates))
                 return jb.JudgeBatchResult(
                     items=[jb.JudgeItem(c.get("candidate_ref") or c["resource_ref"],
                                         c.get("content_version"))
@@ -229,9 +237,13 @@ class TestJev:
             {"original_request": "q", "explicit_constraints": {}},
             [{"candidate_ref": "c1", "excerpt": "片段",
               "truncated": False, "matched_by": []}])
-        assert payload["state"]["candidates"][0]["candidate_ref"] == "c1"
-        assert payload["state"]["candidates"][0]["excerpt"] == "片段"
+        cand = payload["state"]["candidates"][0]
+        assert cand["candidate_ref"] == "c1"
+        ev = [s2 for s2 in cand["segments"]
+              if s2["field"] == "event_text"]
+        assert ev and "片段" in ev[0]["text"]
         assert payload["questions"]["candidate_0"]["type"] == "noul"
+        assert "candidate_role_contract" in payload["state"]
 
     def test_jev10(self):
         out = selection.select(

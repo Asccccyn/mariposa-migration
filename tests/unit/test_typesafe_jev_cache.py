@@ -49,7 +49,9 @@ def test_payload_is_system_one_v1_and_event_excerpt_is_not_empty(monkeypatch):
     payload = judge._payload(_plan(), [_candidate(text="真实事件片段")])
     assert set(payload) == {"state", "questions", "model"}
     assert payload["state"]["request"]["original_request"] == "找搬家的事"
-    assert payload["state"]["candidates"][0]["excerpt"] == "真实事件片段"
+    segs = payload["state"]["candidates"][0]["segments"]
+    ev = [s for s in segs if s["field"] == "event_text"]
+    assert ev and "真实事件片段" in ev[0]["text"]
     assert payload["questions"]["candidate_0"]["type"] == "noul"
     assert "question" not in payload
 
