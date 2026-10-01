@@ -107,15 +107,30 @@ def _validate_constraints(plan: dict, channel: str,
     for k, v in src.items():
         if k in ("event_date", "source_date", "event_date_excluded",
                  "source_date_excluded"):
-            if k.endswith("_excluded") and isinstance(v, list):
+            if k.endswith("_excluded"):
+                # 三轮复审#4：排除条件契约 = {{from,to}} 区间数组——
+                # 非 list 此前被静默当单区间存下，检索层按 list 解析时
+                # 又被逐项跳过（排除日期两条都漏出来即此路径）
+                if not isinstance(v, list):
+                    raise Forbidden(f"{k} 必须是 {{from,to}} 区间数组",
+                                    code="INVALID_ARGUMENT")
                 for item in v:
                     _check_date_range(item, k)
             else:
                 _check_date_range(v, k)
-        if k in ("speaker", "speaker_excluded") and (
-                isinstance(v, str) and v not in SPEAKERS):
+        if k == "speaker" and (not isinstance(v, str)
+                               or v not in SPEAKERS):
             raise Forbidden("speaker 只能是 jiaming/qiaosheng",
                             code="INVALID_ARGUMENT")
+        if k == "speaker_excluded":
+            # 三轮复审#4：契约统一为明确数组（检索层三处都按 list
+            # 处理；字符串此前被容忍，等于静默失效）
+            if (not isinstance(v, list)
+                    or any(not isinstance(x, str) or x not in SPEAKERS
+                           for x in v)):
+                raise Forbidden(
+                    "speaker_excluded 必须是 jiaming/qiaosheng 的"
+                    "字符串数组", code="INVALID_ARGUMENT")
         out[k] = v
     return out
 

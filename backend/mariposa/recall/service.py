@@ -290,35 +290,11 @@ def _run_round_compute(session: dict, plan: dict,
                 # S08/WP05：words 专项 dense（独立向量空间，独立阈值）
                 from ..retrieval import words_semantic as wsem
                 if plan.get("semantic_query"):
-                    _wc = plan.get("explicit_constraints") or {}
-                    _wwhere, _wparams = [], []
-                    if _wc.get("speaker"):
-                        _wwhere.append("w.speaker=?")
-                        _wparams.append(_wc["speaker"])
-                    _wd = (_wc.get("source_date") or
-                           _wc.get("event_date") or {})
-                    if isinstance(_wd, dict):
-                        if _wd.get("from"):
-                            _wwhere.append("m.memory_date >= ?")
-                            _wparams.append(_wd["from"])
-                        if _wd.get("to"):
-                            _wwhere.append("m.memory_date <= ?")
-                            _wparams.append(_wd["to"])
-                    _neg = plan.get(
-                        "explicit_negative_constraints") or {}
-                    for sp in (_neg.get("speaker_excluded") or []):
-                        if not isinstance(sp, str) or not sp:
-                            continue  # 非法元素忽略，不逐字符遍历
-                        _wwhere.append("w.speaker <> ?")
-                        _wparams.append(sp)
-                    for rng in (_neg.get("source_date_excluded")
-                                or _neg.get("event_date_excluded") or []):
-                        if isinstance(rng, dict) and rng.get("from"):
-                            _wwhere.append(
-                                "(m.memory_date IS NULL OR"
-                                " m.memory_date NOT BETWEEN ? AND ?)")
-                            _wparams += [rng["from"],
-                                         rng.get("to", "9999-12-31")]
+                    # 三轮复审#4：dense 侧过滤与稀疏/raw 同一 source_scope
+                    # （正/负 speaker + 正/负日期一套语义，不再各写一份）
+                    from ..retrieval import query_plan as _qp
+                    _wwhere, _wparams = _qp.source_scope_sql(
+                        _qp.source_scope(plan), "w.speaker", "m.memory_date")
                     wdense = wsem.words_semantic_search(
                         conn, plan["semantic_query"],
                         limit=config.RECALL_LEXICAL_K,
@@ -1398,6 +1374,20 @@ _ROUND2_REASONS = frozenset({
     "EXPLICIT_REJECT_AFTER_DELIVERY"})
 
 
+#: 三轮复审#1：coverage 里真正的"检索 family 状态键"闭集——
+#: lexical_scorer/stage_filter/words_forgotten/dense_pending_vectors/
+#: judge_cache/_first_round_facts 等 metadata 不参与完整性判断，
+#: 逐键白名单防止新增 metadata 字符串被误当"不完整 family"
+#:（lexical_scorer 误杀反例；words_forgotten=disabled:<策略> 同类）
+_RETRIEVAL_FAMILY_STATUS_KEYS = frozenset({
+    "event", "dense_event", "words_lexical", "words_dense", "judge",
+})
+_RETRIEVAL_COMPLETE_VALUES = frozenset({
+    "complete_within_scope", "not_requested", "round2_only",
+    "evaluated", "not_configured", "blocked", "unavailable_pass",
+})
+
+
 def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     """六条件全部以服务端事实核验（S13）。返回 (allowed, gate 详情)。"""
     sid = session["session_id"]
@@ -1408,17 +1398,15 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     receipt = store.read_round1_receipt(conn, sid, rev)
     gate["round1_receipt"] = receipt is not None
     if receipt is not None:
-        # 复审#3：本轮请求过的每个 retrieval family 都必须
+        # 复审#3 + 三轮复审#1：本轮请求过的每个 retrieval family 都必须
         # complete_within_scope——unavailable/partial/pending/truncated
-        # 都不能冒充"完整搜过以后没有候选"
+        # 都不能冒充"完整搜过以后没有候选"；只检查白名单内的 family
+        # 状态键，metadata 键（版本号/统计/缓存）不参与布尔判断
         cov = receipt["coverage"]
-        incomplete = [
-            k for k, v in cov.items()
-            if isinstance(v, str) and v not in (
-                "complete_within_scope", "not_requested",
-                "round2_only", "evaluated", "not_configured",
-                "blocked", "unavailable_pass")
-            and k not in ("stage_filter",)]
+        incomplete = sorted(
+            k for k in _RETRIEVAL_FAMILY_STATUS_KEYS
+            if isinstance(cov.get(k), str)
+            and cov[k] not in _RETRIEVAL_COMPLETE_VALUES)
         # not_configured 仅当该 family 本就未请求（plan 无
         # semantic_query 时 dense not_requested；这里 provider 未配
         # 但请求过语义 = unavailable，由请求侧写入）
@@ -1508,19 +1496,35 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
         store.check_operation_conflict(op_ctx["principal_id"],
                                        op_ctx["operation_key"],
                                        op_ctx["payload_hash"])
+    # 三轮复审#2：带 continuation_token 的调用是同一 raw round 的翻页
+    # ——offset 由服务端游标给出，不重走六条件门禁、不记新轮；无
+    # token 才是 raw round 的开始，须过完整门禁（no_prior_raw_round
+    # 只约束"新开 raw round"，不约束同一轮的翻页）
+    cont_token = str(a.get("continuation_token") or "")
     with _db.recall_runtime() as conn:
-        allowed, gate = _round2_gate(conn, session, reason)
-    if not allowed:
-        raise _F("Round 2 gate 未满足（S13）",
-                 code="ROUND2_GATE_DENIED", gate=gate)
+        if cont_token:
+            cont = store.read_raw_continuation(
+                conn, sid, session["current_revision"],
+                session["current_burst"])
+            if (cont is None or cont["token"] != cont_token
+                    or not store.has_raw_round(
+                        conn, sid, session["current_burst"])):
+                raise _F("continuation 无效：已翻尽、被新游标取代或"
+                         "raw round 不存在", code="CONTINUATION_INVALID")
+            offset = int(cont["next_offset"])
+        else:
+            allowed, gate = _round2_gate(conn, session, reason)
+            offset = max(0, int(a.get("offset") or 0))
+            if not allowed:
+                raise _F("Round 2 gate 未满足（S13）",
+                         code="ROUND2_GATE_DENIED", gate=gate)
 
     # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
     plan = store.get_plan(sid) or {}
     # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
     raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
     raw_out = _pl.raw_deep_search(
-        principal, plan, limit=raw_limit,
-        offset=max(0, int(a.get("offset") or 0)))
+        principal, plan, limit=raw_limit, offset=offset)
     raw_cards = []
     for h in raw_out.get("hits", []):
         raw_cards.append({
@@ -1582,10 +1586,7 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "missing": sel["missing"],
         "conflicts": sel["conflicts"],
         "degraded_reasons": sorted(set(degraded)),
-        "continuation": (
-            {"available": True, "action": "round2_raw_continue",
-             "offset": raw_out["next_offset"]}
-            if raw_has_more else None),
+        "continuation": None,  # 事务内签发（三轮复审#2：服务端游标）
         "budget": budget.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
@@ -1594,14 +1595,33 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with _db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # 游标先行：翻尽清除、未翻尽签发/重签（单活跃），packet 的
+            # continuation 在 operation 行落库前定型
+            if raw_has_more:
+                token = store.issue_raw_continuation(
+                    conn, session_id=sid,
+                    revision=session["current_revision"],
+                    burst_no=session["current_burst"],
+                    next_offset=raw_out["next_offset"])
+                packet["continuation"] = {
+                    "available": True, "action": "round2_raw_continue",
+                    "offset": raw_out["next_offset"],
+                    "continuation_token": token}
+            else:
+                store.clear_raw_continuation(
+                    conn, sid, session["current_revision"],
+                    session["current_burst"])
             if op_ctx:
                 store.record_operation_row(
                     conn, op_ctx["principal_id"], op_ctx["operation_key"],
                     op_ctx["payload_hash"], packet)
-            budget.ensure_round_available_conn(conn, sid, session)
-            store.record_round(conn, sid,
-                               burst_no=session["current_burst"],
-                               operation_key=op_key, kind="raw")
+            # 翻页不消耗新轮（三轮复审#2）：round/budget/attempt 只在
+            # raw round 首页记录
+            if not cont_token:
+                budget.ensure_round_available_conn(conn, sid, session)
+                store.record_round(conn, sid,
+                                   burst_no=session["current_burst"],
+                                   operation_key=op_key, kind="raw")
             store.upsert_candidates(
                 conn, sid,
                 [{"candidate_ref": c["candidate_ref"],
@@ -1613,10 +1633,11 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
                   "state": "seen", "scores": {}}
                  for c in raw_cards],
                 session["current_revision"])
-            store.record_attempt(conn, sid, op_key or _op_id("round2"),
-                                 session["current_revision"],
-                                 session["current_burst"],
-                                 "raw_round2", "completed")
+            if not cont_token:
+                store.record_attempt(conn, sid, op_key or _op_id("round2"),
+                                     session["current_revision"],
+                                     session["current_burst"],
+                                     "raw_round2", "completed")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

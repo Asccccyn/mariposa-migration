@@ -323,6 +323,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "reason": {"type": "string", "minLength": 1},
             "conversation_scope": {"type": "string"},
             "offset": {"type": "integer"},
+            "continuation_token": {"type": "string", "minLength": 1},
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.start": {
