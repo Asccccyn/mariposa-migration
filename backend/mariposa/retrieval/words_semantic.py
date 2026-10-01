@@ -20,7 +20,50 @@ except ImportError:  # pragma: no cover
     embed = None
 
 CORPUS_GENERATION = "wordbody-v1"
-WORD_MODEL_KEY = f"words|{CORPUS_GENERATION}"
+
+
+def _active_model_key() -> str:
+    """复审#6：model key 绑定实际 provider 模型身份——BGE/Qwen 换代
+    时旧向量整体失效，512/2560 维缓存不混用。"""
+    from .. import config
+    from .semantic import (LOCAL_PROVIDERS, MODEL_NAME, QWEN_MODEL_NAME)
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        return f"{QWEN_MODEL_NAME}|{CORPUS_GENERATION}"
+    return f"{MODEL_NAME}|{CORPUS_GENERATION}"
+
+
+def _active_dim() -> int:
+    from .. import config
+    from .semantic import QWEN_MODEL_DIM, MODEL_DIM
+    return (QWEN_MODEL_DIM
+            if config.SEMANTIC_PROVIDER == "qwen3e4b" else MODEL_DIM)
+
+
+def _embed_texts(texts: list[str]):
+    """按当前 provider 编码文档侧（无 instruct）。"""
+    from .. import config
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        from . import qwen_embed
+        return qwen_embed.embed(list(texts))
+    return embed(list(texts))
+
+
+def _embed_query(query: str):
+    """查询侧：BGE 前缀 / Qwen 官方 instruct。"""
+    from .. import config
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        from . import qwen_embed
+        return qwen_embed.embed_query(query)
+    from . import projection as _pj
+    from .semantic import QUERY_PREFIX
+    return embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
+
+
+def _provider_active() -> bool:
+    from .. import config
+    from .semantic import LOCAL_PROVIDERS
+    return (config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS
+            and embed is not None)
 #: S08：words 相似度阈值独立配置——当前为工程初值，专项评测后校准
 WORDS_COSINE_THRESHOLD = float(
     __import__("os").environ.get("MARIPOSA_WORDS_SEMANTIC_THRESHOLD",
@@ -65,21 +108,23 @@ def reindex_word(conn, word_id: str, text: str, speaker, expression_kind,
                            memory_version)
     cached = conn.execute(
         "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
-        " AND word_fingerprint=?", (word_id, WORD_MODEL_KEY, fp)
+        " AND word_fingerprint=?", (word_id, _active_model_key(), fp)
     ).fetchone()
     if cached:
         return True
     conn.execute("DELETE FROM word_embeddings WHERE word_id=?", (word_id,))
-    if not text or not text.strip() or embed is None:
-        return False
-    if config.SEMANTIC_PROVIDER != "local_bge_zh":
+    if not text or not text.strip() or not _provider_active():
         return False
     from datetime import datetime, timezone
-    vec = embed([text])[0]
+    vec = _embed_texts([text])[0]
+    import numpy as _np
+    vec = _np.asarray(list(vec), dtype=_np.float32) if not hasattr(
+        vec, "tobytes") else vec
     conn.execute(
         "INSERT INTO word_embeddings(word_id, model, word_fingerprint,"
         " dim, vector, created_at) VALUES(?,?,?,?,?,?)",
-        (word_id, WORD_MODEL_KEY, fp, len(vec), vec.tobytes(),
+        (word_id, _active_model_key(), fp, _active_dim(),
+         vec.tobytes(),
          datetime.now(timezone.utc).isoformat()))
     return True
 
@@ -89,8 +134,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
                           extra_params: list | None = None) -> list[dict]:
     """可见 words 上余弦检索。候选定位复用 words_search_docs 池
     （speaker/日期等条件由调用方 SQL 前置），返回 word 命中卡。"""
-    if config.SEMANTIC_PROVIDER != "local_bge_zh" or embed is None \
-            or not (query or "").strip():
+    if not _provider_active() or not (query or "").strip():
         return []
     ensure_schema(conn)
     scope = list(extra_where or [])
@@ -115,7 +159,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
         valid = conn.execute(
             "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
             " AND word_fingerprint=?",
-            (r["word_id"], WORD_MODEL_KEY, fp)).fetchone()
+            (r["word_id"], _active_model_key(), fp)).fetchone()
         if not valid:
             if budget > 0:
                 reindex_word(conn, r["word_id"], r["text"], r["speaker"],
@@ -125,7 +169,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
             else:
                 pending += 1
     import numpy as np
-    qvec = embed([query])[0]
+    qvec = _embed_query(query)
     scored = []
     for r in rows:
         fp = _word_fingerprint(r["text"], r["speaker"],
@@ -134,7 +178,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
         vrow = conn.execute(
             "SELECT vector FROM word_embeddings WHERE word_id=? AND"
             " model=? AND word_fingerprint=?",
-            (r["word_id"], WORD_MODEL_KEY, fp)).fetchone()
+            (r["word_id"], _active_model_key(), fp)).fetchone()
         if vrow is None:
             continue
         v = np.frombuffer(vrow["vector"], dtype=np.float32)
@@ -174,7 +218,7 @@ def warmup_words(conn) -> dict:
         valid = conn.execute(
             "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
             " AND word_fingerprint=?",
-            (r["word_id"], WORD_MODEL_KEY, fp)).fetchone()
+            (r["word_id"], _active_model_key(), fp)).fetchone()
         if valid:
             skipped += 1
         elif reindex_word(conn, r["word_id"], r["text"], r["speaker"],
