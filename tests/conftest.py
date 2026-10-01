@@ -114,6 +114,9 @@ import pytest  # noqa: E402
 from mariposa import db, schema  # noqa: E402
 
 
+_install_test_judge()
+
+
 @pytest.fixture(autouse=True)
 def _ensure_test_judge():
     """任何测试 clear_injected 后自动重装（防顺序依赖连锁失败）。"""
