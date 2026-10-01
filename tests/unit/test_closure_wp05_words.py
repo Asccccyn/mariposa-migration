@@ -56,15 +56,28 @@ class TestWordsDense:
                    for c in cands)
 
     def test_dense_separate_space_from_event(self, actors, monkeypatch):
-        """S08：word 向量独立空间——事件正文语料不入 word_embeddings。"""
+        """S08/#6：word 向量独立空间且 model 身份绑定当前 provider。"""
         from mariposa import config as cfg
         from mariposa.retrieval import words_semantic
+        import numpy as np
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "local_bge_zh")
+        # 触发一次 words dense 建表建向量
+        hold_words(actors["jiaming"], [
+            {"speaker": "qiaosheng", "text": "空间身份测试话语",
+             "expression_kind": "verbatim"}])
+        recall_service.words_recall(actors["jiaming"], {
+            "query": "qqqxyz", "semantic_query": "空间身份"})
         with db.formal() as conn:
             models = {r["model"] for r in conn.execute(
                 "SELECT DISTINCT model FROM word_embeddings")}
-        assert all(m.startswith("words|") for m in models), \
-            "word 向量必须使用独立 model 身份"
+        from mariposa.retrieval.words_semantic import _active_model_key
+        want = _active_model_key()
+        # 换代隔离：不同 provider 身份的行可共存（generation 隔离设计），
+        # 但当前 provider 的行必须存在且身份精确
+        assert want in models, \
+            f"当前 provider 向量缺失：{models}"
+        assert all(m != "words|wordbody-v1" for m in models), \
+            "不得存在无模型身份的旧格式行"
 
     def test_fingerprint_invalidates_on_edit(self, actors, monkeypatch):
         """S18/S08：话语编辑/来源变化 → 旧向量失效重嵌。"""

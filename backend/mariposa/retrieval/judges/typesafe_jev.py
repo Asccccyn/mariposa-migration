@@ -326,6 +326,7 @@ class TypeSafeJevJudge(base.JudgeProvider):
             segments.append({"field": field, "roles": roles,
                              "text": text, "truncated": truncated})
 
+        matched_map = candidate.get("_matched") or {}
         is_word_channel = channel in ("words", "word")
         is_word_target = is_word_channel or "our_words" in fields
         event_body = row.get("whitelist_body") or ""
@@ -345,10 +346,12 @@ class TypeSafeJevJudge(base.JudgeProvider):
             return segments
 
         if is_word_target and not is_word_channel:
-            # 闭环复审 P1-4：普通 recall 中 our_words 只是命中线索——
-            # 话语段标 match_evidence，同时必须附当前 event_text 作为
-            # event_evidence（事件事实主体不得缺失；r2 中秋反例同型）
-            add("our_words", ["match_evidence"], match_snippet,
+            # 复审 P1-4 + #1：普通 recall 中 our_words 命中——检索层
+            # 定位的具体话语（真实命中句）作 match_evidence，同时附
+            # 当前 event_text 作为事件事实主体
+            word_match = (matched_map.get("our_words")
+                          or match_snippet)
+            add("our_words", ["match_evidence"], word_match,
                 match_trunc)
             ev_text, ev_tr = _excerpt(event_body, anchors=anchors)
             add("event_text", ["event_evidence"], ev_text, ev_tr)
@@ -365,10 +368,16 @@ class TypeSafeJevJudge(base.JudgeProvider):
                 title)
         if "event_text" in fields or "semantic" in (
                 candidate.get("matched_by") or []):
+            # 复审#1：命中窗优先取检索层真实 matched_excerpt（含
+            # 600 字后的命中——BM25 窗围绕命中 token）；缺失时回退
+            # evidence snippet / 命中锚定窗
+            ev_match = (matched_map.get("event_text")
+                        or match_snippet
+                        or _excerpt(event_body, anchors=anchors)[0])
             add("event_text", ["match_evidence", "event_evidence"],
-                match_snippet or _excerpt(event_body,
-                                          anchors=anchors)[0],
-                match_trunc)
+                ev_match, match_trunc)
+            if not matched_map.get("event_text"):
+                pass
         else:
             ev_text = match_snippet or _excerpt(event_body,
                                                 anchors=anchors)[0]

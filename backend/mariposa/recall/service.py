@@ -307,6 +307,8 @@ def _run_round_compute(session: dict, plan: dict,
                     _neg = plan.get(
                         "explicit_negative_constraints") or {}
                     for sp in (_neg.get("speaker_excluded") or []):
+                        if not isinstance(sp, str) or not sp:
+                            continue  # 非法元素忽略，不逐字符遍历
                         _wwhere.append("w.speaker <> ?")
                         _wparams.append(sp)
                     for rng in (_neg.get("source_date_excluded")
@@ -336,6 +338,21 @@ def _run_round_compute(session: dict, plan: dict,
                             # 闭环复审 P1-4：资源身份统一——dense 与
                             # 稀疏 words 同用 our_word:<id>/channel=words
                             #（S01：our_word 是对象，一份证据一个身份）
+                            # 复审#5：纯 dense word 补正式证据身份
+                            #（当前 memory version + word 分级证据）
+                            _mv = conn.execute(
+                                "SELECT current_version_no FROM"
+                                " memories WHERE memory_id=?",
+                                (h["memory_id"],)).fetchone()
+                            _mv_s = (str(_mv["current_version_no"])
+                                     if _mv else None)
+                            _ek = ("word_verbatim"
+                                   if h.get("expression_kind")
+                                   == "verbatim"
+                                   else "word_paraphrase"
+                                   if h.get("expression_kind")
+                                   == "paraphrase"
+                                   else "word_unverified")
                             dense_cards.append({
                                 "resource_ref":
                                     f"our_word:{h['word_id']}",
@@ -345,8 +362,8 @@ def _run_round_compute(session: dict, plan: dict,
                                 "memory_id": h["memory_id"],
                                 "channel": "words",
                                 "representation": "full",
-                                "content_version": None,
-                                "representation_version": None,
+                                "content_version": _mv_s,
+                                "representation_version": _mv_s,
                                 "projection_version":
                                     config.PROJECTION_REVISION,
                                 "speaker": h["speaker"],
@@ -354,6 +371,14 @@ def _run_round_compute(session: dict, plan: dict,
                                 "excerpt": h["text"],
                                 "matched_by": ["semantic"],
                                 "matched_fields": ["our_words"],
+                                "speaker": h.get("speaker"),
+                                "expression_kind":
+                                    h.get("expression_kind"),
+                                "excerpt": h.get("text"),
+                                "evidence": [evidence_mod.make_evidence(
+                                    _ek, "our_words", h.get("text")
+                                    or "", f"our_word:{h['word_id']}",
+                                    source_version=_mv_s)],
                             })
                         dense_ranked = fusion.family_rank(dense_cards)
                         words_hits = fusion.rrf_fuse({
@@ -463,6 +488,10 @@ def _run_round_compute(session: dict, plan: dict,
     packet = {
         "recall_session_id": sid,
         "revision": session["current_revision"],
+        # 复审#5：重放按同 intent 重校验——专项 words 不套 event phase
+        "intent": plan.get("intent")
+        or ("find_words" if (plan.get("channels") or []) == ["words"]
+            else "recall_event"),
         "status": status,
         "search_status": search_status,
         "delivery_action": sel["delivery_action"],
@@ -530,7 +559,8 @@ def _finalize_cards(cards: list[dict]) -> list[dict]:
                          "memory_id", "word_id", "ordinal", "speaker",
                          "expression_kind", "memory_date", "matched_by",
                          "matched_fields", "excerpt", "truncated", "evidence",
-                         "judge", "version_receipt", "rrf_score")}
+                         "judge", "version_receipt", "rrf_score",
+                         "_matched")}  # 复审#1：检索层真实命中窗
         card["evidence_requirement_met"] = evidence_mod.meets_requirement(
             card.get("evidence") or [], "verbatim_required")
         out.append(card)
@@ -1166,7 +1196,23 @@ def require_owned_session(principal, session: dict,
         raise Forbidden(
             "recall session 归属另一主体；跨主体 session 操作被拒绝",
             code="SESSION_OWNER_MISMATCH", session_id=session["session_id"])
-    _check_conversation_scope(session, a or {})
+    # 复审#4：session 绑定了非空 scope 时，请求必须显式携带匹配的
+    # conversation_scope——省略不再等于继承（Chat/CC 等权 ≠ 自动
+    # 共享隐藏窗口；省略不能成为跨窗口绕过）
+    bound = session.get("conversation_scope") or ""
+    req_scope = (a or {}).get("conversation_scope")
+    if bound:
+        if req_scope is None:
+            raise Forbidden(
+                "session 绑定了 conversation_scope；请求必须显式携带"
+                "匹配的 scope（省略不等于继承）",
+                code="SCOPE_REQUIRED", session_id=session["session_id"])
+    if req_scope is not None and req_scope != bound:
+        # 绑定非空必须匹配；未绑定 session 显式携带 scope 同样拒绝
+        # （RUNTIME-09 保持：不做"空=全局可见"解释）
+        raise Forbidden(
+            "conversation_scope 与 session 绑定范围不一致",
+            code="SCOPE_MISMATCH", session_id=session["session_id"])
 
 
 def _check_conversation_scope(session: dict, a: dict) -> None:
@@ -1314,6 +1360,10 @@ def revalidate_replayed(fn_name: str, saved: dict,
                         stale_fact = True
             if stale_fact:
                 continue
+            if saved.get("intent") == "find_words":
+                # 专项 words 跨阶段（S02/S18）：不套 event phase 过滤
+                kept.append(c)
+                continue
             allowed = phase_policy.eligible_fields(
                 phase_policy.phase_of(mid))
             orig_fields = [_norm_recall_field(f)
@@ -1358,6 +1408,22 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     receipt = store.read_round1_receipt(conn, sid, rev)
     gate["round1_receipt"] = receipt is not None
     if receipt is not None:
+        # 复审#3：本轮请求过的每个 retrieval family 都必须
+        # complete_within_scope——unavailable/partial/pending/truncated
+        # 都不能冒充"完整搜过以后没有候选"
+        cov = receipt["coverage"]
+        incomplete = [
+            k for k, v in cov.items()
+            if isinstance(v, str) and v not in (
+                "complete_within_scope", "not_requested",
+                "round2_only", "evaluated", "not_configured",
+                "blocked", "unavailable_pass")
+            and k not in ("stage_filter",)]
+        # not_configured 仅当该 family 本就未请求（plan 无
+        # semantic_query 时 dense not_requested；这里 provider 未配
+        # 但请求过语义 = unavailable，由请求侧写入）
+        gate["retrieval_complete"] = not incomplete
+        gate["incomplete_families"] = incomplete
         gate["unjudged_zero"] = receipt["unjudged_count"] == 0
         empty_input = (receipt["judged_count"] == 0
                        and receipt["unavailable_count"] == 0
@@ -1413,6 +1479,7 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     allowed = all([
         gate["reason_in_closed_set"],
         gate.get("round1_receipt"),
+        gate.get("retrieval_complete"),
         gate.get("unjudged_zero"),
         gate.get("judge_no_fault"),
         gate.get("reason_fact_supported"),
@@ -1451,7 +1518,9 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     plan = store.get_plan(sid) or {}
     # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
     raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
-    raw_out = _pl.raw_deep_search(principal, plan, limit=raw_limit)
+    raw_out = _pl.raw_deep_search(
+        principal, plan, limit=raw_limit,
+        offset=max(0, int(a.get("offset") or 0)))
     raw_cards = []
     for h in raw_out.get("hits", []):
         raw_cards.append({
@@ -1474,9 +1543,9 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # Jev 一层出站（fake/真实 provider 由此过 S10 硬门）
     from ..retrieval.judges import base as judge_base
     provider = judge_base.get_provider()
-    coverage = {"raw": ("complete_within_scope"
-                        if len(raw_out.get("hits", [])) < raw_limit
-                        else "partial_limit_reached"),
+    raw_has_more = bool(raw_out.get("has_more"))
+    coverage = {"raw": ("partial_has_more" if raw_has_more
+                        else "complete_within_scope"),
                 "judge": "evaluated"}
     degraded: list[str] = []
     judge_candidates = raw_cards[:config.RECALL_JUDGE_CANDIDATE_CAP]
@@ -1513,7 +1582,10 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "missing": sel["missing"],
         "conflicts": sel["conflicts"],
         "degraded_reasons": sorted(set(degraded)),
-        "continuation": None,
+        "continuation": (
+            {"available": True, "action": "round2_raw_continue",
+             "offset": raw_out["next_offset"]}
+            if raw_has_more else None),
         "budget": budget.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
