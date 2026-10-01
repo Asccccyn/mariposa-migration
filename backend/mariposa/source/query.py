@@ -38,12 +38,20 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
            date_from: str | None = None, date_to: str | None = None,
            limit: int = 20, offset: int = 0,
            fts_expr: str | None = None,
-           speaker: str | None = None) -> dict:
+           speaker: str | None = None,
+           speakers_excluded: list[str] | None = None,
+           date_ranges_excluded: list[dict] | None = None,
+           anchor_terms: list[str] | None = None) -> dict:
     """原文专项搜索：关键词 + 说话人 + 日期区间 + 会话过滤（同集分页）。
 
     fts_expr：已编译的 FTS 表达式（含 OR 等布尔组合）直接使用，不再
     二次安全编译（复审#2：调用方的多词 OR 不能被吃掉）。
     speaker：正式身份（qiaosheng/jiaming）硬过滤。
+    speakers_excluded / date_ranges_excluded（{from,to}）：同一候选集
+    内的负向硬过滤（三轮复审#4：与 words 通道同一 source_scope）。
+    anchor_terms：excerpt 命中窗口的定位锚词（三轮复审#5：检索用的
+    FTS 表达式与摘录定位分离——表达式含 OR/引号，正文不会原样包含，
+    不能拿它当关键词找命中位置）。
     """
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
@@ -54,8 +62,26 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
     if speaker:
         where.append("m.speaker=?")
         params.append(speaker)
+    sp_ex = [s for s in (speakers_excluded or [])
+             if isinstance(s, str) and s]
+    if sp_ex:
+        marks = ",".join("?" * len(sp_ex))
+        where.append(f"m.speaker NOT IN ({marks})")
+        params += sp_ex
+    for rng in (date_ranges_excluded or []):
+        if isinstance(rng, dict) and rng.get("from"):
+            where.append("(m.occurred_date IS NULL OR"
+                         " m.occurred_date NOT BETWEEN ? AND ?)")
+            params += [rng["from"], rng.get("to", "9999-12-31")]
 
     keyword = (fts_expr or (query or "").strip())
+    # 三轮复审#5：excerpt 锚词独立于检索表达式——fts_expr 时只用
+    # 调用方给的 anchor_terms；普通 query 时锚词即 query 本身
+    if fts_expr:
+        excerpt_anchors = [a for a in (anchor_terms or [])
+                           if isinstance(a, str) and a.strip()]
+    else:
+        excerpt_anchors = [keyword] if keyword else []
     matched_by = None
     if keyword:
         if set(sender_filter) <= set(_DEFAULT_SENDERS):
@@ -83,7 +109,8 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
     with db.formal() as conn:
         rows = conn.execute(sql, params).fetchall()
     has_more = len(rows) > limit
-    hits = [_serialize(r, keyword=keyword, matched_by=matched_by)
+    hits = [_serialize(r, keyword=keyword, matched_by=matched_by,
+                       anchors=excerpt_anchors)
             for r in rows[:limit]]
     return {"hits": hits, "has_more": has_more, "limit": limit,
             "offset": offset, "senders": sender_filter,
@@ -492,16 +519,16 @@ def _token_spans(text: str) -> list[tuple[str, int, int]]:
     return spans
 
 
-def _body_excerpt(text: str, keyword: str, radius: int = 60) -> str:
-    """正文内命中窗口：token 序列子串匹配映射回原文；绝不取自 evidence。"""
-    if not text:
-        return ""
-    if not keyword:
-        return text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
+def _locate_window(text: str, kw: str, radius: int = 60) -> str | None:
+    """单个锚词的正文命中窗：token 序列匹配映射回原文；未命中 None。
+
+    与检索表达式无关（三轮复审#5）——锚词是普通词面（如"中秋"），
+    不是含 OR/引号的 FTS 表达式。
+    """
     spans = _token_spans(text)
-    q_tokens = [t for t in projection.tokenize(keyword)]
+    q_tokens = [t for t in projection.tokenize(kw) if t]
     if not q_tokens:
-        return text[:radius * 2]
+        return None
     ql = [t.lower() for t in q_tokens]
     n, m = len(spans), len(ql)
     for i in range(n - m + 1):
@@ -512,13 +539,41 @@ def _body_excerpt(text: str, keyword: str, radius: int = 60) -> str:
             hi = min(len(text), end + radius)
             return (("…" if lo > 0 else "") + text[lo:hi]
                     + ("…" if hi < len(text) else ""))
-    p = text.find(keyword)
+    p = text.find(kw)
     if p >= 0:
         lo = max(0, p - radius)
-        hi = min(len(text), p + len(keyword) + radius)
+        hi = min(len(text), p + len(kw) + radius)
         return (("…" if lo > 0 else "") + text[lo:hi]
                 + ("…" if hi < len(text) else ""))
-    return text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
+    return None
+
+
+def _anchors_excerpt(text: str, keyword: str, anchors: list[str] | None,
+                     radius: int = 60) -> str:
+    """锚词序列的命中窗：按序尝试，第一个能定位的锚词给出窗口；
+    全部未定位才退头部窗口（SL-03：只从正文生成，不回退 evidence）。"""
+    if not text:
+        return ""
+    head = text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
+    cand = [a for a in (anchors or []) if a and a.strip()]
+    if not cand and keyword:
+        cand = [keyword]
+    if not cand:
+        return head
+    for a in cand:
+        win = _locate_window(text, a, radius)
+        if win is not None:
+            return win
+    return head
+
+
+def _body_excerpt(text: str, keyword: str, radius: int = 60) -> str:
+    """单关键词命中窗（兼容旧调用；正文生成，绝不取自 evidence）。"""
+    if not text:
+        return ""
+    if not keyword:
+        return text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
+    return _anchors_excerpt(text, keyword, [keyword], radius)
 
 
 def _evidence_excerpt(row, keyword: str, radius: int = 60) -> str:
@@ -554,9 +609,12 @@ def _evidence_excerpt(row, keyword: str, radius: int = 60) -> str:
     return ""
 
 
-def _excerpt_for(row, text: str, keyword: str, matched_by, sliced: bool):
-    """excerpt 生成规则（SL-03）：
+def _excerpt_for(row, text: str, keyword: str, matched_by, sliced: bool,
+                 anchors: list[str] | None = None) -> str:
+    """excerpt 生成规则（SL-03 + 三轮复审#5）：
     - 默认（fts_text/无关键词）：只从正文生成，绝不回退 evidence；
+      检索用 FTS 表达式与摘录锚词分离（anchors），命中窗围绕真实
+      命中的锚词（长消息尾部命中不再给出无关开头）；
     - 显式证据面（evidence_like）：正文优先，正文空才取证据摘录。
     """
     if sliced:
@@ -564,8 +622,8 @@ def _excerpt_for(row, text: str, keyword: str, matched_by, sliced: bool):
     if matched_by == "evidence_like":
         if keyword and not text:
             return _evidence_excerpt(row, keyword)
-        return _body_excerpt(text, keyword)
-    return _body_excerpt(text, keyword)
+        return _anchors_excerpt(text, keyword, anchors)
+    return _anchors_excerpt(text, keyword, anchors)
 
 
 def _find_message(conn, message_id=None, provider_message_id=None):
@@ -675,7 +733,8 @@ def _slice_content_json(content_json: str | None, s_off, e_off) -> str | None:
 
 def _serialize(row, *, keyword: str = "", include_content: bool = False,
                char_offsets=None, is_start=False, is_end=False,
-               slice_offsets=None, matched_by: str | None = None) -> dict:
+               slice_offsets=None, matched_by: str | None = None,
+               anchors: list[str] | None = None) -> dict:
     text = row["text"] or ""
     sliced = False
     if slice_offsets and (slice_offsets[0] is not None
@@ -698,7 +757,8 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "updated_at": row["updated_at"],
         "occurred_date": row["occurred_date"],
         "text": text,
-        "excerpt": _excerpt_for(row, text, keyword, matched_by, sliced),
+        "excerpt": _excerpt_for(row, text, keyword, matched_by, sliced,
+                                anchors=anchors),
         "attachments": json.loads(row["attachments"] or "[]"),
         "has_thinking": bool(row["has_thinking"]),
         "has_tool_content": bool(row["has_tool_content"]),

@@ -238,6 +238,35 @@ def has_raw_round(conn, session_id: str, burst_no: int) -> bool:
         " AND kind='raw'", (session_id, burst_no)).fetchone())
 
 
+def issue_raw_continuation(conn, *, session_id: str, revision: int,
+                           burst_no: int, next_offset: int) -> str:
+    """三轮复审#2：签发/重签 raw 分页游标（单活跃——覆盖旧行）。"""
+    token = uuid.uuid4().hex
+    conn.execute(
+        "INSERT OR REPLACE INTO recall_raw_continuations(session_id,"
+        " revision, burst_no, token, next_offset, issued_at)"
+        " VALUES(?,?,?,?,?,?)",
+        (session_id, revision, burst_no, token, next_offset, _now()))
+    return token
+
+
+def read_raw_continuation(conn, session_id: str, revision: int,
+                          burst_no: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM recall_raw_continuations WHERE session_id=?"
+        " AND revision=? AND burst_no=?",
+        (session_id, revision, burst_no)).fetchone()
+    return dict(row) if row else None
+
+
+def clear_raw_continuation(conn, session_id: str, revision: int,
+                           burst_no: int) -> None:
+    conn.execute(
+        "DELETE FROM recall_raw_continuations WHERE session_id=?"
+        " AND revision=? AND burst_no=?",
+        (session_id, revision, burst_no))
+
+
 def record_round(conn, session_id: str, burst_no: int,
                  operation_key: str | None = None,
                  kind: str = "memory") -> int:

@@ -103,6 +103,60 @@ class AllowedScope:
         return where, params, (rejected or set()), plan
 
 
+def source_scope(plan: dict) -> dict:
+    """三轮复审#4：words/raw 通道统一的正/负说话人与日期条件。
+
+    一套语义三处复用（words 稀疏、words dense、raw Round2），不再各写
+    一套：正向 speaker / date(from,to) 硬过滤，负向 speaker_excluded /
+    source_date_excluded({from,to} 区间) 同样硬过滤。
+    """
+    ec = plan.get("explicit_constraints") or {}
+    neg = plan.get("explicit_negative_constraints") or {}
+    dr = ec.get("source_date") or ec.get("event_date")
+    dr = dr if isinstance(dr, dict) else {}
+    return {
+        "speaker": ec.get("speaker"),
+        "speakers_excluded": [s for s in (neg.get("speaker_excluded") or [])
+                              if isinstance(s, str) and s],
+        "date_from": dr.get("from"),
+        "date_to": dr.get("to"),
+        "date_ranges_excluded": [
+            r for r in (neg.get("source_date_excluded")
+                        or neg.get("event_date_excluded") or [])
+            if isinstance(r, dict) and r.get("from")],
+    }
+
+
+def source_scope_sql(scope: dict, speaker_col: str,
+                     date_col: str) -> tuple[list[str], list]:
+    """source_scope → 说话人/日期列上的过滤 SQL（words 两侧与 raw 同构）。
+
+    date_col 上 NULL 安全：日期缺失的行不被负向区间误伤（无日期 =
+    不在任何排除区间内，不等于命中区间）。
+    """
+    where: list[str] = []
+    params: list = []
+    if scope.get("speaker"):
+        where.append(f"{speaker_col}=?")
+        params.append(scope["speaker"])
+    sp_ex = scope.get("speakers_excluded") or []
+    if sp_ex:
+        marks = ",".join("?" * len(sp_ex))
+        where.append(f"{speaker_col} NOT IN ({marks})")
+        params += sp_ex
+    if scope.get("date_from"):
+        where.append(f"{date_col} >= ?")
+        params.append(scope["date_from"])
+    if scope.get("date_to"):
+        where.append(f"{date_col} <= ?")
+        params.append(scope["date_to"])
+    for rng in scope.get("date_ranges_excluded") or []:
+        where.append(f"({date_col} IS NULL OR"
+                     f" {date_col} NOT BETWEEN ? AND ?)")
+        params += [rng["from"], rng.get("to", "9999-12-31")]
+    return where, params
+
+
 def plan_token_groups(plan: dict) -> tuple[list[list[str]], list[list[str]]]:
     """QueryPlan → (terms token 组, phrases token 组)。
 

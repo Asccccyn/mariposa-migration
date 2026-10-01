@@ -173,30 +173,17 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         parts.append(f"({terms_expr})")
     expr = " AND ".join(parts) if parts else None
 
-    constraints = plan.get("explicit_constraints") or {}
-    speaker = constraints.get("speaker")
-    date_rng = constraints.get("source_date") or constraints.get("event_date")
-    # 复审#5：负向 speaker/date 硬过滤（稀疏路）
-    neg = plan.get("explicit_negative_constraints") or {}
-    sp_ex = [x for x in (neg.get("speaker_excluded") or [])
-             if isinstance(x, str) and x]
+    # 三轮复审#4：正/负说话人与日期条件统一走 source_scope（与 words
+    # dense、raw Round2 同一语义；source_date_excluded 在此落地——
+    # 此前稀疏路只过滤了 speaker_excluded，排除日期两条都漏出来）
+    scope = qp.source_scope(plan)
 
     where = ["m.visibility='active'", "m.compression_state='full'"]
     params: list = []
-    if speaker:
-        where.append("w.speaker=?")
-        params.append(speaker)
-    if sp_ex:
-        marks = ",".join("?" * len(sp_ex))
-        where.append(f"w.speaker NOT IN ({marks})")
-        params += sp_ex
-    if date_rng and isinstance(date_rng, dict):
-        if date_rng.get("from"):
-            where.append("m.memory_date >= ?")
-            params.append(date_rng["from"])
-        if date_rng.get("to"):
-            where.append("m.memory_date <= ?")
-            params.append(date_rng["to"])
+    scope_where, scope_params = qp.source_scope_sql(scope, "w.speaker",
+                                                    "m.memory_date")
+    where += scope_where
+    params += scope_params
 
     sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker, w.text,"
            " w.expression_kind, w.source_ref, m.memory_date,"
