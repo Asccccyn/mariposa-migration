@@ -17,12 +17,43 @@ from . import projection
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 MODEL_DIM = 512
+#: Qwen3-Embedding-4B（MLX，2026-09-30 授权）：独立身份与维度
+QWEN_MODEL_NAME = "Qwen/Qwen3-Embedding-4B-4bit-DWQ"
+QWEN_MODEL_DIM = 2560
 # S07/WP03：向量身份绑定语料 generation——corpus 规则升级时旧向量
 # 整体失效重嵌（本值进入 memory_embeddings.model 身份与校验）
 CORPUS_GENERATION = "eventbody-v1"
+#: 本地语义 provider 集合（S07：provider 白名单集中定义）
+LOCAL_PROVIDERS = frozenset({"local_bge_zh", "qwen3e4b"})
+
+#: Qwen3-Embedding-4B 相似度阈值（2026-09-30 合成对校准：同义改写
+#: 0.42-0.65、无关 0.17-0.29、间隔 +0.13 → 中点 0.35；后续用真实
+#: 语料评测复核，不盲搬 bge 的 0.51）
+QWEN_COSINE_THRESHOLD = float(os.environ.get(
+    "MARIPOSA_QWEN_SEMANTIC_THRESHOLD", "0.35"))
+
+
+def _active_threshold() -> float:
+    return (QWEN_COSINE_THRESHOLD
+            if config.SEMANTIC_PROVIDER == "qwen3e4b"
+            else COSINE_THRESHOLD)
 # 阈值实测分布（bge-small-zh + query 前缀 + 双侧投影规范化，ONNX 确定性推理）：
 #   有效语义改写 >= 0.535；跨话题泛化误召回 <= 0.504；无关 < 0.40
 # 阈值版本化可配（policy 变更入审计）；返回始终带 score 供调用方再筛。
+def _active_model_name() -> str:
+    return (QWEN_MODEL_NAME if config.SEMANTIC_PROVIDER == "qwen3e4b"
+            else MODEL_NAME)
+
+
+def _active_model_dim() -> int:
+    return (QWEN_MODEL_DIM
+            if config.SEMANTIC_PROVIDER == "qwen3e4b" else MODEL_DIM)
+
+
+def _active_model_key() -> str:
+    return f"{_active_model_name()}|{CORPUS_GENERATION}"
+
+
 MODEL_KEY = f"{MODEL_NAME}|{CORPUS_GENERATION}"
 COSINE_THRESHOLD = float(os.environ.get("MARIPOSA_SEMANTIC_THRESHOLD", "0.51"))
 REINDEX_BUDGET = int(os.environ.get("MARIPOSA_SEMANTIC_REINDEX_BUDGET", "20"))
@@ -30,6 +61,14 @@ RELATIVE_WINDOW = 0.06
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："  # BGE 官方检索用法
 
 _provider = None
+
+
+class _QwenEmbeddingAdapter:
+    """mlx-lm 主干作为 fastembed 兼容 provider（embed 接口同形）。"""
+
+    def embed(self, texts: list[str]):
+        from . import qwen_embed
+        return qwen_embed.embed(list(texts))
 
 
 def _cache_path() -> str:
@@ -40,11 +79,20 @@ def _cache_path() -> str:
 
 
 def get_provider():
-    """返回本地 ONNX provider；SEMANTIC_PROVIDER 未配置时 None。"""
+    """返回本地 provider；SEMANTIC_PROVIDER 未配置时 None。
+
+    - local_bge_zh：fastembed ONNX（512 维，查询侧带 BGE 检索前缀）
+    - qwen3e4b：MLX Qwen3-Embedding-4B 4bit（2560 维，查询侧
+      embed_query 带官方 instruct；2026-09-30 授权）
+    """
     global _provider
-    if config.SEMANTIC_PROVIDER != "local_bge_zh":
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        if not isinstance(_provider, _QwenEmbeddingAdapter):
+            _provider = _QwenEmbeddingAdapter()
+        return _provider
+    if config.SEMANTIC_PROVIDER not in LOCAL_PROVIDERS:
         return None
-    if _provider is None:
+    if isinstance(_provider, _QwenEmbeddingAdapter) or _provider is None:
         from fastembed import TextEmbedding
         _provider = TextEmbedding(MODEL_NAME, cache_dir=_cache_path())
     return _provider
@@ -83,7 +131,7 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     row = conn.execute(
         "SELECT search_text_hash FROM retrieval_documents WHERE memory_id=?",
         (memory_id,)).fetchone()
-    if config.SEMANTIC_PROVIDER != "local_bge_zh":
+    if config.SEMANTIC_PROVIDER not in LOCAL_PROVIDERS:
         conn.execute("DELETE FROM memory_embeddings WHERE memory_id=?", (memory_id,))
         return False
     if row is None:
@@ -92,7 +140,7 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     # 命中缓存（同投影 hash 已有向量）则不重算
     cached = conn.execute(
         "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
-        " AND projection_hash=?", (memory_id, MODEL_KEY, row["search_text_hash"])
+        " AND projection_hash=?", (memory_id, _active_model_key(), row["search_text_hash"])
     ).fetchone()
     if cached:
         return True
@@ -110,7 +158,8 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     conn.execute(
         "INSERT OR REPLACE INTO memory_embeddings(memory_id, model, dim,"
         " projection_hash, vector, created_at) VALUES(?,?,?,?,?,?)",
-        (memory_id, MODEL_KEY, MODEL_DIM, row["search_text_hash"],
+        (memory_id, _active_model_key(), _active_model_dim(),
+         row["search_text_hash"],
          vec.tobytes(), datetime.now(timezone.utc).isoformat()))
     return True
 
@@ -125,7 +174,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
     再过滤（范围内正确候选可能已被别的池挤掉）。不传时行为与旧接口
     一致（兼容 memory.search）。
     """
-    if config.SEMANTIC_PROVIDER != "local_bge_zh":
+    if config.SEMANTIC_PROVIDER not in LOCAL_PROVIDERS:
         return []
     ensure_schema(conn)
     scope = list(extra_where or [])
@@ -148,7 +197,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
         valid = conn.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
             " AND projection_hash=?",
-            (r["memory_id"], MODEL_KEY, r["search_text_hash"])).fetchone()
+            (r["memory_id"], _active_model_key(), r["search_text_hash"])).fetchone()
         if not valid:
             if budget > 0:
                 reindex(conn, r["memory_id"])
@@ -157,7 +206,11 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
                 pending += 1
     from . import projection as _pj
     np = _np()
-    qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        from . import qwen_embed
+        qvec = qwen_embed.embed_query(query)
+    else:
+        qvec = embed([QUERY_PREFIX + _pj.normalize_search_text(query)])[0]
     scored = []
     score_sql = ("SELECT e.memory_id, e.vector, e.projection_hash,"
                  " rd.search_text_hash, rd.projection_kind,"
@@ -169,10 +222,10 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
                  " AND e.projection_hash = rd.search_text_hash")  # 仅有效投影向量
     if scope:
         score_sql += " AND " + " AND ".join(scope)
-    for r in conn.execute(score_sql, [MODEL_KEY] + sp):
+    for r in conn.execute(score_sql, [_active_model_key()] + sp):
         v = np.frombuffer(r["vector"], dtype=np.float32)
         score = float(qvec @ v / (np.linalg.norm(qvec) * np.linalg.norm(v)))
-        if score >= COSINE_THRESHOLD:
+        if score >= _active_threshold():
             scored.append({
                 "memory_id": r["memory_id"],
                 "matched_by": ("summary_semantic"
@@ -209,7 +262,7 @@ def warmup(conn: sqlite3.Connection) -> dict:
         valid = conn.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
             " AND projection_hash=?",
-            (r["memory_id"], MODEL_KEY, r["search_text_hash"])).fetchone()
+            (r["memory_id"], _active_model_key(), r["search_text_hash"])).fetchone()
         if valid:
             skipped += 1
         else:
