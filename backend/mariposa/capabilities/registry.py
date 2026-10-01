@@ -829,7 +829,10 @@ def _find_words(principal: Principal, a: dict) -> dict:
         raise _FW("find_words 受 MARIPOSA_WORDS_RECALL_ENABLED 控制（默认关）",
                   code="WORDS_CHANNEL_DISABLED")
     plan = dict(a.get("query_plan") or {})
-    plan.setdefault("original_request", a.get("original_request", ""))
+    # 三轮复审#6：只传 query 的调用以 query 回填 original_request
+    #（此前留空 → validate_query_plan 报"original_request 必填"）
+    plan.setdefault("original_request",
+                    a.get("original_request") or a.get("query") or "")
     if not plan.get("lexical_terms"):
         plan["lexical_terms"] = [a.get("query", "") or
                                  a.get("original_request", "")]

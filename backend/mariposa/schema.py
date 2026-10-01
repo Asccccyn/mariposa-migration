@@ -1326,6 +1326,22 @@ CREATE TABLE recall_round1_receipts(
 -- S17：区分 logical kind（memory/words/raw）与记录序号
 ALTER TABLE recall_rounds ADD COLUMN kind TEXT NOT NULL DEFAULT 'memory';
 """),
+    (7, """
+-- ===== 三轮复审#2：raw round2 分页游标（服务端签发，单活跃） =====
+-- 翻页是同一 logical raw round 的延续：不消耗新轮、不触发
+-- no_prior_raw_round 门禁。token 服务端生成，绑定当前
+-- session/revision/burst；翻尽、refine 前进 revision/burst 或
+-- 重签发即失效（单活跃游标，旧 token 不可重放）。
+CREATE TABLE recall_raw_continuations(
+  session_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  burst_no INTEGER NOT NULL,
+  token TEXT NOT NULL,
+  next_offset INTEGER NOT NULL,
+  issued_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, revision, burst_no)
+);
+"""),
 ]
 
 

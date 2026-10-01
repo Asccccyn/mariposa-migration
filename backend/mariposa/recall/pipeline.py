@@ -151,20 +151,29 @@ def raw_deep_search(principal, plan: dict, limit: int = 20,
     定位。旧 raw_* 层（合成导入）不在 v1.7 深搜范围（见 FIX_REPORT §5）。
     """
     # 复审#2：多词 OR 以已编译 FTS 表达式传入（source_query 不再
-    # 二次编译吃掉 OR）；speaker 硬过滤；offset 分页 + has_more
+    # 二次编译吃掉 OR）；speaker 硬过滤；offset 分页 + has_more。
+    # 三轮复审#4：raw Round2 继承同一 query revision 的负向条件
+    #（speaker_excluded/source_date_excluded），与 words 稀疏/dense
+    # 同一 source_scope；三轮复审#5：excerpt 锚词 = 原始 terms/phrases
+    #（用于命中窗口定位），绝不拿 FTS 表达式本身当关键词找正文
     terms = [t for t in (plan.get("lexical_terms") or [])
              if isinstance(t, str) and t.strip()]
     from ..retrieval import projection as _proj
+    from ..retrieval import query_plan as _qp
     or_phrases = [_proj.compile_query(t) for t in terms]
     or_phrases = [q for q in or_phrases if q]
     fts_query = " OR ".join(or_phrases) if or_phrases else None
-    ec = plan.get("explicit_constraints") or {}
-    dr = ec.get("source_date") or ec.get("event_date") or {}
+    scope = _qp.source_scope(plan)
+    anchors = terms + [p for p in (plan.get("exact_phrases") or [])
+                       if isinstance(p, str) and p.strip()]
     res = source_query.search(
         None, fts_expr=fts_query or None,
         senders=["human", "assistant"],
-        speaker=ec.get("speaker"),
-        date_from=dr.get("from"), date_to=dr.get("to"),
+        speaker=scope["speaker"],
+        date_from=scope["date_from"], date_to=scope["date_to"],
+        speakers_excluded=scope["speakers_excluded"],
+        date_ranges_excluded=scope["date_ranges_excluded"],
+        anchor_terms=anchors or None,
         limit=limit, offset=offset)
     hits = []
     for h in res["hits"]:
@@ -312,9 +321,10 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
         # our_words 字段命中：定位具体话语原文（复审#1——拼接字段
         # 的命中窗不能冒充原话；word_id 可反查）
         if "our_words" in matched:
-            word_txt = _locate_word_text(conn, e["owner"], terms)
-            if word_txt:
-                matched["our_words"] = word_txt
+            loc = _locate_word_text(conn, e["owner"], terms, phrases)
+            if loc:
+                matched["our_words"] = loc["text"]
+                matched["our_words_word_id"] = loc["word_id"]
         card = {
             "resource_ref": f"memory:{e['owner']}",
             "candidate_ref": f"memory:{e['owner']}",
@@ -336,25 +346,33 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
     return hits
 
 
-def _locate_word_text(conn, memory_id: str, term_groups) -> str | None:
-    """在该桶的 our_words 里找包含任一 term（token 交叠）的具体话语。"""
-    best = None
-    for r in conn.execute(
-            "SELECT text FROM memory_our_words WHERE memory_id=?"
-            " ORDER BY ordinal", (memory_id,)).fetchall():
-        toks = set(t for t in r["text"].replace(" ", "")) | set(
-            r["text"].split())
-        for g in term_groups or []:
-            for tk in g:
-                if tk and (tk in r["text"] or tk in toks):
-                    if best is None:
-                        best = r["text"]
-                    break
-            if best:
-                break
-        if best:
-            break
-    return best
+def _locate_word_text(conn, memory_id: str, term_groups,
+                      phrases=None) -> dict | None:
+    """三轮复审#3：在该桶 our_words 逐句上复用候选打分的同一查询
+    语义（term 组内连续、组间 OR；phrases AND）定位真实命中话语。
+
+    token 交叠定位会把"小猫今天很乖"当成"小路灯"的命中（组内任一
+    token 命中即取首句），不允许；打分与 round1 候选完全同源，最高分
+    话语即 Jev 看到的 match evidence。返回 {"word_id", "text"}。
+    """
+    from ..retrieval import scoped_bm25
+    rows = conn.execute(
+        "SELECT word_id, text FROM memory_our_words WHERE memory_id=?"
+        " ORDER BY ordinal", (memory_id,)).fetchall()
+    if not rows:
+        return None
+    docs = [{"owner": r["word_id"], "field": "our_words",
+             "tokens": scoped_bm25._doc_tokens(
+                 projection.normalize_search_text(r["text"]))}
+            for r in rows]
+    scored = scoped_bm25.score_documents(
+        docs, [g for g in (term_groups or [])],
+        [p for p in (phrases or [])])
+    if not scored:
+        return None
+    by_id = {r["word_id"]: r["text"] for r in rows}
+    return {"word_id": scored[0]["owner"],
+            "text": by_id.get(scored[0]["owner"])}
 
 
 def round2_server_facts(session: dict) -> dict:
