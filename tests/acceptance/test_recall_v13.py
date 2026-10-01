@@ -101,15 +101,17 @@ class TestV13SafeEvid:
                              "expression_kind": "verbatim",
                              "source_ref": f"raw_msg:{mid}"}])
         out = recall_service.words_recall(actors["jiaming"], {"query": "原话"})
-        assert out["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_verbatim"
+        kinds1 = [e["evidence_kind"] for h in out["candidates"]
+                  for e in h["evidence"]]
+        assert "word_verbatim" in kinds1
         with db.formal() as conn:
             conn.execute("PRAGMA foreign_keys=OFF")
             conn.execute("DELETE FROM raw_messages")
             conn.execute("PRAGMA foreign_keys=ON")
         out2 = recall_service.words_recall(actors["jiaming"], {"query": "原话"})
-        assert out2["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_unverified"
+        kinds2 = [e["evidence_kind"] for h in out2["candidates"]
+                  for e in h["evidence"]]
+        assert "word_unverified" in kinds2
 
 
 class TestV13Query:
@@ -219,7 +221,7 @@ class TestV13Word:
              our_words=[{"speaker": "qiaosheng", "text": "独有词咕咕",
                          "expression_kind": "verbatim"}])
         out = recall_service.words_recall(actors["jiaming"], {"query": "咕咕"})
-        assert out["hits"]
+        assert out["candidates"]
 
     def test_word03(self, actors):
         hold(actors, "事件", "2026-08-10",
@@ -229,8 +231,8 @@ class TestV13Word:
                          "expression_kind": "verbatim"}])
         out = recall_service.words_recall(actors["jiaming"], {
             "query": "话语", "explicit_constraints": {"speaker": "qiaosheng"}})
-        assert out["hits"] and all(
-            h["speaker"] == "qiaosheng" for h in out["hits"])
+        assert out["candidates"] and all(
+            h["speaker"] == "qiaosheng" for h in out["candidates"])
 
     def test_word04(self, actors):
         hold(actors, "搬家事件", "2026-08-10",

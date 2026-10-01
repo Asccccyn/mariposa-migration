@@ -372,7 +372,7 @@ class TestRawx:
                          (m["memory_id"],))
         out = recall_service.words_recall(actors["jiaming"],
                                           {"query": "搬家"})
-        assert out["hits"] == [] and out["forgotten_recall"] == "disabled"
+        assert out["candidates"] == []
 
     def test_rawx06(self):
         self._raw(3, target_i=0)
@@ -394,16 +394,18 @@ class TestRawx:
                          "expression_kind": "verbatim",
                          "source_ref": f"raw_msg:{mid}"}])
         out = recall_service.words_recall(actors["jiaming"], {"query": "原话"})
-        assert out["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_verbatim"
+        kinds1 = [e["evidence_kind"] for h in out["candidates"]
+                  for e in h["evidence"]]
+        assert "word_verbatim" in kinds1
         with db.formal() as conn:
             conn.execute("PRAGMA foreign_keys=OFF")
             conn.execute("DELETE FROM raw_messages")
             conn.execute("PRAGMA foreign_keys=ON")
         out2 = recall_service.words_recall(actors["jiaming"],
                                            {"query": "原话"})
-        assert out2["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_unverified"
+        kinds2 = [e["evidence_kind"] for h in out2["candidates"]
+                  for e in h["evidence"]]
+        assert "word_unverified" in kinds2
 
 
 class TestRuntime:

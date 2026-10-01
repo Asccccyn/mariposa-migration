@@ -283,6 +283,62 @@ def _run_round_compute(session: dict, plan: dict,
                 if wres.get("forgotten_words_count"):
                     coverage["words_forgotten"] = (
                         f"disabled:{config.WORDS_FORGOTTEN_RECALL}")
+                # S08/WP05：words 专项 dense（独立向量空间，独立阈值）
+                from ..retrieval import words_semantic as wsem
+                if plan.get("semantic_query"):
+                    _wc = plan.get("explicit_constraints") or {}
+                    _wwhere, _wparams = [], []
+                    if _wc.get("speaker"):
+                        _wwhere.append("w.speaker=?")
+                        _wparams.append(_wc["speaker"])
+                    _wd = (_wc.get("source_date") or
+                           _wc.get("event_date") or {})
+                    if isinstance(_wd, dict):
+                        if _wd.get("from"):
+                            _wwhere.append("m.memory_date >= ?")
+                            _wparams.append(_wd["from"])
+                        if _wd.get("to"):
+                            _wwhere.append("m.memory_date <= ?")
+                            _wparams.append(_wd["to"])
+                    wdense = wsem.words_semantic_search(
+                        conn, plan["semantic_query"],
+                        limit=config.RECALL_LEXICAL_K,
+                        extra_where=_wwhere, extra_params=_wparams)
+                    wpending = 0
+                    if wdense and isinstance(wdense[-1], dict) \
+                            and "__pending_vectors__" in wdense[-1]:
+                        wpending = wdense.pop()["__pending_vectors__"]
+                    if wdense:
+                        coverage["words_dense"] = (
+                            "partial_vectors_pending" if wpending
+                            else "complete_within_scope")
+                        # 同通道 RRF：BM25 与 dense 各自成序后融合
+                        lex_ranked = fusion.family_rank(words_hits)
+                        dense_cards = []
+                        for h in wdense:
+                            dense_cards.append({
+                                "resource_ref": f"word:{h['word_id']}",
+                                "candidate_ref": f"word:{h['word_id']}",
+                                "word_id": h["word_id"],
+                                "memory_id": h["memory_id"],
+                                "channel": "word",
+                                "representation": "full",
+                                "content_version": None,
+                                "representation_version": None,
+                                "projection_version":
+                                    config.PROJECTION_REVISION,
+                                "speaker": h["speaker"],
+                                "expression_kind": h["expression_kind"],
+                                "excerpt": h["text"],
+                                "matched_by": ["semantic"],
+                                "matched_fields": ["our_words"],
+                            })
+                        dense_ranked = fusion.family_rank(dense_cards)
+                        words_hits = fusion.rrf_fuse({
+                            "lexical": lex_ranked,
+                            "dense": dense_ranked})
+                    elif config.SEMANTIC_PROVIDER == "local_bge_zh":
+                        coverage["words_dense"] = "unavailable"
 
         # words → raw 授权专项补查（仅证据不足 + 显式开启 + 授权范围内）
         raw_result: dict | None = None
@@ -653,11 +709,15 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     op_ctx["payload_hash"], packet)
             store.insert_session(conn, draft)
             budget.ensure_round_available_conn(conn, sid, draft)
+            # S17：logical kind——纯 words 专项轮记 words
+            r1_kind = ("words"
+                       if (plan.get("channels") or []) == ["words"]
+                       else "memory")
             store.record_round(conn, sid, burst_no=1,
-                               operation_key=op_key, kind="memory")
+                               operation_key=op_key, kind=r1_kind)
             _commit_round_effects(conn, sid, 1, effects, plan=plan,
                                   scope=draft["conversation_scope"],
-                                  kind="memory")
+                                  kind=r1_kind)
             store.record_attempt(conn, sid, op_key or _op_id("round"), 1, 1,
                                  "retrieve", "completed")
             conn.execute("COMMIT")
@@ -1091,14 +1151,20 @@ def _check_conversation_scope(session: dict, a: dict) -> None:
             session_id=session["session_id"])
 
 
-def words_recall(principal, a: dict) -> dict:
-    """memory.words.recall：独立 words 通道入口（不要求建 session）。"""
+def words_recall(principal, a: dict, op_ctx: dict | None = None) -> dict:
+    """memory.words.recall：words 专项统一入口（S08/WP05）。
+
+    内部复用 session 化主链（短期 session：预算、回执、同一层 Jev
+    出口、≤3 交付全走 start 机制），不再直返 20-30 条正文，也不另写
+    一套 pipeline。
+    """
     if not config.RECALL_WORDS_ENABLED:
         raise Forbidden("words 通道未启用（MARIPOSA_WORDS_RECALL_ENABLED）",
                         code="WORDS_CHANNEL_DISABLED")
     plan = validate_query_plan({
         "original_request": a.get("query") or a.get("original_request", ""),
         "channels": ["words"],
+        "semantic_query": a.get("semantic_query") or "",
         "lexical_terms": a.get("lexical_terms") or
         ([a["query"]] if a.get("query") else []),
         "exact_phrases": a.get("exact_phrases") or [],
@@ -1106,12 +1172,7 @@ def words_recall(principal, a: dict) -> dict:
         "explicit_negative_constraints":
             a.get("explicit_negative_constraints") or {},
     })
-    with db.formal() as conn:
-        res = words_mod.words_search(conn, plan,
-                                     int(a.get("limit") or 20))
-    res["instruction_authority"] = "none"
-    res["content_role"] = "retrieved_memory"
-    return res
+    return start(principal, {"query_plan": plan}, op_ctx=op_ctx)
 
 
 # ---------- operation 幂等重放重校验（审计 F07） ----------
