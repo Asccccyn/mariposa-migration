@@ -52,7 +52,9 @@ class TestDataProfile:
                 "channel": "word", "matched_fields": ["our_words.text"],
                 "excerpt": "原话片段内容"}
         proj = j._candidate_projection(cand)
-        assert proj["excerpt"] == "", "无 word_excerpt 许可不外发话语"
+        word_segs = [seg for seg in proj["segments"]
+                     if seg["field"] == "our_words"]
+        assert not word_segs, "无 word_excerpt 许可不外发话语"
 
     def test_event_excerpt_granted_passes(self, monkeypatch):
         monkeypatch.setenv("MARIPOSA_RECALL_JUDGE_ALLOWED_DATA",
@@ -60,9 +62,12 @@ class TestDataProfile:
         j = TypeSafeJevJudge()
         cand = {"candidate_ref": "m1", "resource_ref": "memory:m1",
                 "channel": "event", "matched_fields": ["event_text"],
-                "excerpt": "事件正文片段"}
+                "excerpt": "事件正文片段",
+                "_row": {"whitelist_body": "事件正文片段"}}
         proj = j._candidate_projection(cand)
-        assert proj["excerpt"] == "事件正文片段"
+        ev_segs = [seg for seg in proj["segments"]
+                   if seg["field"] == "event_text"]
+        assert ev_segs and "事件正文片段" in ev_segs[0]["text"]
 
 
 class TestFingerprintExpansion:

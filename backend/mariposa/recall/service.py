@@ -198,7 +198,9 @@ def _attach_event_evidence(conn, candidates: list[dict]) -> None:
     for c in candidates:
         if c.get("channel") != "event" or c.get("evidence"):
             continue
-        row = c.pop("_row", None)
+        # r2 S09：_row 保留在卡上（Jev 投影需要 title/event 主体）；
+        # 出站前由 _finalize_cards 白名单剔除，不进最终 packet
+        row = c.get("_row")
         mid = c["memory_id"]
         if row is None:
             row = {"whitelist_body": None,

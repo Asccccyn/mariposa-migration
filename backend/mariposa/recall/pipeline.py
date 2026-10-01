@@ -287,8 +287,10 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
         for m in conn.execute(
                 "SELECT m.memory_id, m.memory_date, m.compression_state,"
                 " m.current_version_no, rd.projection_kind,"
-                " rd.whitelist_body FROM memories m"
+                " rd.whitelist_body, v.original_title FROM memories m"
                 " JOIN retrieval_documents rd ON rd.memory_id=m.memory_id"
+                " LEFT JOIN memory_versions v ON v.memory_id=m.memory_id"
+                "   AND v.version_no=m.current_version_no"
                 f" WHERE m.memory_id IN ({marks})", chunk).fetchall():
             meta[m["memory_id"]] = dict(m)
     for e in scored:
