@@ -1,4 +1,4 @@
-# Mariposa 召回闭环实施 · 阶段交付（WP00–WP02）
+# Mariposa 召回闭环实施 · 阶段交付（WP00–WP03 + WP06）
 
 包版本：recall-closure-20260930-r1
 实施人：程知行（GLM）
@@ -10,7 +10,7 @@
 ## 状态分层
 
 ```text
-IMPLEMENTED：WP00 / WP01 / WP02（本报告范围）
+IMPLEMENTED：WP00 / WP01 / WP02 / WP03 / WP06（本报告范围）
 UNIT_TESTED：是（含结构级 fake Jev/embedder）
 INTEGRATION_TESTED：部分（registry 入口级；HTTP/MCP 适配器层未单独跑）
 LIVE_MODEL_EVALUATED：false（真实 Jev 调用未授权；真实 BGE 仅此前
@@ -25,10 +25,10 @@ DEPLOYED：false
 | WP00 基线冻结+红探针 | c2a0ffa | PASS | S10/S11 复现 |
 | WP01 出口硬门+可信 scope | f2bc9d7 | PASS | S04/S05/S10 |
 | WP02 外发 profile+指纹+取窗 | 483e6db | PASS | S09/S15/S16/S18 |
-| WP03 scope 内真 BM25 | — | NOT_STARTED | S06 |
+| WP03 scope 内真 BM25 | dad8f30 | PASS | S04/S05/S06/S07 |
 | WP04 Round2 运行库事务化 | — | NOT_STARTED | S12-S14/S17 |
 | WP05 words 专项 dense | — | NOT_STARTED | S08 |
-| WP06 预算/截止/输出包 | — | NOT_STARTED | S16/S17 |
+| WP06 预算/输出包（burst 真实计数） | 3947413 | PASS | S16/S17 |
 | WP07 回归/质量对照/交审 | — | NOT_STARTED | 03 全节 |
 
 ## 各 WP 要点
@@ -53,6 +53,19 @@ closed）；按来源类型的逐字段外发过滤；query projection 指纹扩
 （semantic_query/负条件/exact_phrases/time axis/intent，四向 cache_key
 验证）；excerpt 命中处取窗（anchors）。
 
+**WP03**（`docs/closure/WP03_scoped_bm25.md`）：新 scoped_bm25
+（scope-stage-bm25-v1：对数 IDF、k1=1.5/b=0.75，统计只来自授权
++阶段集合）；主链词法重写——全局 FTS bm25()/逐桶 N+1 MATCH 全部
+移除；query-only semantic 可跑（停止 original_request→semantic_query
+静默回填，browse 不伪造语义请求）；向量身份绑定语料 generation
+（eventbody-v1，旧 model 行整体失效）；pending 向量计数真实外露。
+
+**WP06**（`docs/closure/WP06_budget_output.md`）：burst 计数改
+真实 WHERE burst_no=?（提前开启的 burst 不被挤占）；输出预算实际
+计算（JSON 24576 字节/正文 4000/卡 3/单卡 600，逐层裁剪+显式
+标记）；burst=2 验收按指令以 monkeypatch 隔离测试——**config 默认
+未动，生产 3→2 切换待批准**。
+
 ## 关键出口证明（当前状态）
 
 - 普通 recall（start/refine）：检索（v1.7 字段矩阵）→ 证据装配 →
@@ -67,19 +80,21 @@ closed）；按来源类型的逐字段外发过滤；query projection 指纹扩
 ## 测试
 
 ```text
-pytest tests/unit -q                          492 passed, 1 skipped
+pytest tests/unit -q                          503 passed, 1 skipped
 pytest tests/acceptance tests/integration -q  126 passed
-合计                                           618 passed / 0 failed
-新增：closure 探针 7 + WP02 10；改写旧语义测试 12 处
-（fusion/pack/jev05/jev09/jev10/rawx01 等，全部注明 S10 依据）
+合计                                           629 passed / 0 failed
+新增：closure 探针 7 + WP02 10 + WP03 7 + WP06 4；改写旧语义
+测试 14 处（fusion/pack/jev05/jev09/jev10/rawx01/hybrid07/
+RET_05 等，逐处注明规则依据）
 ```
 
 前台分批、隔离根、无网络、无真实 key。资源：单批 ≤24s。
 
 ## 未完成与需授权项
 
-1. WP03-WP07 未开始（见上表）；其中 WP04 涉及 runtime schema 与
-   Round2 门禁重建，WP05 涉及 words 派生索引 schema。
+1. WP04（Round2 运行库事务化）、WP05（words dense）、WP07（对照
+   交审）未开始；WP04 涉及 runtime schema 与 Round2 门禁重建，
+   WP05 涉及 words 派生索引 schema。
 2. 生产数值门（未动）：BURST_ROUNDS 3→2 的生产切换、
    SEMANTIC_PROVIDER 启用、真实 Jev key 外发样本评测——均待
    用户单独批准。
