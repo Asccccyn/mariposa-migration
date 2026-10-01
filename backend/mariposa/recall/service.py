@@ -137,7 +137,8 @@ def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
     （query-only 语义检索）。"""
     dense_hits: list[dict] = []
     if plan.get("semantic_query"):
-        if config.SEMANTIC_PROVIDER == "local_bge_zh":
+        from ..retrieval.semantic import LOCAL_PROVIDERS
+        if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS:
             sem_raw = semantic.semantic_search(
                 conn, plan["semantic_query"], config.RECALL_DENSE_K,
                 extra_where=base_where, extra_params=base_params)
@@ -337,7 +338,7 @@ def _run_round_compute(session: dict, plan: dict,
                         words_hits = fusion.rrf_fuse({
                             "lexical": lex_ranked,
                             "dense": dense_ranked})
-                    elif config.SEMANTIC_PROVIDER == "local_bge_zh":
+                    else:
                         coverage["words_dense"] = "unavailable"
 
         # words → raw 授权专项补查（仅证据不足 + 显式开启 + 授权范围内）

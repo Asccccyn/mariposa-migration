@@ -271,7 +271,8 @@ def search(conn, query: str, limit: int = 20,
     # 语义路径（§8.3：仅有效投影向量参与；provider 未配置显式 degraded）。
     # 空 query 走浏览语义，不做语义匹配（避免空向量产生无依据"伪命中"）
     mode = "keyword"
-    if config.SEMANTIC_PROVIDER == "local_bge_zh" and phrase:
+    from .semantic import LOCAL_PROVIDERS
+    if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS and phrase:
         # 语义是补充召回：关键词为主路径，语义命中取 top-5（同质语料防泛化）
         sem = semantic.semantic_search(conn, query, min(5, limit))
         mode = "hybrid"
@@ -287,8 +288,8 @@ def search(conn, query: str, limit: int = 20,
             hits.append(sh)
 
     result: dict = {"hits": hits, "query": query, "mode": mode}
-    if config.SEMANTIC_PROVIDER == "local_bge_zh":
-        result["semantic"] = "local_bge_zh"
+    if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS:
+        result["semantic"] = config.SEMANTIC_PROVIDER
     else:
         result["semantic"] = "unavailable"
         result["degraded"] = "semantic_unavailable"
