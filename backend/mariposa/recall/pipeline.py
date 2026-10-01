@@ -197,15 +197,19 @@ def find_words_candidates(conn, plan: dict, *, limit: int = 30) -> dict:
 
 def round1_lexical_hits(conn, plan: dict, rejected: set[str],
                         coverage: dict) -> list[dict]:
-    """阶段过滤词法检索：给 _run_round 主线调用的适配层。
+    """阶段过滤词法检索（S06 scope-stage-bm25-v1，WP03 重写）。
 
-    与 v1.4 _event_candidates 词法路同构返回（resource_ref/_row/
-    matched_by/matched_fields），但检索面按每桶当前阶段的 AllowedFields
-    在分字段索引（field_fts）上执行（v1.7 §6.3）。dense 路仍由主线
-    自行处理（结构过滤前置不变）。
+    - 检索面：scope（结构过滤+排除）内、每桶当前阶段允许字段的
+      分字段文档（field_search_docs.text_norm，不含禁检来源）；
+    - 排序分：本模块内计算的真 BM25（对数 IDF/df/avgdl 只来自该
+      授权集合；k1=1.5、b=0.75），field_fts 不再提供排序分，
+      也不做逐桶 N+1 MATCH；
+    - 每 memory 取其命中文档的最大分（不累加"分类多/话语多"选票），
+      matched_fields 如实标注。
     """
     from ..retrieval import query_plan as qp
     from ..retrieval import field_projection as fp_mod
+    from ..retrieval import scoped_bm25
     base_where, base_params, _, _ = qp.AllowedScope.for_plan(plan)
     where = list(base_where)
     params = list(base_params)
@@ -218,55 +222,83 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
             params += ids
     terms, phrases = qp.plan_token_groups(plan)
     if not (terms or phrases):
-        return []  # 浏览模式由主线旧路径处理（结构化浏览不带词法）
+        return []  # 浏览模式由主线处理
 
-    # 复用主线的安全 FTS 编译器（terms OR 组 + phrases AND；消毒同源）
-    phrase = qp.compile_plan_lexical(plan)
-    if not phrase:
-        return []
     cond = ("WHERE " + " AND ".join(where)) if where else ""
     pool = conn.execute(
         f"SELECT m.memory_id FROM memories m {cond} LIMIT 2000",
         params).fetchall()
 
-    hits: list[dict] = []
-    stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)
-    all_facts = pp.facts_for_many(conn, [r["memory_id"] for r in pool])
+    stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
+    allowed_by_mid: dict[str, set] = {}
     for r in pool:
         mid = r["memory_id"]
-        ref = f"memory:{mid}"
-        if ref in rejected:
+        if f"memory:{mid}" in rejected:
             continue
         try:
-            phase = pp.phase_from_facts(all_facts.get(mid, {}), now=_now)
+            phase = pp.phase_of(mid, now=_now)
         except (pp.DataGap, pp.PolicyError, KeyError):
             stats["gap"] += 1
             continue
         stats[phase.stage] += 1
         kinds = fp_mod.stage_filter_kinds(pp.eligible_fields(phase))
-        if not kinds:
-            continue
-        row = conn.execute(
-            "SELECT memory_id, field_kind FROM field_fts"
-            " WHERE field_fts MATCH ? AND memory_id=? AND field_kind IN (%s)"
-            " LIMIT 3" % ",".join("?" * len(kinds)),
-            (phrase, mid, *kinds)).fetchall()
-        if not row:
-            continue
-        matched_kinds = sorted({x["field_kind"] for x in row})
-        m = conn.execute(
-            "SELECT m.memory_id, m.memory_date, m.compression_state,"
-            " m.current_version_no, rd.projection_kind, rd.search_text,"
-            " rd.whitelist_body FROM memories m"
-            " JOIN retrieval_documents rd ON rd.memory_id=m.memory_id"
-            " WHERE m.memory_id=?", (mid,)).fetchone()
+        if kinds:
+            allowed_by_mid[mid] = set(kinds)
+
+    if not allowed_by_mid:
+        coverage["event"] = "complete_within_scope"
+        coverage["stage_filter"] = stats
+        return []
+
+    # 批量取 scope 内全部分字段文档，内存按每桶允许字段过滤后评分
+    mids = list(allowed_by_mid)
+    docs: list[dict] = []
+    for i in range(0, len(mids), 500):
+        chunk = mids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+                "SELECT memory_id, field_kind, text_norm FROM"
+                f" field_search_docs WHERE memory_id IN ({marks})",
+                chunk).fetchall():
+            allowed = allowed_by_mid.get(row["memory_id"])
+            if not allowed or row["field_kind"] not in allowed:
+                continue
+            docs.append({"owner": row["memory_id"],
+                         "field": row["field_kind"],
+                         "tokens": scoped_bm25._doc_tokens(
+                             row["text_norm"] or "")})
+
+    flat_terms = [g for g in terms]
+    scored = scoped_bm25.score_documents(docs, flat_terms, phrases)
+    coverage["event"] = "complete_within_scope"
+    coverage["stage_filter"] = stats
+    coverage["lexical_scorer"] = scoped_bm25.SCORER_VERSION
+
+    hits: list[dict] = []
+    if not scored:
+        return hits
+    ids = [e["owner"] for e in scored]
+    meta: dict[str, dict] = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for m in conn.execute(
+                "SELECT m.memory_id, m.memory_date, m.compression_state,"
+                " m.current_version_no, rd.projection_kind,"
+                " rd.whitelist_body FROM memories m"
+                " JOIN retrieval_documents rd ON rd.memory_id=m.memory_id"
+                f" WHERE m.memory_id IN ({marks})", chunk).fetchall():
+            meta[m["memory_id"]] = dict(m)
+    for e in scored:
+        m = meta.get(e["owner"])
         if m is None:
             continue
-        hits.append({
-            "resource_ref": ref, "candidate_ref": ref,
-            "memory_id": mid, "channel": "event",
+        card = {
+            "resource_ref": f"memory:{e['owner']}",
+            "candidate_ref": f"memory:{e['owner']}",
+            "memory_id": e["owner"], "channel": "event",
             "representation": m["projection_kind"],
             "content_version": str(m["current_version_no"]),
             "representation_version": str(m["current_version_no"]),
@@ -275,11 +307,11 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
             "matched_by": (["summary_keyword"]
                            if m["compression_state"] == "forgotten_summary"
                            else ["keyword"]),
-            "matched_fields": matched_kinds,
-            "_row": dict(m),
-        })
-    coverage["event"] = "complete_within_scope"
-    coverage["stage_filter"] = stats
+            "matched_fields": e["fields"],
+            "bm25_score": e["score"],
+            "_row": m,
+        }
+        hits.append(card)
     return hits
 
 

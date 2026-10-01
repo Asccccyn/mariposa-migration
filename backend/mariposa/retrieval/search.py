@@ -277,9 +277,12 @@ def search(conn, query: str, limit: int = 20,
         mode = "hybrid"
     else:
         sem = []
-    # 语义命中去重（关键词已命中的桶保留 keyword 标注优先）
+    # 语义命中去重（关键词已命中的桶保留 keyword 标注优先）；
+    # pending 哨兵不是候选，剥离
     seen = {h["memory_id"] for h in hits}
     for sh in sem:
+        if isinstance(sh, dict) and "__pending_vectors__" in sh:
+            continue
         if sh["memory_id"] not in seen:
             hits.append(sh)
 

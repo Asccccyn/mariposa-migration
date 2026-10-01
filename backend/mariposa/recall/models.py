@@ -200,7 +200,8 @@ def validate_query_plan(plan: dict) -> dict:
         original_request=original,
         intent=intent,
         channels=list(dict.fromkeys(channels)),
-        semantic_query=plan.get("semantic_query") or original,
+            # S04/WP03：不静默回填——semantic_query 只认显式值，browse 不伪造语义查询
+            semantic_query=plan.get("semantic_query") or "",
         lexical_terms=[t for t in (terms or []) if isinstance(t, str) and t],
         exact_phrases=[p for p in (plan.get("exact_phrases") or [])
                        if isinstance(p, str) and p],

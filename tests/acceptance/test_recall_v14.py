@@ -119,11 +119,16 @@ class TestHybrid:
         assert r1["pool_size"] == r2["pool_size"]
 
     def test_hybrid07_dense_unavailable_honest(self, actors):
+        """S04/WP03：显式 semantic_query 才构成 dense 请求；纯词法
+        请求不回填、不无端降级。"""
         hold(actors, "搬家事件", "2026-08-10")
-        p = start(actors)
         if config.SEMANTIC_PROVIDER != "local_bge_zh":
-            assert p["coverage"]["dense_event"] == "unavailable"
-            assert "semantic_unavailable" in p["degraded_reasons"]
+            p_lex = start(actors)  # 纯词法：not_requested
+            assert p_lex["coverage"]["dense_event"] == "not_requested"
+            assert "semantic_unavailable" not in p_lex["degraded_reasons"]
+            p_sem = start(actors, semantic_query="搬家相关的事")
+            assert p_sem["coverage"]["dense_event"] == "unavailable"
+            assert "semantic_unavailable" in p_sem["degraded_reasons"]
 
     def test_hybrid08_chinese_probes_kept(self):
         for probe in ("叽", "herat", "小纸", "不是这个"):
