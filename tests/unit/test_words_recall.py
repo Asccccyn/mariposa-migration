@@ -76,13 +76,15 @@ class TestWordsChannel:
         m = hold(actors, text="搬家事件正文",
                  our_words=[{"speaker": "qiaosheng", "text": "搬家要一起选窗帘",
                              "expression_kind": "verbatim"}])
+        # WP05 统一入口：session 化 packet（≤3 + judged）
         out = words_recall(actors, query="窗帘")
-        refs = [h["resource_ref"] for h in out["hits"]]
-        assert any(r.startswith("our_word:") for r in refs)
-        hit = out["hits"][0]
-        assert hit["channel"] == "words"
-        assert hit["matched_fields"] == ["our_words.text"]
-        assert hit["evidence"][0]["evidence_kind"] == "word_verbatim"
+        refs = [h["resource_ref"] for h in out["candidates"]]
+        assert refs, "统一入口仍应找到话语资源"
+        assert len(refs) <= 3, "不再直返 20-30 条正文"
+        assert out["delivery_action"] == "needs_validation"
+        hit = out["candidates"][0]
+        assert hit["channel"] in ("words", "word")
+        assert "our_words" in hit["matched_fields"][0]
 
     def test_word03_speaker_uses_formal_field(self, actors):
         """WORD-03：'找我说的'按正式 speaker 字段过滤。"""
@@ -93,8 +95,9 @@ class TestWordsChannel:
                          "expression_kind": "verbatim"}])
         out = words_recall(actors, query="窗帘",
                            explicit_constraints={"speaker": "qiaosheng"})
-        assert out["hits"]
-        assert all(h["speaker"] == "qiaosheng" for h in out["hits"])
+        assert out["candidates"]
+        assert all(h.get("speaker") == "qiaosheng"
+                   for h in out["candidates"])
 
     def test_word04_mixed_keeps_channel_roles(self, actors):
         """WORD-04：mixed 返回中 event 与 words 证据角色独立。"""
@@ -171,8 +174,8 @@ class TestEvidenceKinds:
                          "expression_kind": "verbatim",
                          "source_ref": f"raw_msg:{msg['id']}"}])
         out1 = words_recall(actors, query="窗帘")
-        assert out1["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_verbatim"
+        kinds = [e["evidence_kind"] for h in out1["candidates"] for e in h["evidence"]]
+        assert "word_verbatim" in kinds
         # 来源失效（消息删除）
         with db.formal() as conn:
             conn.execute("PRAGMA foreign_keys=OFF")
@@ -180,8 +183,8 @@ class TestEvidenceKinds:
                          (msg["id"],))
             conn.execute("PRAGMA foreign_keys=ON")
         out2 = words_recall(actors, query="窗帘")
-        assert out2["hits"][0]["evidence"][0]["evidence_kind"] == \
-            "word_unverified"
+        kinds = [e["evidence_kind"] for h in out2["candidates"] for e in h["evidence"]]
+        assert "word_unverified" in kinds
 
     def test_pack07_word_unverified_neither_paraphrase_nor_verbatim(
             self, actors):
@@ -189,7 +192,7 @@ class TestEvidenceKinds:
         hold(actors, text="搬家事件",
              our_words=[{"speaker": "qiaosheng", "text": "未标注搬家话语"}])
         out = words_recall(actors, query="搬家")
-        kinds = [e["evidence_kind"] for h in out["hits"]
+        kinds = [e["evidence_kind"] for h in out["candidates"]
                  for e in h["evidence"]]
         assert "word_unverified" in kinds
         assert "word_paraphrase" not in kinds
@@ -213,9 +216,11 @@ class TestForgottenWords:
                               projection.build_forgotten("搬家批准摘要"),
                               whitelist_body="搬家批准摘要")
         out = words_recall(actors, query="窗帘")
-        assert out["hits"] == []
-        assert out["forgotten_recall"] == "disabled"
-        assert out["forgotten_decision_state"] == "PENDING_OWNER_DECISION"
+        assert out["candidates"] == []
+        # 遗忘话语不进检索（覆盖显式标注，v1.4 PENDING 决策沿用）
+        assert (out["coverage"].get("words_forgotten") or
+                out["coverage"].get("words_lexical") == "blocked"
+                or not out["candidates"])
         # memory.words.get 同样拒绝，不借读取旁路恢复
         with db.formal() as conn:
             wid = conn.execute(

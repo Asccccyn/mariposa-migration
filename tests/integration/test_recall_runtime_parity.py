@@ -92,7 +92,13 @@ def test_session02_http_mcp_same_semantics(c, seeded):
                   headers={"Authorization": f"Bearer {TOKENS['jiaming']}"}
                   ).json()["data"]
     mcp = tool(c, "jiaming", "mariposa_memory_words_recall", args)
-    assert http["hits"] == mcp["hits"]
+    # 统一入口每次建短期 session：候选等价性按稳定字段比较
+    # （version_receipt/judge 回执为每次随机）
+    def norm(cands):
+        return [{k: v for k, v in c.items()
+                 if k not in ("version_receipt", "judge")}
+                for c in cands]
+    assert norm(http["candidates"]) == norm(mcp["candidates"])
     assert http["instruction_authority"] == "none"
     # v1.7：WIDE 阶段 event 通道含 our_words 字段 → 两入口一致命中
     ev = tool(c, "jiaming", "mariposa_memory_recall_start", {

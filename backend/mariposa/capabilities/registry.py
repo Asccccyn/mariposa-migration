@@ -820,20 +820,20 @@ def _source_cleanup(principal: Principal, a: dict) -> dict:
 
 
 def _find_words(principal: Principal, a: dict) -> dict:
+    """S08/WP05：find_words 与 words.recall 同一统一入口——session 化
+    （预算/回执/同一层 Jev/≤3 交付），不另写一套 pipeline。"""
     from .. import config as _cfg
     from ..errors import Forbidden as _FW
     if not _cfg.RECALL_WORDS_ENABLED:
         raise _FW("find_words 受 MARIPOSA_WORDS_RECALL_ENABLED 控制（默认关）",
                   code="WORDS_CHANNEL_DISABLED")
-    from ..recall import pipeline as pl
-    from .. import db
     plan = dict(a.get("query_plan") or {})
     plan.setdefault("original_request", a.get("original_request", ""))
     if not plan.get("lexical_terms"):
         plan["lexical_terms"] = [a.get("query", "") or
                                  a.get("original_request", "")]
-    with db.formal() as conn:
-        return pl.find_words_candidates(conn, plan)
+    plan["channels"] = ["words"]
+    return recall_service.start(principal, {"query_plan": plan})
 
 
 def _recall_round2(principal: Principal, a: dict) -> dict:
