@@ -149,8 +149,17 @@ class TestJudgeContract:
                          "text": "独有话语探针"}])
         judge = RecordingJudge()
         start_with_judge(actors, judge)
-        payload = judge.calls[0]
-        blob = str(payload["plan"]) + str(payload["candidates"])
+        # r2 S09：出站白名单以真实 typesafe 投影为准——卡内 _row 是
+        # 内部数据（不外发），标题/心情/未参与匹配的话语不得进入
+        # 投影 segments
+        from mariposa.retrieval.judges import typesafe_jev
+        inner = typesafe_jev.TypeSafeJevJudge()
+        inner._data_profile = frozenset(
+            {"event_excerpt", "title_cue", "word_excerpt",
+             "source_excerpt"})
+        call0 = judge.calls[0]
+        inner._current_terms = call0["plan"].get("lexical_terms") or []
+        blob = str(inner._payload(call0["plan"], call0["candidates"]))
         assert "独有标题探针" not in blob
         assert "独有心情文字探针" not in blob
         assert "独有话语探针" not in blob
