@@ -40,7 +40,7 @@ class PayloadCapture(jb.JudgeProvider):
         inner = typesafe_jev.TypeSafeJevJudge()
         inner._data_profile = frozenset(
             {"event_excerpt", "title_cue", "word_excerpt",
-             "source_excerpt"})
+             "source_excerpt", "structured_metadata"})
         inner._current_terms = plan.get("lexical_terms") or []
         self.payloads.append(inner._payload(plan, candidates))
         items = [jb.JudgeItem(

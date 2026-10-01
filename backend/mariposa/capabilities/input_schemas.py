@@ -388,6 +388,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "query": {"type": "string"},
             "original_request": {"type": "string"},
+            "semantic_query": {"type": "string", "minLength": 1},
             "lexical_terms": {"type": "array",
                                "items": {"type": "string", "minLength": 1}},
             "exact_phrases": {"type": "array",

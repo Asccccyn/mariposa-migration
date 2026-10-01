@@ -175,7 +175,10 @@ def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
                     "_row": {"whitelist_body": s.get("whitelist_body"),
                              "compression_state": "full"},
                 })
-            coverage["dense_event"] = "complete_within_scope"
+            # 闭环复审 P2-8：pending 时不覆盖回 complete（上方的
+            # partial_vectors_pending 必须存活到出口）
+            coverage["dense_event"] = coverage.get(
+                "dense_event", "complete_within_scope")
         else:
             # provider 未配置：显式 unavailable，不因空结果谎报完整（HYBRID-07）
             coverage["dense_event"] = "unavailable"
@@ -301,6 +304,19 @@ def _run_round_compute(session: dict, plan: dict,
                         if _wd.get("to"):
                             _wwhere.append("m.memory_date <= ?")
                             _wparams.append(_wd["to"])
+                    _neg = plan.get(
+                        "explicit_negative_constraints") or {}
+                    for sp in (_neg.get("speaker_excluded") or []):
+                        _wwhere.append("w.speaker <> ?")
+                        _wparams.append(sp)
+                    for rng in (_neg.get("source_date_excluded")
+                                or _neg.get("event_date_excluded") or []):
+                        if isinstance(rng, dict) and rng.get("from"):
+                            _wwhere.append(
+                                "(m.memory_date IS NULL OR"
+                                " m.memory_date NOT BETWEEN ? AND ?)")
+                            _wparams += [rng["from"],
+                                         rng.get("to", "9999-12-31")]
                     wdense = wsem.words_semantic_search(
                         conn, plan["semantic_query"],
                         limit=config.RECALL_LEXICAL_K,
@@ -317,12 +333,17 @@ def _run_round_compute(session: dict, plan: dict,
                         lex_ranked = fusion.family_rank(words_hits)
                         dense_cards = []
                         for h in wdense:
+                            # 闭环复审 P1-4：资源身份统一——dense 与
+                            # 稀疏 words 同用 our_word:<id>/channel=words
+                            #（S01：our_word 是对象，一份证据一个身份）
                             dense_cards.append({
-                                "resource_ref": f"word:{h['word_id']}",
-                                "candidate_ref": f"word:{h['word_id']}",
+                                "resource_ref":
+                                    f"our_word:{h['word_id']}",
+                                "candidate_ref":
+                                    f"our_word:{h['word_id']}",
                                 "word_id": h["word_id"],
                                 "memory_id": h["memory_id"],
-                                "channel": "word",
+                                "channel": "words",
                                 "representation": "full",
                                 "content_version": None,
                                 "representation_version": None,
@@ -341,32 +362,12 @@ def _run_round_compute(session: dict, plan: dict,
                     else:
                         coverage["words_dense"] = "unavailable"
 
-        # words → raw 授权专项补查（仅证据不足 + 显式开启 + 授权范围内）
+        # 闭环复审 P1-2：第一轮不查 raw（S12/S13）——原文升级只有
+        # Round2 门禁一条通路；证据不足时提示 continuation 走
+        # memory.recall.round2，不再有 words-fallback 旁路
         raw_result: dict | None = None
-        if ("words" in channels and
-                plan.get("raw_fallback") == "when_evidence_insufficient" and
-                _words_evidence_insufficient(plan, words_hits)):
-            if not config.RECALL_RAW_FALLBACK_ENABLED:
-                coverage["raw"] = "not_executed"
-            else:
-                scope = raw_recall.resolve_scope(
-                    plan, principal or _current_principal())
-                if not scope.get("allowed"):
-                    coverage["raw"] = "not_authorized"
-                else:
-                    raw_result = raw_recall.scoped_search(
-                        plan.get("lexical_terms") or
-                        [plan.get("semantic_query", "")], scope,
-                        limit=config.RECALL_DELIVERY_LIMIT + 2)
-                    coverage["raw"] = raw_result["coverage"]
-                    for h in raw_result["hits"]:
-                        h["evidence"] = [evidence_mod.make_evidence(
-                            "raw_verbatim", "raw_messages.body",
-                            h.pop("body_excerpt"), h["resource_ref"])]
-                        h["representation"] = "raw_source"
-                        h["matched_fields"] = ["raw_messages.body"]
-        elif "words" in channels:
-            coverage["raw"] = "not_executed"
+        if "words" in channels:
+            coverage["raw"] = "round2_only"
 
     # Jev 精排（可关闭/可替换；只评价被交付的候选）。
     # S10/WP01：words 与 raw-fallback 候选同样过一层 Jev——未判断
@@ -454,13 +455,10 @@ def _run_round_compute(session: dict, plan: dict,
             "Jev 判断不可用（not_configured/unavailable）：候选正文"
             "不直出（S10）；可配置 judge 后重试")
     continuation = None
-    if raw_result and raw_result.get("continuation"):
-        continuation = {"available": True, "action": "raw_scan_continue",
-                        "cursor": raw_result["continuation"]["cursor"]}
-    elif ("words" in channels and not sel["delivered"] and
-          plan.get("raw_fallback") == "when_evidence_insufficient" and
-          not config.RECALL_RAW_FALLBACK_ENABLED):
-        continuation = {"available": True, "action": "authorized_raw_fallback"}
+    if ("words" in channels and _words_evidence_insufficient(
+            plan, words_hits or [])):
+        continuation = {"available": True, "action": "round2_raw",
+                        "via": "memory.recall.round2"}
 
     packet = {
         "recall_session_id": sid,
@@ -508,6 +506,16 @@ def _run_round_compute(session: dict, plan: dict,
             "UNAVAILABLE", "ERROR", "DEGRADED"),
         "delivery_action": sel["delivery_action"],
         "coverage": coverage,
+        # 闭环复审 P1-3：Round2 事实源——真实证据状态而非通用
+        # needs_validation 标签（rank_only 下一切正常交付都是
+        # needs_validation，不能当"证据不足"）
+        "first_round_facts": {
+            "delivered_count": len(sel["delivered"]),
+            "requirement_met": bool(sel.get("requirement_met")),
+            "conflicts_count": len(sel["conflicts"]),
+            "missing_kinds": [m[:40] for m in sel["missing"]][:8],
+            "evidence_requirement": plan.get("evidence_requirement"),
+        },
     }
     return packet, effects
 
@@ -577,7 +585,7 @@ def _enforce_output_budget(packet: dict) -> dict:
             snip = ev.get("snippet")
             if isinstance(snip, str) and \
                     len(snip) > OUTPUT_MAX_PER_CANDIDATE_CHARS:
-                from .retrieval import evidence as _em
+                from ..retrieval import evidence as _em
                 cut, _tr = _em.excerpt(
                     snip, limit=OUTPUT_MAX_PER_CANDIDATE_CHARS)
                 ev["snippet"] = cut
@@ -648,6 +656,9 @@ def _commit_round_effects(conn, session_id: str, revision: int,
     store.add_receipts(conn, session_id, effects["receipts"])
     if plan is not None:
         js = effects.get("judge_stats") or {}
+        cov = dict(effects.get("coverage") or {})
+        if effects.get("first_round_facts") is not None:
+            cov["_first_round_facts"] = effects["first_round_facts"]
         store.record_round1_receipt(
             conn, session_id=session_id, revision=revision,
             plan_hash=canonical_hash(plan),
@@ -656,7 +667,7 @@ def _commit_round_effects(conn, session_id: str, revision: int,
             policy_version=config.RECALL_POLICY_VERSION,
             round_kind=kind,
             methods=js.get("methods") or {},
-            coverage=effects.get("coverage") or {},
+            coverage=cov,
             candidate_set_hash=canonical_hash(
                 [c["candidate_ref"] for c in effects["candidates"]]),
             judged_count=js.get("judged", 0),
@@ -736,7 +747,7 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "refine")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     expected_revision = int(a.get("expected_revision") or
                             session["current_revision"])
     if expected_revision != session["current_revision"]:
@@ -838,7 +849,7 @@ def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "reject")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     target = a.get("reject_target", "candidate")
     candidate_ref = a.get("candidate_ref")
     if not candidate_ref and a.get("resource_ref"):
@@ -888,7 +899,7 @@ def accept(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "accept")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     out = {"accepted": a.get("candidate_ref"), "status": session["status"]}
     # P1-01：候选状态 / 终态迁移 / operation 记录同一事务
     with db.recall_runtime() as conn:
@@ -916,7 +927,7 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "navigate")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     direction = a.get("direction")
     if direction not in ("earlier", "later"):
         raise Forbidden("direction 必须是 earlier/later",
@@ -1016,7 +1027,7 @@ def status(principal, a: dict) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "status")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     reval = revalidate_receipts(a["session_id"])
     if reval["invalid_refs"]:
         session = store.require_session(a["session_id"])  # 重校验后重读
@@ -1042,7 +1053,7 @@ def close(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(a["session_id"])
     session = store.expire_if_due(session)
     state_machine.require_action(session, "close")
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     outcome = a.get("outcome", "cancelled")
     if outcome not in ("resolved", "cancelled"):
         raise Forbidden("outcome 必须是 resolved/cancelled",
@@ -1138,6 +1149,24 @@ def validate_context(principal, a: dict) -> dict:
             out.append(entry)
     return {"validated": out,
             "instruction_authority": "none"}
+
+
+def require_owned_session(principal, session: dict,
+                          a: dict | None = None) -> None:
+    """S04/WP 补丁（闭环复审 P1-1）：session 归属主体 + 可信 scope。
+
+    - session.principal_id 必须等于当前主体——两 owner 共享**记忆**，
+      但 session 是主体发起的操作上下文，跨主体持 id 不得读/操作；
+    - scope 省略不绕过：调用方不带 conversation_scope 时按 session
+      绑定执行；显式携带且不一致则拒绝（RUNTIME-09 保持）。
+    每个动作（含 status/close/round2/replay guard）统一走本入口。
+    """
+    pid = getattr(principal, "principal_id", principal)
+    if session.get("principal_id") != pid:
+        raise Forbidden(
+            "recall session 归属另一主体；跨主体 session 操作被拒绝",
+            code="SESSION_OWNER_MISMATCH", session_id=session["session_id"])
+    _check_conversation_scope(session, a or {})
 
 
 def _check_conversation_scope(session: dict, a: dict) -> None:
@@ -1252,8 +1281,15 @@ def revalidate_replayed(fn_name: str, saved: dict,
             if not mid and isinstance(ref, str) and ref.startswith("memory:"):
                 mid = ref[len("memory:"):]  # 导航卡等只带 resource_ref 的形状
             if not mid:
-                # 无法解析资源身份的卡（raw/未知前缀）：一律剔除，
-                # 不允许旧正文经白放分支出站（N03）
+                # 闭环复审 P2-6：source_msg 引用按当前库校验（存在
+                # 且 published）后保留——round2 幂等重放不得丢候选
+                if isinstance(ref, str) and ref.startswith("source_msg:"):
+                    row = conn.execute(
+                        "SELECT published FROM source_messages WHERE"
+                        " id=?", (ref[len("source_msg:"):],)).fetchone()
+                    if row is not None and row["published"]:
+                        kept.append(c)
+                # 其余无法解析资源身份的卡一律剔除（N03）
                 continue
             if ref and ref in rejected:
                 continue  # 本 session 已拒绝的资源不得重放
@@ -1332,18 +1368,25 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
             and receipt["coverage"].get("judge") in (
                 "evaluated", "not_configured")
             and (receipt["judged_count"] > 0 or empty_input))
-        # 6. 理由的服务端事实支持（不信客户端字符串）
-        da = receipt["delivery_action"]
+        # 6. 理由的服务端事实支持（闭环复审 P1-3：按真实证据状态
+        # 判定，不用通用 needs_validation——rank_only 下一切正常
+        # 交付都是 needs_validation，不构成升级理由）
+        facts = receipt["coverage"].get("_first_round_facts") or {}
+        delivered_n = facts.get("delivered_count", 0)
+        req_met = facts.get("requirement_met")
+        conflicts_n = facts.get("conflicts_count", 0)
         rejected = store.rejected_resource_refs(sid)
         fact_ok = (
-            (reason == "NO_DELIVERABLE_CANDIDATE"
-             and da == "no_candidates")
-            or (reason in ("EVIDENCE_INSUFFICIENT",
-                          "VERBATIM_REQUIRED_NOT_MET")
-                and da == "needs_validation")
+            (reason == "NO_DELIVERABLE_CANDIDATE" and delivered_n == 0)
+            or (reason == "EVIDENCE_INSUFFICIENT"
+                and delivered_n > 0 and req_met is False)
+            or (reason == "VERBATIM_REQUIRED_NOT_MET"
+                and facts.get("evidence_requirement")
+                == "verbatim_required" and req_met is False)
+            or (reason == "SOURCE_DISAMBIGUATION_NEEDED"
+                and conflicts_n > 0)
             or (reason == "EXPLICIT_REJECT_AFTER_DELIVERY"
-                and bool(rejected))
-            or reason == "SOURCE_DISAMBIGUATION_NEEDED")
+                and bool(rejected)))
         gate["reason_fact_supported"] = fact_ok
 
     # 4. raw 搜索 + 当前 Jev 供应商外发授权（S15：无 source_excerpt
@@ -1392,7 +1435,7 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     session = store.require_session(sid)
     session = store.expire_if_due(session)
     state_machine.require_action(session, "refine")  # 活跃族状态
-    _check_conversation_scope(session, a)
+    require_owned_session(principal, session, a)
     reason = str(a.get("reason", ""))
     if op_ctx:
         store.check_operation_conflict(op_ctx["principal_id"],
@@ -1407,8 +1450,8 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
     plan = store.get_plan(sid) or {}
     # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
-    raw_out = _pl.raw_deep_search(principal, plan,
-                                  limit=config.RECALL_DELIVERY_LIMIT + 2)
+    raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
+    raw_out = _pl.raw_deep_search(principal, plan, limit=raw_limit)
     raw_cards = []
     for h in raw_out.get("hits", []):
         raw_cards.append({
@@ -1431,7 +1474,10 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # Jev 一层出站（fake/真实 provider 由此过 S10 硬门）
     from ..retrieval.judges import base as judge_base
     provider = judge_base.get_provider()
-    coverage = {"raw": "complete_within_scope", "judge": "evaluated"}
+    coverage = {"raw": ("complete_within_scope"
+                        if len(raw_out.get("hits", [])) < raw_limit
+                        else "partial_limit_reached"),
+                "judge": "evaluated"}
     degraded: list[str] = []
     judge_candidates = raw_cards[:config.RECALL_JUDGE_CANDIDATE_CAP]
     if isinstance(provider, judge_base.DisabledJudge):
