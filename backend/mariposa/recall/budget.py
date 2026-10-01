@@ -28,8 +28,15 @@ def snapshot(session: dict) -> dict:
 
 
 def rounds_left_in_burst(session: dict) -> int:
-    used_in_burst = session["rounds_used"] - (
-        (session["current_burst"] - 1) * config.RECALL_BURST_ROUNDS)
+    """S17：burst 内已用轮数按真实记录计数
+    （COUNT(recall_rounds WHERE burst_no=?)），不用
+    总数-(burst-1)*固定值 推断——提前开启的新 burst 不会被
+    前面未填满的 burst 挤占。"""
+    with db.recall_runtime() as conn:
+        used_in_burst = conn.execute(
+            "SELECT COUNT(*) AS c FROM recall_rounds WHERE session_id=?"
+            " AND burst_no=?", (session["session_id"],
+                                session["current_burst"])).fetchone()["c"]
     return max(0, config.RECALL_BURST_ROUNDS - used_in_burst)
 
 
@@ -68,7 +75,9 @@ def ensure_round_available_conn(conn, session_id: str,
             budget={"rounds_used": rounds_used,
                     "rounds_max_total": total_limit})
     burst = session["current_burst"]
-    used_in_burst = rounds_used - (burst - 1) * config.RECALL_BURST_ROUNDS
+    used_in_burst = conn.execute(
+        "SELECT COUNT(*) AS c FROM recall_rounds WHERE session_id=?"
+        " AND burst_no=?", (session_id, burst)).fetchone()["c"]
     if used_in_burst >= config.RECALL_BURST_ROUNDS:
         raise Forbidden(
             "当前 burst 检索轮次已用完（终检）；需要显式"
