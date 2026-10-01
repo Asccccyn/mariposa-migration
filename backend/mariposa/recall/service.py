@@ -128,13 +128,28 @@ def _event_candidates(conn, plan: dict, rejected: set[str],
 
 def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
                 rejected, coverage, degraded) -> list[dict]:
-    """dense 路独立函数（v1.7 接线后与阶段词法路并列）。"""
+    """dense 路独立函数（v1.7 接线后与阶段词法路并列）。
+
+    S04/WP03：dense 不以词法命中为前提——纯 semantic_query 也可运行
+    （query-only 语义检索）。"""
     dense_hits: list[dict] = []
-    if plan.get("semantic_query") and (terms or phrases):
+    if plan.get("semantic_query"):
         if config.SEMANTIC_PROVIDER == "local_bge_zh":
-            sem = semantic.semantic_search(
+            sem_raw = semantic.semantic_search(
                 conn, plan["semantic_query"], config.RECALL_DENSE_K,
                 extra_where=base_where, extra_params=base_params)
+            pending = 0
+            sem = []
+            for entry in sem_raw:
+                if isinstance(entry, dict) and "__pending_vectors__" in entry:
+                    pending = entry["__pending_vectors__"]
+                    continue
+                sem.append(entry)
+            coverage["dense_event"] = (
+                "partial_vectors_pending" if pending
+                else "complete_within_scope")
+            if pending:
+                coverage["dense_pending_vectors"] = pending
             for s in sem:
                 ref = f"memory:{s['memory_id']}"
                 if ref in rejected:
@@ -162,9 +177,14 @@ def _dense_tail(conn, plan, terms, phrases, base_where, base_params,
             coverage["dense_event"] = "unavailable"
             degraded.append("semantic_unavailable")
     else:
-        coverage["dense_event"] = ("not_requested" if not (terms or phrases)
-                                   else "unavailable")
-        if config.SEMANTIC_PROVIDER != "local_bge_zh" and (terms or phrases):
+        # S04：browse/词法回退场景（无显式 semantic_query）不构造
+        # 向量也不报降级——not_requested 的判定依据是"是否显式请求
+        # 语义"，不是词法回退是否产生了 phrases
+        coverage["dense_event"] = (
+            "not_requested" if not plan.get("semantic_query")
+            else "unavailable")
+        if (config.SEMANTIC_PROVIDER != "local_bge_zh"
+                and plan.get("semantic_query")):
             degraded.append("semantic_unavailable")
     return dense_hits
 

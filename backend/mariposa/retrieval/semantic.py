@@ -17,9 +17,13 @@ from . import projection
 
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 MODEL_DIM = 512
+# S07/WP03：向量身份绑定语料 generation——corpus 规则升级时旧向量
+# 整体失效重嵌（本值进入 memory_embeddings.model 身份与校验）
+CORPUS_GENERATION = "eventbody-v1"
 # 阈值实测分布（bge-small-zh + query 前缀 + 双侧投影规范化，ONNX 确定性推理）：
 #   有效语义改写 >= 0.535；跨话题泛化误召回 <= 0.504；无关 < 0.40
 # 阈值版本化可配（policy 变更入审计）；返回始终带 score 供调用方再筛。
+MODEL_KEY = f"{MODEL_NAME}|{CORPUS_GENERATION}"
 COSINE_THRESHOLD = float(os.environ.get("MARIPOSA_SEMANTIC_THRESHOLD", "0.51"))
 REINDEX_BUDGET = int(os.environ.get("MARIPOSA_SEMANTIC_REINDEX_BUDGET", "20"))
 RELATIVE_WINDOW = 0.06
@@ -88,7 +92,7 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     # 命中缓存（同投影 hash 已有向量）则不重算
     cached = conn.execute(
         "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
-        " AND projection_hash=?", (memory_id, MODEL_NAME, row["search_text_hash"])
+        " AND projection_hash=?", (memory_id, MODEL_KEY, row["search_text_hash"])
     ).fetchone()
     if cached:
         return True
@@ -106,7 +110,7 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     conn.execute(
         "INSERT OR REPLACE INTO memory_embeddings(memory_id, model, dim,"
         " projection_hash, vector, created_at) VALUES(?,?,?,?,?,?)",
-        (memory_id, MODEL_NAME, MODEL_DIM, row["search_text_hash"],
+        (memory_id, MODEL_KEY, MODEL_DIM, row["search_text_hash"],
          vec.tobytes(), datetime.now(timezone.utc).isoformat()))
     return True
 
@@ -144,7 +148,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
         valid = conn.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
             " AND projection_hash=?",
-            (r["memory_id"], MODEL_NAME, r["search_text_hash"])).fetchone()
+            (r["memory_id"], MODEL_KEY, r["search_text_hash"])).fetchone()
         if not valid:
             if budget > 0:
                 reindex(conn, r["memory_id"])
@@ -165,7 +169,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
                  " AND e.projection_hash = rd.search_text_hash")  # 仅有效投影向量
     if scope:
         score_sql += " AND " + " AND ".join(scope)
-    for r in conn.execute(score_sql, [MODEL_NAME] + sp):
+    for r in conn.execute(score_sql, [MODEL_KEY] + sp):
         v = np.frombuffer(r["vector"], dtype=np.float32)
         score = float(qvec @ v / (np.linalg.norm(qvec) * np.linalg.norm(v)))
         if score >= COSINE_THRESHOLD:
@@ -187,8 +191,9 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
         scored = [x for x in scored if x["score"] >= best - RELATIVE_WINDOW]
     out = scored[:limit]
     if pending:
-        # 未就绪部分显式告知（RET-07：关键词可用，不阻塞）
-        return out  # pending 由调用方通过 warmup 状态感知
+        # S07/WP03：未就绪向量计入 pending 并显式外露——不得同时
+        # 报告 dense 全覆盖（调用方写入 coverage）
+        return out + [{"__pending_vectors__": pending}]
     return out
 
 
@@ -204,7 +209,7 @@ def warmup(conn: sqlite3.Connection) -> dict:
         valid = conn.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id=? AND model=?"
             " AND projection_hash=?",
-            (r["memory_id"], MODEL_NAME, r["search_text_hash"])).fetchone()
+            (r["memory_id"], MODEL_KEY, r["search_text_hash"])).fetchone()
         if valid:
             skipped += 1
         else:
