@@ -149,12 +149,18 @@ def raw_deep_search(principal, plan: dict, limit: int = 20) -> dict:
     候选仍须经同一层 Jev 出站（由调用方装配）；本函数只做检索与证据
     定位。旧 raw_* 层（合成导入）不在 v1.7 深搜范围（见 FIX_REPORT §5）。
     """
-    terms = plan.get("lexical_terms") or []
-    query = " ".join(terms)
+    # 闭环复审 P2-7：多 lexical_terms 是软词 OR（S04/S14），不得
+    # join 成一个连续必需长短语；limit 取满额深搜预算
+    terms = [t for t in (plan.get("lexical_terms") or [])
+             if isinstance(t, str) and t.strip()]
+    from ..retrieval import projection as _proj
+    or_phrases = [_proj.compile_query(t) for t in terms]
+    or_phrases = [q for q in or_phrases if q]
+    fts_query = " OR ".join(or_phrases) if or_phrases else None
     ec = plan.get("explicit_constraints") or {}
     dr = ec.get("source_date") or ec.get("event_date") or {}
     res = source_query.search(
-        query or None,
+        fts_query,
         senders=["human", "assistant"],
         date_from=dr.get("from"), date_to=dr.get("to"),
         limit=limit)

@@ -109,4 +109,5 @@ def select(candidates: list[dict], plan: dict, rejected: set[str],
         missing.append(f"{unjudged_count} 个后台候选未精排覆盖")
 
     return {"delivered": delivered, "delivery_action": action,
-            "conflicts": conflicts, "missing": missing}
+            "conflicts": conflicts, "missing": missing,
+            "requirement_met": bool(requirement_met)}
