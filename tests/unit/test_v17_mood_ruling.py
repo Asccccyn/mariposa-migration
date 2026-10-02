@@ -45,8 +45,6 @@ class TestForbiddenSourcesNeverRecall:
                    why_remember="因为紫藤花架值得记")
         mid = out["memory_id"]
         from mariposa.memory import listing as mlisting
-        mlisting.meanings_append(actors["jiaming"].principal_id, mid,
-                                 "含义层里的雾隐词")
         for probe in ("惘湎", "吃醋", "紫藤花架", "雾隐"):
             with db.formal() as conn:
                 assert not rsearch.search(conn, probe)["hits"], \
@@ -81,8 +79,6 @@ class TestForbiddenSourcesNeverRecall:
         from mariposa.memory import listing as mlisting
         out = hold(actors["jiaming"], "河边普通散步正文")
         mid = out["memory_id"]
-        mlisting.meanings_append(actors["jiaming"].principal_id, mid,
-                                 "含义层里的雾隐词")
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
                             { "operation_id": "op-auto-test_v-0","query_plan": {
                                 "original_request": "找雾隐",

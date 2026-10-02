@@ -140,16 +140,9 @@ def _word_evidence(row) -> list[dict]:
 
 
 def _source_ref_valid(source_ref: str) -> bool:
-    """来源仍有效：引用的 raw 消息/绑定仍存在且所属记忆未遗忘。"""
-    with db.formal() as conn:
-        if source_ref.startswith("raw_msg:"):
-            return conn.execute(
-                "SELECT 1 FROM raw_messages WHERE id=?",
-                (source_ref[len("raw_msg:"):],)).fetchone() is not None
-        if source_ref.startswith("raw_binding:"):
-            return conn.execute(
-                "SELECT 1 FROM memory_raw_refs WHERE ref_id=?",
-                (source_ref[len("raw_binding:"):],)).fetchone() is not None
+    """来源仍有效（D13，2026-10-01）：旧 raw_msg:/raw_binding: 前缀随
+    legacy raw 表退役——一律 invalid（降级 word_unverified），不查已
+    删除的表；现行 source_msg: 前缀由 Source 层校验。"""
     return False
 
 

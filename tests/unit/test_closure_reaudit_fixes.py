@@ -88,23 +88,6 @@ class TestP11SessionOwnerIsolation:
             assert ei.value.code == "SESSION_OWNER_MISMATCH", cap
 
 
-class TestP12NoFirstRoundRaw:
-    def test_words_insufficient_does_not_touch_raw(self, actors):
-        from mariposa.raw import service as raw
-        raw.import_payload("jiaming", {
-            "source_channel": "cc", "external_id": "e-p12",
-            "messages": [{"source_message_id": "p12-1", "role": "user",
-                          "body": "原文：晚风吹过窗边",
-                          "occurred_at": "2026-08-19T10:00:00"}]})
-        _hold_word(actors["jiaming"], "复述：晚风吹过窗边")
-        p = recall_service.start(actors["jiaming"], {"query_plan": {
-            "original_request": "我当时的原话", "channels": ["words"],
-            "lexical_terms": ["晚风"],
-            "evidence_requirement": "verbatim_required",
-            "raw_fallback": "when_evidence_insufficient"}})
-        assert p["coverage"]["raw"] == "round2_only"
-        assert not [c for c in p["candidates"] if c["channel"] == "raw"]
-        assert p["continuation"]["action"] == "round2_raw"
 
 
 class TestP13Round2ReasonFacts:

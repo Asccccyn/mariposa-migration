@@ -1,16 +1,12 @@
 import { useCallback, useState } from "react";
 import { getWho, getToken, saveAuth } from "./api";
-import { Calendar, Content, Deletions, MediaLib, Memories, Plans, Quotes, SettingsPage, Workspace }
+import { Deletions, MediaLib, Memories, Plans, SettingsPage }
   from "./pages";
 
 const TABS = [
   { id: "mem", label: "记忆 / 检索" },
-  { id: "ws", label: "工作区 / 审批" },
-  { id: "cal", label: "日历" },
   { id: "plan", label: "计划" },
-  { id: "quote", label: "她的话" },
   { id: "del", label: "删除申请" },
-  { id: "content", label: "Home / Self / 日记" },
   { id: "media", label: "媒体库" },
   { id: "settings", label: "设置" },
 ] as const;
@@ -55,12 +51,8 @@ export default function App() {
       </nav>
       <main>
         {tab === "mem" ? <Memories note={note} /> : null}
-        {tab === "ws" ? <Workspace note={note} /> : null}
-        {tab === "cal" ? <Calendar /> : null}
         {tab === "plan" ? <Plans note={note} /> : null}
-        {tab === "quote" ? <Quotes note={note} /> : null}
         {tab === "del" ? <Deletions note={note} /> : null}
-        {tab === "content" ? <Content note={note} /> : null}
         {tab === "media" ? <MediaLib note={note} /> : null}
         {tab === "settings" ? <SettingsPage /> : null}
       </main>

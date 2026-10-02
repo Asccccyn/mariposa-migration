@@ -24,7 +24,6 @@ from ..errors import Forbidden, SnapshotStale
 from ..memory import categories as cats_mod
 from ..memory import service as memory
 from ..plans import service as plans
-from ..raw import service as raw  # noqa: F401 （显式取源仍走 raw 工具）
 
 BOOT_MEMORY_DAYS = 3
 BOOT_DAY_WINDOW_MODE = "calendar_days"  # 今天+前两天（自然日），非最近72小时
@@ -245,7 +244,7 @@ def get(principal_id: str, entry_source: str, profile: str,
         },
         "cursor": {"next": None},
         "coverage": {"raw": "not_in_default_package",
-                     "note": "取原文用 raw.messages.list / raw.read 显式查询"},
+                     "note": "取原文用 source.message.get / source.search 显式查询"},
     }
 
     _estimate_budget(result)
