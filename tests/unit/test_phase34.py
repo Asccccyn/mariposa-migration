@@ -8,13 +8,10 @@ import pytest
 
 from mariposa import db
 from mariposa.bootstrap import service as bootstrap
-from mariposa.calendar import service as calendar
 from mariposa.errors import Forbidden, NotFound
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.plans import service as plans
-from mariposa.quotes import service as quotes
-from mariposa.raw import service as raw
 from mariposa.time_context import service as time_ctx
 from tests.conftest import reset_all, TOKENS
 
@@ -46,52 +43,6 @@ def _conv_payload(n=35, channel="claude_export", external=None):
     return {"source_channel": channel, "external_id": external, "messages": messages}
 
 
-class TestRaw:
-    def test_import_idempotent(self, actors):
-        payload = _conv_payload()
-        r1 = raw.import_payload("worker", payload)
-        assert r1["inserted"] == 35
-        r2 = raw.import_payload("worker", _conv_payload(
-            channel=payload["source_channel"], external=payload["external_id"]))
-        assert r2["inserted"] == 0 and r2["skipped_duplicate"] == 35
-        assert r1["conversation_id"] == r2["conversation_id"]
-        msgs = raw.list_recent(200)
-        assert len(msgs) == 35
-
-    def test_recent_30_cap_and_order(self, actors):
-        raw.import_payload("worker", _conv_payload(45))
-        msgs = raw.list_recent(30)
-        assert len(msgs) == 30
-        times = [m["occurred_at"] for m in msgs]
-        assert times == sorted(times)  # 时间正序展示
-        assert msgs[-1]["source_message_id"] == "msg_0044"  # 最新 30 条
-
-    def test_raw_search_independent_of_memory(self, actors):
-        raw.import_payload("worker", _conv_payload(35))
-        out = raw.search("蓝瓷小钥匙", limit=50)
-        assert out["source"] == "raw" and len(out["hits"]) == 35
-        # 原文不进 memory 投影
-        from mariposa.retrieval import search as retrieval
-        with db.formal() as conn:
-            mem_hits = retrieval.search(conn, "蓝瓷小钥匙")["hits"]
-        assert not mem_hits
-
-
-class TestQuotes:
-    def test_keep_search_withdraw(self, actors):
-        q = quotes.keep("jiaming", "她说：今晚想喝热可可，加一点点肉桂。", said_at="2026-09-18T14:00:00+08:00")
-        assert q["version"] == 1
-        out = quotes.search("热可可")
-        assert out["source"] == "quotes"
-        assert out["hits"][0]["quote_id"] == q["quote_id"]
-        quotes.withdraw("qiaosheng", q["quote_id"])
-        assert quotes.search("热可可")["hits"] == []
-        listed = quotes.list_quotes(include_withdrawn=True)
-        assert listed and listed[0]["withdrawn"] == 1  # 撤下不物理删
-
-    def test_worker_cannot_keep(self, actors):
-        with pytest.raises(Forbidden):
-            quotes.keep("worker", "工具人不能替他保留她的话")
 
 
 class TestHandoff:
@@ -138,24 +89,7 @@ class TestPlansAndCalendar:
 
 
 class TestBootstrap:
-    def test_claude_chat_profile(self, actors):
-        # superseded by V2-BOOT-03/08：claude_chat 不再默认附 30 条原文；
-        # 临近计划改为日期差 0..3 日
-        raw.import_payload("worker", _conv_payload(35))
-        memory.hold(actors["jiaming"], text="今天的桶", memory_date=None,
-                    categories=["daily"])  # 无日期不进三天
-        out = bootstrap.get("jiaming", "claude_chat", "claude_chat")
-        assert "raw" not in out  # v2：取原文走 raw.messages.list 显式查询
-        assert out["coverage"]["raw"] == "not_in_default_package"
-        assert out["memory_days"]["mode"] == "calendar_days"
-        assert out["plans"]["upcoming_days"] == 3
-        assert out["policy"]["raw_in_default_package"] is False
 
-    def test_cc_profile_no_raw(self, actors):
-        raw.import_payload("worker", _conv_payload(35))
-        out = bootstrap.get("jiaming", "cc", "cc")
-        assert "raw" not in out
-        assert out["coverage"]["raw"] == "not_in_default_package"
 
     def test_profile_mismatch_rejected(self, actors):
         with pytest.raises(Forbidden):
@@ -180,19 +114,6 @@ class TestBootstrap:
 
 
 class TestTimeContext:
-    def test_three_timelines_separated(self, actors):
-        raw.import_payload("worker", _conv_payload(2))
-        time_ctx.presence_touch("qiaosheng", "human")     # ui_activity
-        time_ctx.presence_touch("worker", "agent")        # agent_or_system
-        ctx = time_ctx.context("qiaosheng")
-        assert ctx["last_user_message_at"]      # raw user 消息
-        assert ctx["last_ui_activity_at"]       # 乔生 touch
-        assert ctx["last_agent_or_system_activity_at"]  # worker touch
-        with db.formal() as conn:
-            kinds = [r["kind"] for r in conn.execute(
-                "SELECT kind FROM activity_events ORDER BY occurred_at")]
-        assert kinds.count("ui_activity") >= 1
-        assert kinds.count("agent_or_system_activity") >= 1  # 两条时间线分开记录
 
     def test_since_no_contact(self, actors):
         out = time_ctx.since("qiaosheng")

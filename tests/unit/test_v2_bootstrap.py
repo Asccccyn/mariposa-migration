@@ -76,18 +76,23 @@ class TestBootstrapV2:
         assert out["i"]["version"] == 1
 
     def test_no_30_raw_messages_boot03(self, actors):
-        from mariposa.raw import service as raw_svc
-        base = datetime(2026, 9, 18, 8, 0, tzinfo=timezone.utc)
-        raw_svc.import_payload("worker", {
-            "source_channel": "x", "external_id": "e1",
-            "messages": [{"source_message_id": f"m{i}", "role": "user",
-                          "body": f"消息{i}",
-                          "occurred_at": (base + timedelta(minutes=i)).isoformat(),
-                          "sequence": i} for i in range(40)]})
-        for profile, entry in (("cc", "cc"), ("claude_chat", "claude_chat")):
-            out = bootstrap.get("jiaming", entry, profile)
-            assert "raw" not in out
-            assert out["coverage"]["raw"] == "not_in_default_package"
+        """BOOT-03：默认开窗不含原文（30 条内）；Source 层铺底后同判。"""
+        import json as _json
+        import tempfile, pathlib as _pl
+        from mariposa.source import importer
+        tmp = _pl.Path(tempfile.mkdtemp())
+        convs = [{"uuid": "c-b3",
+                  "chat_messages": [
+                      {"uuid": f"m{i}", "sender": "human",
+                       "created_at": f"2026-09-18T08:{i:02d}:00Z",
+                       "content": [{"type": "text", "text": f"消息 {i}"}]}
+                      for i in range(30)]}]
+        f = tmp / "b3.json"
+        f.write_text(_json.dumps(convs, ensure_ascii=False), encoding="utf-8")
+        importer.import_file("jiaming", str(f))
+        out = bootstrap.get("jiaming", "claude_chat", "claude_chat")
+        assert "raw_messages" not in out
+        assert out["coverage"]["raw"] == "not_in_default_package"
 
     def test_bootstrap_does_not_renew_boot04(self, actors):
         # v1.7：bootstrap 不算明确打开——last_explicit_open_at 不得被刷新

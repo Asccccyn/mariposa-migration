@@ -98,9 +98,7 @@
 
 <nav>
   <button data-page="memSec" class="active">记忆 / 检索</button>
-  <button data-page="calSec">日历</button>
   <button data-page="planSec">计划</button>
-  <button data-page="quoteSec">她的话</button>
   <button data-page="srcSec">原文</button>
   <button data-page="delSec">删除申请</button>
 </nav>
@@ -123,20 +121,6 @@
     <div id="memResults"></div>
   </section>
 
-  <!-- 日历 -->
-  <section class="page" id="calSec">
-    <div class="row">
-      <button id="calPrev">←</button>
-      <strong id="calTitle" style="min-width:110px;text-align:center"></strong>
-      <button id="calNext">→</button>
-      <span style="flex:1"></span>
-      <label><input type="checkbox" id="calMem" checked> 记忆</label>
-      <label><input type="checkbox" id="calPlan" checked> 计划</label>
-    </div>
-    <div id="calGrid"></div>
-    <div class="day-items" id="calDay"></div>
-  </section>
-
   <!-- 计划 -->
   <section class="page" id="planSec">
     <div class="row">
@@ -152,19 +136,6 @@
   </section>
 
   <!-- 她的话 -->
-  <section class="page" id="quoteSec">
-    <div class="row">
-      <input id="quoteText" placeholder="她说的一句话（周家明身份可保留）" style="flex:1" />
-      <button id="quoteAdd" class="primary">保留</button>
-    </div>
-    <div class="row">
-      <input id="quoteQ" placeholder="搜她的话（独立检索）" style="flex:1" />
-      <button id="quoteSearch">搜索</button>
-    </div>
-    <div id="quoteList"></div>
-  </section>
-
-  <!-- 原文 Source Layer -->
   <section class="page" id="srcSec">
     <div class="row">
       <input type="file" id="srcFile" accept=".json,.zip" />
@@ -249,9 +220,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     document.querySelectorAll('section.page').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     $(btn.dataset.page).classList.add('active');
-    if (btn.dataset.page === 'calSec') renderCalendar();
     if (btn.dataset.page === 'planSec') loadPlans();
-    if (btn.dataset.page === 'quoteSec') loadQuotes();
     if (btn.dataset.page === 'srcSec') loadSourceConvs();
     if (btn.dataset.page === 'delSec') loadDeletions();
   };
@@ -333,65 +302,6 @@ $('memResults').addEventListener('click', async (e) => {
   } catch (err) { setStatus(err.message, true); }
 });
 
-// ---------- 日历 ----------
-async function renderCalendar() {
-  const now = new Date();
-  if (state.calY === null) { state.calY = now.getFullYear(); state.calM = now.getMonth(); }
-  $('calTitle').textContent = `${state.calY}-${String(state.calM + 1).padStart(2, '0')}`;
-  const types = [];
-  if ($('calMem').checked) types.push('memory');
-  if ($('calPlan').checked) types.push('plan');
-  const first = new Date(state.calY, state.calM, 1);
-  const days = new Date(state.calY, state.calM + 1, 0).getDate();
-  const startWeekday = (first.getDay() + 6) % 7;  // 周一为首
-  const d = await api('calendar.month', { year: state.calY, month: state.calM + 1, types });
-  const byDate = {};
-  for (const item of d.items || []) {
-    (byDate[item.date_start] = byDate[item.date_start] || []).push(item);
-  }
-  let html = '<table class="cal"><tr>' +
-    ['一','二','三','四','五','六','日'].map(x => `<th>${x}</th>`).join('') + '</tr><tr>';
-  for (let i = 0; i < startWeekday; i++) html += '<td class="other"></td>';
-  for (let day = 1; day <= days; day++) {
-    const key = `${state.calY}-${String(state.calM + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const has = byDate[key] && byDate[key].length;
-    html += `<td data-date="${key}" class="${has ? 'has ' : ''}${state.calSel === key ? 'selected' : ''}">${day}${has ? `<div style="font-size:10px">${byDate[key].length}</div>` : ''}</td>`;
-    if ((startWeekday + day) % 7 === 0) html += '</tr><tr>';
-  }
-  html += '</tr></table>';
-  $('calGrid').innerHTML = html;
-  document.querySelectorAll('td[data-date]').forEach(td => {
-    td.onclick = () => showCalDay(td.dataset.date);
-  });
-  if (state.calSel) showCalDay(state.calSel);
-}
-
-function showCalDay(dateKey) {
-  state.calSel = dateKey;
-  const items = document.querySelectorAll(`td[data-date="${dateKey}"]`);
-  document.querySelectorAll('td[data-date]').forEach(t => t.classList.remove('selected'));
-  items.forEach(t => t.classList.add('selected'));
-  api('calendar.day', { date: dateKey }).then(d => {
-    const box = $('calDay');
-    if (!d.items.length) { box.innerHTML = `<div class="empty">${esc(dateKey)}：无条目</div>`; return; }
-    box.innerHTML = `<h3 style="font-size:13px;color:var(--dim)">${esc(dateKey)}</h3>`;
-    for (const it of d.items) {
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML =
-        `<div class="meta"><span class="tag ${esc(it.kind)}">${esc(it.kind)}</span>` +
-        `<span>${esc(it.status)}</span><span>v${it.resource_version}</span></div>` +
-        `<div class="mem-detail"><strong>${esc(it.title)}</strong></div>` +
-        (it.kind === 'memory' ? `<div class="meta" style="margin-top:4px">preview_kind: <code>${esc(it.preview_kind)}</code>${it.preview_kind === 'forgotten_summary' ? '（旧摘要表示，待离线迁移）' : ''}</div>` : '');
-      box.appendChild(div);
-    }
-  }).catch(e => { $('calDay').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
-}
-$('calPrev').onclick = () => { state.calM--; if (state.calM < 0) { state.calM = 11; state.calY--; } renderCalendar(); };
-$('calNext').onclick = () => { state.calM++; if (state.calM > 11) { state.calM = 0; state.calY++; } renderCalendar(); };
-$('calMem').onchange = renderCalendar;
-$('calPlan').onchange = renderCalendar;
-
 // ---------- 计划 ----------
 $('planAdd').onclick = async () => {
   try {
@@ -442,55 +352,6 @@ $('planList').addEventListener('click', async (e) => {
 });
 
 // ---------- 她的话 ----------
-$('quoteAdd').onclick = async () => {
-  try {
-    const d = await api('memory.quotes.keep', { text: $('quoteText').value });
-    setStatus('已保留 ' + d.quote_id);
-    $('quoteText').value = '';
-    loadQuotes();
-  } catch (e) { setStatus(e.message, true); }
-};
-$('quoteSearch').onclick = async () => {
-  try {
-    const d = await api('memory.quotes.search', { query: $('quoteQ').value });
-    const box = $('quoteList');
-    box.innerHTML = d.hits.length ? '' : '<div class="empty">无命中</div>';
-    for (const h of d.hits) {
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML = `<div class="meta"><span>source=<code>quotes</code></span><span>matched_by=<code>${esc(h.matched_by)}</code></span><span>${esc(h.said_at || '')}</span></div>` +
-        `<div class="mem-detail">${esc(h.text)}</div>`;
-      box.appendChild(div);
-    }
-  } catch (e) { setStatus(e.message, true); }
-};
-async function loadQuotes() {
-  const box = $('quoteList');
-  try {
-    const d = await api('memory.quotes.list', {});
-    if (!d.quotes.length) { box.innerHTML = '<div class="empty">暂无（周家明身份可保留）</div>'; return; }
-    box.innerHTML = '';
-    for (const q of d.quotes) {
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML = `<div class="meta"><span>${esc(q.id)}</span><span>kept_by=${esc(q.kept_by)}</span>` +
-        `<span class="tag ${q.semantic_status === 'material_conflict' ? 'state-rejected' : ''}">${esc(q.semantic_status)}</span></div>` +
-        `<div class="mem-detail">${esc(q.text)}</div>` +
-        `<div class="row"><button class="danger" data-quote="${esc(q.id)}">撤下</button></div>`;
-      box.appendChild(div);
-    }
-  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-}
-$('quoteList').addEventListener('click', async (e) => {
-  const btn = e.target.closest('button[data-quote]');
-  if (!btn) return;
-  try {
-    await api('memory.quotes.withdraw', { quote_id: btn.dataset.quote });
-    setStatus('已撤下（不物理删除）');
-    loadQuotes();
-  } catch (err) { setStatus(err.message, true); }
-});
-
 // ---------- 删除申请 ----------
 $('delSubmit').onclick = async () => {
   try {

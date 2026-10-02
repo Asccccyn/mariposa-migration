@@ -23,7 +23,6 @@ from ..retrieval import query_plan as qp
 from ..retrieval import semantic, selection, words as words_mod
 from ..retrieval import fusion
 from ..retrieval.judges import base as judge_base
-from ..raw import recall as raw_recall
 
 from . import budget, state_machine, store
 from .models import validate_query_plan

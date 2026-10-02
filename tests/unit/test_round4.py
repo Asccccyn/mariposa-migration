@@ -5,15 +5,11 @@ from __future__ import annotations
 import pytest
 
 from mariposa import db
-from mariposa.calendar import service as calendar
 from mariposa.errors import Forbidden, NotFound, VersionConflict
 from mariposa.identity import service as identity
 from mariposa.maintenance import service as maintenance
 from mariposa.media import service as media
 from mariposa.memory import extras, relations, service as memory
-from mariposa.moments import service as moments
-from mariposa.raw import binding, service as raw
-from mariposa.reminders import service as reminders
 from mariposa.retrieval import search as retrieval
 from tests.conftest import reset_all
 
@@ -91,67 +87,6 @@ class TestRelations:
             relations.detach("jiaming", b["memory_id"], a["memory_id"], "related_to")
 
 
-class TestRawBinding:
-    def _import_conv(self, n=3):
-        from datetime import datetime, timedelta, timezone
-        base = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
-        raw.import_payload("worker", {
-            "source_channel": "claude_export", "external_id": "bind_test",
-            "messages": [
-                {"source_message_id": f"bm{i}", "role": "user",
-                 "body": f"绑定测试消息 {i}",
-                 "occurred_at": (base + timedelta(minutes=i)).isoformat(),
-                 "sequence": i} for i in range(n)]})
-
-    def test_pending_then_bind_then_revoke(self, actors):
-        h = memory.hold(actors["jiaming"], text="周末去了山里", memory_date="2026-06-01", categories=["daily"])
-        with db.formal() as conn:
-            state = conn.execute("SELECT source_state FROM memories WHERE memory_id=?",
-                                 (h["memory_id"],)).fetchone()
-        assert state["source_state"] == "raw_pending"
-        frag = binding.report_fragment("jiaming", "我们那天在山里看到了云海",
-                                       h["memory_id"])
-        self._import_conv()
-        conv = raw.conversations_list()[0]["id"]
-        out = binding.bind("jiaming", h["memory_id"], conv, "bm0", "bm2")
-        assert out["source_state"] == "bound" and out["messages"] == 3
-        # Hold 内容不被绑定改写
-        with db.formal() as conn:
-            got = memory.get(conn, h["memory_id"])
-        assert got["text"] == "周末去了山里"
-        binding.revoke("jiaming", h["memory_id"], conv)
-        refs = binding.refs_of(h["memory_id"])
-        assert refs[0]["bind_confidence"] == "revoked"  # 留历史
-
-    def test_dedupe_needs_review(self, actors):
-        h1 = memory.hold(actors["jiaming"], text="第一个桶", memory_date="2026-06-01", categories=["daily"])
-        h2 = memory.hold(actors["jiaming"], text="第二个桶", memory_date="2026-06-01", categories=["daily"])
-        self._import_conv()
-        conv = raw.conversations_list()[0]["id"]
-        binding.bind("jiaming", h1["memory_id"], conv, "bm0", "bm2")
-        with pytest.raises(Forbidden) as e:
-            binding.bind("jiaming", h2["memory_id"], conv, "bm0", "bm2")
-        assert e.value.detail.get("code") == "DEDUPE_NEEDS_REVIEW"
-
-    def test_fragment_only_jiaming(self, actors):
-        with pytest.raises(Forbidden):
-            binding.report_fragment("qiaosheng", "乔生不能替他报告片段")
-
-
-class TestRemindersAndCalendar:
-    def test_reminder_lifecycle_and_calendar(self, actors):
-        r = reminders.create("qiaosheng", "拿体检报告",
-                             remind_at="2026-09-25T09:00:00+08:00")
-        day = calendar.day("2026-09-25", types=["reminder"])
-        assert day["items"] and day["items"][0]["kind"] == "reminder"
-        out = maintenance.reminders_fire_due(now="2026-09-26T00:00:00+00:00")
-        assert r["reminder_id"] in [x["id"] for x in out["fired"]]
-        again = maintenance.reminders_fire_due(now="2026-09-27T00:00:00+00:00")
-        assert not again["fired"]  # 幂等
-        with pytest.raises(Forbidden):
-            reminders.cancel("qiaosheng", r["reminder_id"])  # 已 fired 不可取消
-
-
 class TestMaintenance:
     def test_outbox_drain_and_activity(self, actors):
         _hold(actors, "产生事件")
@@ -194,16 +129,6 @@ class TestMedia:
             media.stage_bytes("qiaosheng", prep["upload_token"], b"short")
 
 
-class TestMoments:
-    def test_post_comment_react(self, actors):
-        m = moments.post("jiaming", "今天一起做了晚饭。")
-        assert m["kind"] == "post"
-        moments.comment("qiaosheng", m["moment_id"], "番茄牛腩面好评")
-        moments.react("qiaosheng", m["moment_id"], "❤")
-        listed = moments.list_moments()
-        assert listed[0]["content"].startswith("今天")
-        # group_archive 与 post 分开
-        assert all(x["kind"] == "post" for x in listed)
 
 
 class TestReservedContracts:

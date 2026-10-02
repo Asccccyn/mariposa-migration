@@ -14,7 +14,6 @@ from mariposa.memory import recollections as rec_mod
 from mariposa.memory import service as memory
 from mariposa.memory import views as views_mod
 from mariposa.retrieval import search as rsearch
-from mariposa.raw import service as raw
 from tests.conftest import reset_all
 
 
@@ -143,18 +142,6 @@ class TestForbiddenProbes:
                        "瀺灂回忆词浮现在这里")
         assert m["memory_id"] not in hit_ids(recall(actors, "瀺灂"))
 
-    def test_raw_only_probe_search10(self, actors):
-        raw.import_payload("jiaming", {
-            "source_channel": "probe", "external_id": "p1",
-            "messages": [{"source_message_id": "m1", "role": "assistant",
-                          "body": "棽椮原文词的独家记录",
-                          "occurred_at": "2026-09-10T10:00:00+00:00",
-                          "sequence": 1}]})
-        assert not hit_ids(recall(actors, "棽椮"))
-        # raw.search 是独立原文查询（source=raw），命中不冒充记忆
-        with db.formal() as conn:
-            mem_hits = rsearch.search(conn, "棽椮")["hits"]
-        assert not mem_hits
 
 class TestRegistryRecall:
     def test_recall_capability_invokes(self, actors):

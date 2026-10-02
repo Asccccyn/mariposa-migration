@@ -220,11 +220,10 @@ def _execute(conn, row, actor: str) -> None:
             "改用 archive", memory_id=rid, references=refs)
     # v2 分层子表全清（B08：v1 清单不含分类/心情/话语/回忆/keep 行，
     # v2 桶会 FK 失败）
-    for table in ("memory_raw_refs", "memory_categories", "memory_tags",
+    for table in ("memory_categories", "memory_tags",
                   "memory_moods", "memory_mood_tags", "memory_our_words",
                   "memory_recollections", "memory_view_receipts",
-                  "memory_reengagements", "memory_meanings",
-                  "memory_keeps", "field_search_docs", "field_fts",
+                  "memory_reengagements",                  "memory_keeps", "field_search_docs", "field_fts",
                   "search_fts", "retrieval_documents", "memory_versions"):
         conn.execute(f"DELETE FROM {table} WHERE memory_id=?", (rid,))
     conn.execute("DELETE FROM memory_relations WHERE from_memory=?"
