@@ -5,7 +5,7 @@
 - approved -> rejected / rejected -> approved 不允许
 - 数据库状态与实际删除副作用一致（approved 且 memory 真删 / rejected 且保留）
 - 无引用 memory 正常物理删除
-- 有 I revision 关系 / Source 绑定 → 结构化 DELETE_BLOCKED_BY_REFERENCES，
+- 有 I revision 关系 / Source 绑定 → 结构化 DELETE_BLOCKED_BY_RELATIONS，
   不裸 500；memory 与 relation 均保留；请求保持 pending
 - 多类引用同时存在全部列出
 """

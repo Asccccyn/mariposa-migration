@@ -390,9 +390,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                 "additionalProperties": False,
                 "properties": {
                     "memory_id": {"type": "string", "minLength": 1},
+                    # CB-035：canonical 为 related_to（与读结果/
+                    # relations.list 一致）；related 保留为旧客户端
+                    # alias（service 层映射到 related_to）
                     "relation_type": {"type": "string", "enum": [
                         "changed_because_of", "clarified_by",
-                        "informed_by", "related"]}}}},
+                        "informed_by", "related_to", "related"]}}}},
         },
     },
     "i.item.revise": {
@@ -410,9 +413,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                 "additionalProperties": False,
                 "properties": {
                     "memory_id": {"type": "string", "minLength": 1},
+                    # CB-035：canonical 为 related_to（与读结果/
+                    # relations.list 一致）；related 保留为旧客户端
+                    # alias（service 层映射到 related_to）
                     "relation_type": {"type": "string", "enum": [
                         "changed_because_of", "clarified_by",
-                        "informed_by", "related"]}}}},
+                        "informed_by", "related_to", "related"]}}}},
         },
     },
     "i.item.restore": {
@@ -429,9 +435,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                 "additionalProperties": False,
                 "properties": {
                     "memory_id": {"type": "string", "minLength": 1},
+                    # CB-035：canonical 为 related_to（与读结果/
+                    # relations.list 一致）；related 保留为旧客户端
+                    # alias（service 层映射到 related_to）
                     "relation_type": {"type": "string", "enum": [
                         "changed_because_of", "clarified_by",
-                        "informed_by", "related"]}}}},
+                        "informed_by", "related_to", "related"]}}}},
         },
     },
     "i.suggest": {
