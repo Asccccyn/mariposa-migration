@@ -56,7 +56,14 @@ def capabilities(request: Request):
 
 @app.post("/api/capability/{name}")
 async def invoke(name: str, request: Request):
-    body = await _json_body(request)
+    try:
+        body = await _json_body(request)
+    except MariposaError as e:
+        # P1-07 复审：坏 JSON / BODY_TOO_LARGE 走结构化错误，不是 500
+        return JSONResponse(
+            status_code=e.http_status,
+            content={"ok": False, "error": {"code": e.code,
+                                            "message": str(e)}})
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
     try:
         principal = identity.authenticate(_bearer(request))
@@ -139,7 +146,18 @@ async def media_stage(token: str, request: Request):
     except MariposaError as e:
         return JSONResponse(status_code=401,
                             content={"ok": False, "error": {"code": e.code}})
+    # P1-07 复审：先按 Content-Length 预检（声明 size + 硬上限），
+    # 超限不必把整包读进内存
+    clen = request.headers.get("content-length")
+    if clen and int(clen) > _media._MAX_SIZE:
+        return JSONResponse(status_code=413,
+                            content={"ok": False,
+                                     "error": {"code": "BODY_TOO_LARGE"}})
     data = await request.body()
+    if len(data) > _media._MAX_SIZE:
+        return JSONResponse(status_code=413,
+                            content={"ok": False,
+                                     "error": {"code": "BODY_TOO_LARGE"}})
     try:
         info = _media.stage_bytes(principal.principal_id, token, data)
     except MariposaError as e:
