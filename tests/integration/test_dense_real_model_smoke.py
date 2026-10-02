@@ -25,7 +25,11 @@ from mariposa.memory import service as memory
 from mariposa.retrieval import search as rsearch
 from tests.conftest import reset_all
 
-WEIGHTS_DIR = r"D:\mariposa\runtime\models"
+# bge 权重缓存：代码仓库 runtime/models/（与 qwen 权重同约定；
+# 原 Windows 硬编码 D:\mariposa\runtime\models 在 Mac 上落成
+# 仓库根的字面量反斜杠目录，2026-10-01 已随缓存搬正）
+WEIGHTS_DIR = str(Path(__file__).resolve().parents[2]
+                  / "runtime" / "models")
 
 
 def _weights_available() -> bool:
