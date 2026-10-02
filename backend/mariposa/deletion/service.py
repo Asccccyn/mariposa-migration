@@ -96,8 +96,18 @@ def _execute_delete(conn, memory_id: str, actor: str) -> None:
     """
     _gate_or_raise(conn, memory_id)
     projection.remove(conn, memory_id)
+    # RA-020（2026-10-02 复审 P2）：先取 word IDs——our_words 删除后
+    # words 派生表（words_search_docs/words_fts）按 word_id 同事务清理
+    #（此前正文副本留存到下次全量重建）
+    word_ids = [r["word_id"] for r in conn.execute(
+        "SELECT word_id FROM memory_our_words WHERE memory_id=?",
+        (memory_id,))]
     for table in _SUB_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE memory_id=?", (memory_id,))
+    for wid in word_ids:
+        conn.execute("DELETE FROM words_search_docs WHERE word_id=?",
+                     (wid,))
+        conn.execute("DELETE FROM words_fts WHERE word_id=?", (wid,))
     conn.execute("DELETE FROM memories WHERE memory_id=?", (memory_id,))
     audit.record(conn, "memory.deleted", actor,
                  resource_id=memory_id, resource_version=0,
@@ -119,14 +129,41 @@ def deletion_request(principal_id: str, memory_id: str, reason: str,
     reason = (reason or "").strip()
     if not reason:
         raise Forbidden("申请理由必填（P-D01）", code="INVALID_ARGUMENT")
-    if operation_key:
-        row = _replay_check(principal_id, "memory.deletion.request",
-                            operation_key, memory_id)
-        if row is not None:
-            return row
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # RA-019（2026-10-02 复审 P2）：operation 幂等移入写锁——
+            # BEGIN 内先查 completed+payload_hash（同 key 同载荷重放/
+            # 异载荷冲突），并发同键第二请求不再只看 pending 抛
+            # CONFLICT 而是拿到相同回执
+            if operation_key:
+                import json as _json
+                import hashlib as _hl
+                ph = _hl.sha256(_json.dumps(
+                    {"memory_id": memory_id, "reason": reason},
+                    ensure_ascii=False, sort_keys=True).encode()
+                ).hexdigest()
+                prior = conn.execute(
+                    "SELECT payload_hash, result_ref FROM"
+                    " idempotency_records WHERE principal_id=? AND"
+                    " capability='memory.deletion.request' AND"
+                    " idempotency_key=?",
+                    (principal_id, f"op:{operation_key}")).fetchone()
+                if prior is not None:
+                    if prior["payload_hash"] not in (None, ph):
+                        from ..errors import IdempotencyConflict
+                        raise IdempotencyConflict(
+                            "same operation key with different payload",
+                            operation_key=operation_key)
+                    saved = _json.loads(prior["result_ref"])
+                    if saved.get("memory_id") == memory_id:
+                        try:
+                            out = deletion_get(saved["request_id"])
+                            out["idempotent_replay"] = True
+                            conn.execute("COMMIT")
+                            return out
+                        except NotFound:
+                            pass  # 回执指向的申请已不存在：继续新建
             if not conn.execute(
                     "SELECT 1 FROM memories WHERE memory_id=?",
                     (memory_id,)).fetchone():
