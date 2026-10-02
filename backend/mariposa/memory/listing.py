@@ -1,6 +1,6 @@
 """记忆列表/结构化检索 + meaning 层（§10.5/§17.3）。
 
-meaning 只允许周家明写；追加层次，替换留底；纳入 full 投影；
+meaning 只允许周家明写；追加层次，替换留底；禁检来源（不进任何检索投影）；
 遗忘桶的 meaning 旧内容不作为默认文本检索依据（§10.5）。
 """
 from __future__ import annotations

@@ -128,8 +128,11 @@ def upload_finalize(principal_id: str, token: str) -> dict:
         existing = conn.execute(
             "SELECT content_hash FROM media_objects WHERE content_hash=?",
             (content_hash,)).fetchone()
+        # 复审（2026-10-01）：已有 DB 行也必须验证磁盘 object——损坏
+        # （半截/被改）则用本次 staging 内容原子修复；deduplicated=True
+        # 不等于文件健康
+        _publish()
         if existing is None:
-            _publish()
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
