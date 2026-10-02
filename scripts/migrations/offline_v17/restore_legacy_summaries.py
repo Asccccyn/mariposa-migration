@@ -44,7 +44,10 @@ def dry_run() -> dict:
                 report["items"].append({
                     "memory_id": mid,
                     "action": "restore_full_version",
-                    "source_version": full["version_no"]})
+                    "source_version": full["version_no"],
+                    # RA-025：绑定报告生成时的目标当前版本——apply 时
+                    # 重验，dry-run 后的并发写入使旧 report 拒绝生效
+                    "target_version_at_report": r["current_version_no"]})
             else:
                 report["content_gap"] += 1
                 report["items"].append({
@@ -69,8 +72,15 @@ def apply(report: dict) -> dict:
                     " WHERE memory_id=? AND version_no=?",
                     (mid, it["source_version"])).fetchone()
                 m = conn.execute(
-                    "SELECT current_version_no FROM memories WHERE"
-                    " memory_id=?", (mid,)).fetchone()
+                    "SELECT current_version_no, compression_state FROM"
+                    " memories WHERE memory_id=?",
+                    (mid,)).fetchone()
+                # RA-025：dry-run 后状态变化（正常修订/已恢复并前进）
+                # ——旧 report 拒绝生效，不得把当前正文改回旧版本
+                expected_v = it.get("target_version_at_report")
+                if expected_v is not None and \
+                        m["current_version_no"] != expected_v:
+                    continue  # 状态已前进：本项跳过（no-op）
                 body = ((full["event_text"] if full else None)
                         or (full["hold_text"] if full else None) or "")
                 # CB-026：幂等——最新版本已是同内容 restore 产物则

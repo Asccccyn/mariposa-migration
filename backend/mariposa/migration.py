@@ -233,7 +233,11 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         # CB-021（2026-10-02 审计 P2）：Memory 迁移白名单化——退役
         # archive 等未知类型显式 unmapped，不再默认落成 active 正式
         # Memory（审计反例：type=archived 经 dry-run/apply 变当前资源）
-        bucket_type = str(meta.get("type") or "").strip().lower()
+        # RA-024（2026-10-02 复审 P2）：旧格式两字段别名统一解析——
+        # dry_run_real 同时读 type/bucket_type，白名单判定同口径
+        bucket_type = str(
+            meta.get("type") or meta.get("bucket_type") or ""
+        ).strip().lower()
         is_retired_content = bucket_type in ("self", "diary")
         _known_memory_type = bucket_type in (
             "", "memory", "note", "daily", "milestone", "event",
