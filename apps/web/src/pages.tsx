@@ -210,7 +210,7 @@ export function Deletions({ note }: { note: (s: string, err?: boolean) => void }
                         rejectionReason?: string) => {
     try {
       await call("memory.deletion.decide", {
-        request_id: r.id, decision,
+        request_id: r.request_id || r.id, decision,
         ...(decision === "reject" && rejectionReason
           ? { rejection_reason: rejectionReason } : {}),
       }, `ui-del-${r.id}-${decision}`);

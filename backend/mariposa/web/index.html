@@ -170,11 +170,7 @@
     <div class="row">
       <input id="delTarget" placeholder="memory_id" style="flex:1" />
       <input id="delReason" placeholder="理由（必填）" style="flex:1" />
-      <select id="delAction">
-        <option value="archive">归档</option>
-        <option value="delete">删除</option>
-      </select>
-      <button id="delSubmit" class="danger">提交申请</button>
+      <button id="delSubmit" class="danger">提交删除申请</button>
     </div>
     <p class="empty">规则与旧系统一致：理由必填；每日 10 条上限；同一资源 5 次上限；仅周家明审批。审批通过前内容不变。</p>
     <div id="delList"></div>
@@ -360,9 +356,11 @@ $('planList').addEventListener('click', async (e) => {
 // ---------- 删除申请 ----------
 $('delSubmit').onclick = async () => {
   try {
+    // RA-011：现行 v2.0 合同——memory_id+reason+operation_id（无
+    // action：archive 已退役，申请即物理删除诉求）
     const d = await api('memory.deletion.request', {
-      resource_id: $('delTarget').value, reason: $('delReason').value,
-      action: $('delAction').value,
+      memory_id: $('delTarget').value, reason: $('delReason').value,
+      operation_id: 'ui-del-' + Date.now(),
     });
     setStatus('申请已提交：' + d.request_id + '（pending，内容未变）');
     loadDeletions();
@@ -377,15 +375,15 @@ async function loadDeletions() {
     for (const r of d.requests.slice(0, 30)) {
       const div = document.createElement('div');
       div.className = 'item';
-      div.innerHTML = `<div class="meta"><span>${esc(r.id)}</span>` +
+      div.innerHTML = `<div class="meta"><span>${esc(r.request_id || r.id)}</span>` +
         `<span class="tag state-${esc(r.status)}">${esc(r.status)}</span>` +
-        `<span>${esc(r.resource_kind)}:${esc(r.resource_id)}</span><span>${esc(r.action)}</span>` +
-        `<span>${esc(r.local_date)}</span></div>` +
-        `<div class="mem-detail">理由：${esc(r.human_reason)}${r.ai_reason ? '<br>批注：' + esc(r.ai_reason) : ''}</div>` +
+        `<span>${esc(r.memory_id || '')}</span>` +
+        `<span>${esc(r.submitted_local_date || '')}</span></div>` +
+        `<div class="mem-detail">理由：${esc(r.human_reason)}${r.rejection_reason ? '<br>拒绝理由：' + esc(r.rejection_reason) : ''}</div>` +
         (r.status === 'pending'
-          ? `<div class="row"><button class="primary" data-decide="${esc(r.id)}" data-d="approve">批准</button>` +
-            `<button class="danger" data-decide="${esc(r.id)}" data-d="reject">拒绝</button>` +
-            `<button data-withdraw="${esc(r.resource_id)}">撤回</button></div>` : '');
+          ? `<div class="row"><button class="primary" data-decide="${esc(r.request_id || r.id)}" data-d="approve">批准（物理删除）</button>` +
+            `<button class="danger" data-decide="${esc(r.request_id || r.id)}" data-d="reject">拒绝</button>` +
+            `<button data-withdraw="${esc(r.request_id || r.id)}">撤回</button></div>` : '');
       box.appendChild(div);
     }
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -395,14 +393,20 @@ $('delList').addEventListener('click', async (e) => {
   const withdraw = e.target.closest('button[data-withdraw]');
   try {
     if (decide) {
-      const d = await api('memory.deletion.decide', {
-        request_id: decide.dataset.decide, decision: decide.dataset.d,
-        expected_resource_id: '',
-      }, 'del-decide-' + decide.dataset.decide);
-      setStatus('已' + (d.decision === 'approve' ? '批准并执行' : '拒绝'));
+      // RA-011：reject 必填拒绝理由；decide 只带 request_id+decision
+      const args = { request_id: decide.dataset.decide,
+                     decision: decide.dataset.d };
+      if (decide.dataset.d === 'reject') {
+        args.rejection_reason = window.prompt('拒绝理由（必填）') || '';
+        if (!args.rejection_reason) return;
+      }
+      const d = await api('memory.deletion.decide', args,
+        'del-decide-' + decide.dataset.decide + '-' + decide.dataset.d);
+      setStatus(d.decision === 'approve' ? '已批准并执行删除' : '已拒绝');
       loadDeletions();
     } else if (withdraw) {
-      await api('memory.deletion.withdraw', { resource_id: withdraw.dataset.withdraw });
+      await api('memory.deletion.withdraw',
+        { request_id: withdraw.dataset.withdraw });
       setStatus('已撤回');
       loadDeletions();
     }

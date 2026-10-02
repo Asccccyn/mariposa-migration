@@ -19,6 +19,10 @@ scripts/start-dev.ps1
 
 ## 测试
 
+- 遵守 AGENTS.md 硬约束（2026-09-22 内存事故后）：pytest 分批、
+  指定文件/用例、`-q -x`、前台显式超时（60/120s），禁缓存/字节码
+  写入仓库；预期内存 >2GB 或 >20 分钟先确认再跑
+
 ```powershell
 .venv\Scripts\python -m pytest tests -q
 ```
@@ -28,15 +32,17 @@ scripts/start-dev.ps1
 - `backend/mariposa/` — FastAPI 后端
   - `identity/` 主体与绑定（token -> principal，服务端解析，参数不能自报）
   - `capabilities/registry.py` 统一能力注册表：HTTP / MCP / CC 共用同一 handler
-  - `memory/` 正式桶、版本、遗忘审批应用、恢复
+  - `memory/` 正式桶、版本（遗忘/恢复业务已随 v1.7 退役；删除走
+    Relation/Deletion v2.0 两条路径）
   - `relations/` 五域关系（memory/I/source/plan/word）+ 纠错历史与
     领域原子写；`deletion/` 删除申请两条路径（江乔生申请/周家明直删）
   - `recall/` 召回运行时（Session/预算/Round2/Raw 深搜）；
     `bootstrap/` 开窗装配；`source/` 原文层（导入/绑定/区间）
   - `retrieval/` 可检索投影 + FTS5（中文预分词）+ 查询安全编译
 - `runtime/formal/mariposa.sqlite3` 正式库；
-  `runtime/recall/recall.sqlite3` 召回运行库（workspace 已随
-  Workspace Tasks/Lease 退役移除）
+  `runtime/recall/recall.sqlite3` 召回运行库；
+  `runtime/workspace/workspace.sqlite3` 辅助库（仅存 recall 运行
+  相关辅助表与库身份元数据，Workspace Tasks/Lease 业务已退役）
 - 删除闭环（v2.0）：江乔生申请（配额：lifetime 5/日 10）-> 周家明
   approve 物理删除 / 周家明 memory.delete 直删；五域关系硬门拦截
 
