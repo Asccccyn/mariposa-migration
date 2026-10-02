@@ -85,8 +85,9 @@ def create(principal_id: str, title: str, content: str | None = None,
                 if not exists:
                     raise NotFound("linked memory not found", memory_id=mid)
                 conn.execute(
-                    "INSERT OR IGNORE INTO plan_memory_links(plan_id, memory_id)"
-                    " VALUES(?,?)", (pid, mid))
+                    "INSERT OR IGNORE INTO plan_memory_links(link_id,"
+                    " plan_id, memory_id) VALUES(?,?,?)",
+                    (f"pml_{uuid.uuid4().hex[:16]}", pid, mid))
             audit.record(conn, "plan.changed", principal_id, resource_id=pid,
                          resource_version=1, payload={"action": "create", "state": state})
             conn.execute("COMMIT")
@@ -242,3 +243,75 @@ def bootstrap_plans(now_local_date, upcoming_days: int = 3) -> list[dict]:
             if day <= horizon:  # 含逾期（< today）与 0..3 日临近
                 out.append(p)
     return out
+
+
+def correct_memory_link(principal_id: str, link_id: str,
+                        correction_action: str, note: str | None = None,
+                        replacement: dict | None = None,
+                        conn=None) -> dict:
+    """Plan↔Memory 链接纠错（§P-R02/§5.5 Plan）。
+
+    Plan 状态变化从不解绑（P-R01）——本函数是唯一的链接退出路径。
+    最后一条错误链接可纠正；桶仍带 plan 分类时阶段读取按既定
+    PLAN_MAPPING_GAP 暴露（不伪装终态/自动改分类）。
+    """
+    from .. import db as _db
+    from ..errors import Forbidden, NotFound
+    from ..relations.corrections import record_correction
+    if correction_action not in ("remove_wrong_binding",
+                                 "replace_wrong_binding"):
+        raise Forbidden("correction_action must be remove_wrong_binding/"
+                        "replace_wrong_binding")
+
+    def _do(conn):
+        row = conn.execute(
+            "SELECT * FROM plan_memory_links WHERE link_id=?",
+            (link_id,)).fetchone()
+        if row is None:
+            raise NotFound("plan link not found", link_id=link_id)
+        replacement_id = None
+        if replacement:
+            new_plan = replacement.get("plan_id", "")
+            new_mem = replacement.get("memory_id", row["memory_id"])
+            if not conn.execute("SELECT 1 FROM plans WHERE id=?",
+                                (new_plan,)).fetchone():
+                raise NotFound("plan not found", plan_id=new_plan)
+            if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
+                                (new_mem,)).fetchone():
+                raise NotFound("memory not found", memory_id=new_mem)
+            dup = conn.execute(
+                "SELECT link_id FROM plan_memory_links WHERE plan_id=?"
+                " AND memory_id=?", (new_plan, new_mem)).fetchone()
+            if dup:
+                replacement_id = dup["link_id"]
+            else:
+                import uuid as _u
+                replacement_id = f"pml_{_u.uuid4().hex[:16]}"
+                conn.execute(
+                    "INSERT INTO plan_memory_links(link_id, plan_id,"
+                    " memory_id) VALUES(?,?,?)",
+                    (replacement_id, new_plan, new_mem))
+        cid = record_correction(
+            conn, domain="plan_link", original_instance_id=link_id,
+            endpoint_a=row["plan_id"], endpoint_b=row["memory_id"],
+            original_meta={},
+            original_created_by=None, original_created_at=None,
+            corrected_by=principal_id, note=note,
+            replacement_instance_id=replacement_id)
+        conn.execute("DELETE FROM plan_memory_links WHERE link_id=?",
+                     (link_id,))
+        return {"correction_id": cid, "removed_link_id": link_id,
+                "replacement_link_id": replacement_id,
+                "action": correction_action}
+
+    if conn is not None:
+        return _do(conn)
+    with _db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            out = _do(c)
+            c.execute("COMMIT")
+            return out
+        except Exception:
+            c.execute("ROLLBACK")
+            raise

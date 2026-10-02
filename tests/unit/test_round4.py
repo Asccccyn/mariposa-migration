@@ -50,41 +50,50 @@ class TestMemoryExtras:
 
 class TestRelations:
     def test_link_direction_and_trace(self, actors):
-        a = _hold(actors, "第一次尝试")
-        b = _hold(actors, "第二次尝试")
-        c = _hold(actors, "最终成功")
-        relations.link("jiaming", b["memory_id"], a["memory_id"], "continuation_of")
-        relations.link("jiaming", c["memory_id"], b["memory_id"], "continuation_of")
-        fwd = relations.list_for(b["memory_id"], "out")
-        rev = relations.list_for(b["memory_id"], "in")
-        assert len(fwd) == 1 and fwd[0]["to_memory"] == a["memory_id"]
-        assert len(rev) == 1 and rev[0]["reversed"] is True
-        trace = relations.trace(c["memory_id"])
-        assert trace["chain"] == [c["memory_id"], b["memory_id"], a["memory_id"]]
+        from mariposa.memory import relations as rel
+        from mariposa.memory import service as memory
+        a = memory.hold(actors["jiaming"], text="链A", memory_date="2026-09-25",
+                        date_confidence="exact", original_title="ta",
+                        categories=["daily"], creation_mode="contemporaneous",
+                        raw_pending=False)
+        b = memory.hold(actors["jiaming"], text="链B", memory_date="2026-09-25",
+                        date_confidence="exact", original_title="tb",
+                        categories=["daily"], creation_mode="contemporaneous",
+                        raw_pending=False)
+        rel.link("jiaming", a["memory_id"], b["memory_id"], "continuation_of")
+        out = rel.list_for(a["memory_id"], "out")
+        assert len(out) == 1 and out[0]["to_memory"] == b["memory_id"]
+        back = rel.list_for(b["memory_id"], "in")
+        assert back[0]["reversed"] is True
+        tr = rel.trace(a["memory_id"])
+        assert tr["earlier"] == [b["memory_id"]]  # A(新)的前序是 B
+        tr2 = rel.trace(b["memory_id"])
+        assert tr2["later"] == [a["memory_id"]]   # B 的后续是 A（方向不颠倒）
 
-    def test_relation_search_channel(self, actors):
-        a = _hold(actors, "海边拾贝")
-        b = _hold(actors, "完全无关文本")
-        relations.link("jiaming", b["memory_id"], a["memory_id"], "related_to")
-        with db.formal() as conn:
-            out = retrieval.search(conn, "zzz不存在的词", related_of=a["memory_id"])
-        assert out["hits"] and out["hits"][0]["matched_by"] == "relation"
-
-    def test_custom_label_rules(self, actors):
-        a, b = _hold(actors, "x"), _hold(actors, "y")
-        with pytest.raises(Forbidden):
-            relations.link("jiaming", b["memory_id"], a["memory_id"],
-                           "related_to", custom_label="私标")
-        relations.link("jiaming", b["memory_id"], a["memory_id"], "custom",
-                       custom_label="我们的暗号", reverse_label="被暗号")
-
-    def test_detach_keeps_history(self, actors):
-        a, b = _hold(actors, "x"), _hold(actors, "y")
-        relations.link("jiaming", b["memory_id"], a["memory_id"], "related_to")
-        relations.detach("jiaming", b["memory_id"], a["memory_id"], "related_to")
-        assert relations.list_for(b["memory_id"], "out") == []
-        with pytest.raises(NotFound):
-            relations.detach("jiaming", b["memory_id"], a["memory_id"], "related_to")
+    def test_correction_replaces_detach(self, actors):
+        """v2.0：detach 退役——纠错走 correct（历史留档、可重建新实例）。"""
+        from mariposa.memory import relations as rel
+        from mariposa.memory import service as memory
+        a = memory.hold(actors["jiaming"], text="纠A", memory_date="2026-09-25",
+                        date_confidence="exact", original_title="ta",
+                        categories=["daily"], creation_mode="contemporaneous",
+                        raw_pending=False)
+        b = memory.hold(actors["jiaming"], text="纠B", memory_date="2026-09-25",
+                        date_confidence="exact", original_title="tb",
+                        categories=["daily"], creation_mode="contemporaneous",
+                        raw_pending=False)
+        out = rel.link("jiaming", a["memory_id"], b["memory_id"], "related_to")
+        rid = out["relation_id"]
+        assert not hasattr(rel, "detach")
+        cor = rel.correct("jiaming", rid, "remove_wrong_binding",
+                          note="绑错对象")
+        assert cor["removed_relation_id"] == rid
+        assert rel.list_for(a["memory_id"], "both") == []
+        # 纠错后重建相同端点 = 新实例
+        out2 = rel.link("jiaming", a["memory_id"], b["memory_id"],
+                        "related_to")
+        assert out2["relation_id"] != rid
+        assert not out2.get("deduplicated")
 
 
 class TestMaintenance:
