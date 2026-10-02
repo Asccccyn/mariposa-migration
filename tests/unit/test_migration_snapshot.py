@@ -72,14 +72,17 @@ class TestSnapshotAndRealDryRun:
         assert st["total"] == 5
         assert st["by_target"] == {"memories": 1, "self_entries": 1,
                                "plans": 1}
-        oos = [e for e in out["entries"] if e.get("target")
-               == "out_of_scope"]
-        assert len(oos) >= 1  # archived（v2.0 不迁移；letter 另路处理）
+        # 零残留：archived 桶走通用 UNMAPPED（无专门分支）
+        unmapped = [e for e in out["entries"]
+                    if e.get("target") == "UNMAPPED"]
+        assert any(e.get("type") == "archived" for e in unmapped)
         assert st["with_meaning"] == 1
         # letter 桶出范围：计 unknown_type 且落 UNMAPPED（无正文无哈希）
-        assert st["unknown_type"] == 1 and st["bad_frontmatter"] == 0
+        assert st["unknown_type"] >= 1 and st["bad_frontmatter"] == 0
         unmapped = [e for e in out["entries"] if e["target"] == "UNMAPPED"]
-        assert len(unmapped) == 1 and unmapped[0]["type"] == "letter"
+        # 零残留：letter 与 archived 均走通用 UNMAPPED
+        assert sorted(e["type"] for e in unmapped) == \
+            ["archived", "letter"]
         # 正文与锁信正文不进报告（断言完整正文串，避开 note 文案）
         text = report.read_text(encoding="utf-8")
         assert "锁信正文（合成）" not in text and "正文甲" not in text
