@@ -223,7 +223,8 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         params += pool_params
 
     sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker, w.text,"
-           " w.expression_kind, w.source_ref, m.memory_date,"
+           " w.expression_kind, w.source_ref,"
+           " w.source_binding_version, m.memory_date,"
            " m.current_version_no, bm25(words_fts) AS rank"
            " FROM words_fts"
            " JOIN words_search_docs d ON d.word_id = words_fts.word_id"
@@ -301,9 +302,9 @@ def get_word(word_id: str) -> dict:
                 "所属记忆已遗忘；遗忘后的 words 显式检索保持 disabled"
                 f"（{config.WORDS_FORGOTTEN_DECISION_STATE}）",
                 code="WORDS_FORGOTTEN_DISABLED", word_id=word_id)
-    d = dict(row)
-    d.pop("visibility", None)
-    d["content_role"] = "retrieved_memory"
-    d["instruction_authority"] = "none"
-    d["evidence"] = _word_evidence(row, conn)
+        d = dict(row)
+        d.pop("visibility", None)
+        d["content_role"] = "retrieved_memory"
+        d["instruction_authority"] = "none"
+        d["evidence"] = _word_evidence(row, conn)
     return d
