@@ -30,10 +30,16 @@ def dry_run() -> dict:
         for r in rows:
             mid = r["memory_id"]
             full = conn.execute(
-                "SELECT version_no, hold_text FROM memory_versions"
+                "SELECT version_no, hold_text, event_text FROM"
+                " memory_versions"
                 " WHERE memory_id=? AND representation='full'"
                 " ORDER BY version_no DESC LIMIT 1", (mid,)).fetchone()
-            if full and (full["hold_text"] or "").strip():
+            # CB-026：两种合法历史正文形态——event_text（v2 列）与
+            # hold_text（v1 旧数据）；version_body 同一口径，此前只看
+            # hold_text 把 event_text 完整版本误判 LEGACY_CONTENT_GAP
+            body = ((full["event_text"] if full else None)
+                    or (full["hold_text"] if full else None) or "")
+            if full and body.strip():
                 report["recoverable"] += 1
                 report["items"].append({
                     "memory_id": mid,
@@ -58,12 +64,26 @@ def apply(report: dict) -> dict:
                     continue
                 mid = it["memory_id"]
                 full = conn.execute(
-                    "SELECT version_no, hold_text FROM memory_versions"
+                    "SELECT version_no, hold_text, event_text FROM"
+                    " memory_versions"
                     " WHERE memory_id=? AND version_no=?",
                     (mid, it["source_version"])).fetchone()
                 m = conn.execute(
-                    "SELECT current_version_no FROM memories WHERE memory_id=?",
-                    (mid,)).fetchone()
+                    "SELECT current_version_no FROM memories WHERE"
+                    " memory_id=?", (mid,)).fetchone()
+                body = ((full["event_text"] if full else None)
+                        or (full["hold_text"] if full else None) or "")
+                # CB-026：幂等——最新版本已是同内容 restore 产物则
+                # 跳过（重复 apply 不再每次追加新版本）
+                latest = conn.execute(
+                    "SELECT origin_kind, payload_hash FROM"
+                    " memory_versions WHERE memory_id=? AND version_no=?",
+                    (mid, m["current_version_no"])).fetchone()
+                body_hash = __import__("hashlib").sha256(
+                    body.encode()).hexdigest()
+                if (latest and latest["origin_kind"] == "restore"
+                        and latest["payload_hash"] == body_hash):
+                    continue
                 new_v = m["current_version_no"] + 1
                 conn.execute(
                     "INSERT INTO memory_versions(memory_id, version_no,"
@@ -72,14 +92,16 @@ def apply(report: dict) -> dict:
                     " payload_hash, created_at)"
                     " VALUES(?,?,'full',?,NULL,NULL,'offline_v17',NULL,"
                     "'restore',?,datetime('now'))",
-                    (mid, new_v, full["hold_text"],
-                     __import__("hashlib").sha256(
-                         full["hold_text"].encode()).hexdigest()))
+                    (mid, new_v, body, body_hash))
                 conn.execute(
                     "UPDATE memories SET current_version_no=?,"
                     " compression_state='full',"
                     " updated_at=datetime('now') WHERE memory_id=?",
                     (new_v, mid))
+                # CB-026：恢复后同步重建检索投影（此前成功恢复不满足
+                # 当前检索结构，retrieval_documents 仍指向遗忘摘要）
+                from mariposa.memory import service as _mem
+                _mem.rebuild_full_projection(conn, mid)
                 applied += 1
             conn.execute("COMMIT")
         except Exception:
