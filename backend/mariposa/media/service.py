@@ -20,6 +20,11 @@ _MAX_SIZE = 20 * 1024 * 1024
 _ALLOWED_MIME = re.compile(
     r"^(image/(png|jpeg|gif|webp)|audio/(mpeg|wav|ogg|mp4)|video/mp4|application/pdf)$")
 
+# upload token 的服务端字符集（token_urlsafe 输出：字母数字 _ -）。
+# 不含 / . \ : 等任何路径元字符——通过校验的 token 拼进 staging 目录
+# 后不可能逃出该目录（CB-001）。
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
 _staging: dict[str, dict] = {}  # upload_token -> 元数据（进程内；重启丢弃未完成上传）
 _STAGING_TTL_S = 600
 
@@ -53,9 +58,24 @@ def _meta_expired(meta: dict) -> bool:
             - created).total_seconds() > _STAGING_TTL_S
 
 
-def _drop_token(token: str) -> None:
+def _drop_token(token: str, meta: dict | None = None) -> None:
+    """作废 token 并清理其暂存文件（CB-001，2026-10-02 审计 P0）。
+
+    清理只能由服务端可信记录驱动：格式不合法、或 staging 记录不存在
+    的 token 一律不做任何文件系统副作用。此前未知 token 也直接
+    `staging_dir / token` 后 unlink——绝对路径会丢弃基目录（Path /
+    absolute）、`..` 直接逃逸，客户端可在收到 NOT_FOUND 之前删掉
+    staging 外任意服务可写文件。
+
+    通过格式校验的 token 不含路径元字符，路径被约束在 staging 目录
+    内；unlink 不跟随符号链接（删除链接本身，目标无害），目录则跳过。
+    """
     _staging.pop(token, None)
-    (_staging_dir() / token).unlink(missing_ok=True)
+    if meta is None or not _TOKEN_RE.fullmatch(token):
+        return
+    target = _staging_dir() / token
+    if target.is_symlink() or target.is_file():
+        target.unlink(missing_ok=True)
 
 
 def stage_bytes(principal_id: str, token: str, data: bytes) -> dict:
@@ -63,7 +83,7 @@ def stage_bytes(principal_id: str, token: str, data: bytes) -> dict:
     owner / TTL / 精确字节数都在此校验。"""
     meta = _staging.get(token)
     if meta is None or _meta_expired(meta):
-        _drop_token(token)
+        _drop_token(token, meta)
         raise NotFound("upload token unknown or expired")
     if meta["owner"] != principal_id:
         raise Forbidden("upload token belongs to another principal")
@@ -86,14 +106,14 @@ def upload_finalize(principal_id: str, token: str) -> dict:
         if meta["owner"] != principal_id:
             raise Forbidden("upload token belongs to another principal")
     if (meta is None or _meta_expired(meta) or not meta.get("staged")):
-        _drop_token(token)
+        _drop_token(token, meta)
         raise NotFound("upload token unknown, expired or not staged")
     path = _staging_dir() / token
     data = path.read_bytes()
     content_hash = hashlib.sha256(data).hexdigest()
     if len(data) != meta["size"] or content_hash != meta["content_hash"]:
         # 暂存文件被改（size/hash 不一致）→ 拒绝并作废 token
-        _drop_token(token)
+        _drop_token(token, meta)
         raise Forbidden("staged bytes fail size/hash recheck",
                         code="MEDIA_STAGED_MISMATCH")
     obj_dir = config.RUNTIME_DIR / "objects"
@@ -146,7 +166,7 @@ def upload_finalize(principal_id: str, token: str) -> dict:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-    _drop_token(token)
+    _drop_token(token, meta)
     return {"content_hash": content_hash, "deduplicated": bool(existing)}
 
 

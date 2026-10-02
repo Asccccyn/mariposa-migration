@@ -254,7 +254,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "required": ["upload_token"],
         "additionalProperties": False,
         "properties": {"upload_token": {"type": "string",
-                                         "minLength": 1}},
+                                        "minLength": 1,
+                                        # CB-001：token 只允许服务端
+                                        # 签发字符集，路径元字符在公开
+                                        # 边界即拒绝（服务层另有同款
+                                        # 校验兜底）
+                                        "pattern": "^[A-Za-z0-9_-]{8,128}$"}},
     },
     "memory.hold": {
         "type": "object",
