@@ -255,6 +255,52 @@ def hold(
     occurred_start: str | None = None,
     occurred_end: str | None = None,
 ) -> dict:
+    # 校验与写入都在 hold_in_tx 内（单事务版本，两入口一致）
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            out = hold_in_tx(
+                conn, principal, text, why_remember=why_remember,
+                memory_date=memory_date, date_confidence=date_confidence,
+                entry_source=entry_source, raw_refs=raw_refs,
+                original_title=original_title, categories=categories,
+                plan_ids=plan_ids, mood=mood, our_words=our_words,
+                creation_mode=creation_mode,
+                occurred_start=occurred_start, occurred_end=occurred_end)
+            conn.execute("COMMIT")
+            return out
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def hold_in_tx(
+    conn,
+    principal,
+    text: str,
+    why_remember: str | None = None,
+    memory_date: str | None = None,
+    date_confidence: str = "unknown",
+    entry_source: str | None = None,
+    raw_refs: list[dict] | None = None,
+    original_title: str | None = None,
+    categories: list[str] | None = None,
+    plan_ids: list[str] | None = None,
+    mood: dict | None = None,
+    our_words: list[dict] | None = None,
+    creation_mode: str | None = None,
+    occurred_start: str | None = None,
+    occurred_end: str | None = None,
+    *,
+    now: str | None = None,
+    memory_id: str | None = None,
+) -> dict:
+    """hold 的单事务版本（CB-003，2026-10-02 审计 P1）。
+
+    调用方必须已持有该 conn 的写事务（BEGIN IMMEDIATE）：Memory 创建
+    与调用方的同域副作用（如迁移的 ID 映射/置顶/隐藏标记）同事务提交，
+    消除"资源已建、映射未记"的重试重复窗口。校验与 hold 完全一致。
+    """
     if not text or not text.strip():
         raise Forbidden("hold text required")
     # v2 分层识别：出现任一 v2 字段即走分层写入路径
@@ -284,52 +330,44 @@ def hold(
     if mood is not None:
         mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
 
-    memory_id = f"mem_{uuid.uuid4().hex[:12]}"
-    now = _now()
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # F39：去重在写锁内——并发同源 hold 只落一个 memory
-            dup = _duplicated_by_raw_ref(conn, raw_refs)
-            if dup:
-                conn.execute("COMMIT")
-                return {"memory_id": dup, "deduplicated": True}
-            _insert_core_rows(
-                conn, memory_id=memory_id, principal_id=principal.principal_id,
-                text=text, why_remember=why_remember, memory_date=memory_date,
-                date_confidence=date_confidence, mode=mode,
-                original_title=original_title, v2=v2, now=now,
-                occurred_start=occurred_start, occurred_end=occurred_end)
-            # plan 绑定先于分层写入（categories.add 的 PLAN 绑定守卫
-            # 依赖链接已存在——同事务内顺序保证）
-            if "plan" in cats:
-                for pid in dict.fromkeys(plan_ids):
-                    if not conn.execute(
-                            "SELECT 1 FROM plans WHERE id=?",
-                            (pid,)).fetchone():
-                        raise NotFound("plan not found", plan_id=pid)
-                for pid in dict.fromkeys(plan_ids):
-                    conn.execute(
-                        "INSERT OR IGNORE INTO plan_memory_links(link_id,"
-                        " plan_id, memory_id) VALUES(?,?,?)",
-                        (f"pml_{uuid.uuid4().hex[:16]}", pid, memory_id))
-            _insert_layers(
-                conn, memory_id=memory_id, principal_id=principal.principal_id,
-                cats=cats, mood_data=mood_data, our_words=our_words,
-                entry_source=entry_source, v2=v2, now=now)
-            if raw_refs:
-                _insert_raw_refs(conn, memory_id, raw_refs, now)
-            audit.record(
-                conn, "memory.created", principal.principal_id,
-                resource_id=memory_id, resource_version=1,
-                payload={"entry_source": entry_source, "memory_date": memory_date,
-                         "creation_mode": mode or "legacy_unknown",
-                         "v2_layered": v2},
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    memory_id = memory_id or f"mem_{uuid.uuid4().hex[:12]}"
+    now = now or _now()
+    # F39：去重在写锁内——并发同源 hold 只落一个 memory
+    dup = _duplicated_by_raw_ref(conn, raw_refs)
+    if dup:
+        return {"memory_id": dup, "deduplicated": True}
+    _insert_core_rows(
+        conn, memory_id=memory_id, principal_id=principal.principal_id,
+        text=text, why_remember=why_remember, memory_date=memory_date,
+        date_confidence=date_confidence, mode=mode,
+        original_title=original_title, v2=v2, now=now,
+        occurred_start=occurred_start, occurred_end=occurred_end)
+    # plan 绑定先于分层写入（categories.add 的 PLAN 绑定守卫
+    # 依赖链接已存在——同事务内顺序保证）
+    if "plan" in cats:
+        for pid in dict.fromkeys(plan_ids):
+            if not conn.execute(
+                    "SELECT 1 FROM plans WHERE id=?",
+                    (pid,)).fetchone():
+                raise NotFound("plan not found", plan_id=pid)
+        for pid in dict.fromkeys(plan_ids):
+            conn.execute(
+                "INSERT OR IGNORE INTO plan_memory_links(link_id,"
+                " plan_id, memory_id) VALUES(?,?,?)",
+                (f"pml_{uuid.uuid4().hex[:16]}", pid, memory_id))
+    _insert_layers(
+        conn, memory_id=memory_id, principal_id=principal.principal_id,
+        cats=cats, mood_data=mood_data, our_words=our_words,
+        entry_source=entry_source, v2=v2, now=now)
+    if raw_refs:
+        _insert_raw_refs(conn, memory_id, raw_refs, now)
+    audit.record(
+        conn, "memory.created", principal.principal_id,
+        resource_id=memory_id, resource_version=1,
+        payload={"entry_source": entry_source, "memory_date": memory_date,
+                 "creation_mode": mode or "legacy_unknown",
+                 "v2_layered": v2},
+    )
     return {"memory_id": memory_id, "version": 1}
 
 
