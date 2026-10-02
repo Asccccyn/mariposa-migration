@@ -1200,7 +1200,8 @@ def _latest_anchor(session_id: str) -> str | None:
     cands = store.list_candidates(session_id)
     mem_refs = [c["resource_ref"] for c in reversed(cands)
                 if isinstance(c.get("resource_ref"), str)
-                and c["resource_ref"].startswith("memory:")]
+                and c["resource_ref"].startswith("memory:")
+                and c.get("state") != "rejected"]
     if not mem_refs:
         return None
     return mem_refs[0]  # RA-015：保留 memory:<id> 公开形态
