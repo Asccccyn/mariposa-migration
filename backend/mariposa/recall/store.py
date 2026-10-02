@@ -204,20 +204,26 @@ def record_round1_receipt(conn, *, session_id: str, revision: int,
                           methods: dict, coverage: dict,
                           candidate_set_hash: str, judged_count: int,
                           unavailable_count: int, unjudged_count: int,
-                          delivery_action: str) -> None:
+                          delivery_action: str,
+                          completed: bool = False) -> None:
     """S13/WP04：Round1 成功回执——绑定 plan/scope/policy/覆盖与
-    judge 统计，供 Round2 门禁核验（不新建独立服务，复用 runtime）。"""
+    judge 统计，供 Round2 门禁核验（不新建独立服务，复用 runtime）。
+
+    全量审计 P1-01：completed 只在 mark_round1_complete=True 的同一
+    最终事务里置 1——统计回执的存在不再隐含"本 revision 完整完成"
+    （故障/降级轮照写统计回执，但不能作为 Round2 升级依据）。"""
     conn.execute(
         "INSERT OR REPLACE INTO recall_round1_receipts(session_id,"
         " revision, plan_hash, scope_hash, policy_version, round_kind,"
         " methods, coverage, candidate_set_hash, judged_count,"
-        " unavailable_count, unjudged_count, delivery_action, created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " unavailable_count, unjudged_count, delivery_action, completed,"
+        " created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (session_id, revision, plan_hash, scope_hash, policy_version,
          round_kind, json.dumps(methods, ensure_ascii=False),
          json.dumps(coverage, ensure_ascii=False), candidate_set_hash,
          judged_count, unavailable_count, unjudged_count,
-         delivery_action, _now()))
+         delivery_action, 1 if completed else 0, _now()))
 
 
 def read_round1_receipt(conn, session_id: str, revision: int):

@@ -76,7 +76,7 @@ class TestMidAutumnPair:
                         "中秋", "2026-09-29")
             from mariposa.capabilities import registry as reg
             reg.invoke(actors["jiaming"], "memory.recall.start",
-                       {"query_plan": {
+                       { "operation_id": "op-auto-test_c-2","query_plan": {
                            "original_request": "前天中秋我们一起约会你还记得不",
                            "channels": ["event"],
                            "lexical_terms": ["中秋", "约会"]}}, None)
@@ -128,7 +128,7 @@ class TestMidAutumnPair:
                       "2026-09-28")
             from mariposa.capabilities import registry as reg
             reg.invoke(actors["jiaming"], "memory.recall.start",
-                       {"query_plan": {
+                       { "operation_id": "op-auto-test_c-1","query_plan": {
                            "original_request": "找纸鸢",
                            "channels": ["event"],
                            "lexical_terms": ["纸鸢"]}}, None)
@@ -159,7 +159,7 @@ class TestMidAutumnPair:
                     " WHERE memory_id=?", (m["memory_id"],))
             from mariposa.capabilities import registry as reg
             reg.invoke(actors["jiaming"], "memory.recall.start",
-                       {"query_plan": {
+                       { "operation_id": "op-auto-test_c-0","query_plan": {
                            "original_request": "找青苔",
                            "channels": ["event"],
                            "lexical_terms": ["青苔"]}}, None)

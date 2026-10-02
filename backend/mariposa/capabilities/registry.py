@@ -131,9 +131,11 @@ def _register() -> dict[str, Capability]:
         description="当前 session 状态+引用重校验（不重放旧正文）")
     add("memory.recall.close", _recall_close, _owners(), True,
         description="显式结束：resolved/cancelled；终止本次自动补查")
-    add("memory.words.recall", _words_recall, _owners(), False,
+    # 全量审计 P1-05：两者都创建 Recall Session/Round（有状态写），
+    # write=False 会把 readOnlyHint=true 暴露给 MCP 客户端、诱导自动重试
+    add("memory.words.recall", _words_recall, _owners(), True,
         description="独立 words 通道检索（我们的话；不混入 event ranking）")
-    add("memory.find_words", _find_words, _owners(), False,
+    add("memory.find_words", _find_words, _owners(), True,
         description="v1.7 找话专项：全量可见 our_words 跨阶段检索")
     add("memory.recall.round2", _recall_round2, _owners(), True,
         description="v1.7 Round 2 原文深搜：同 session+revision、"
@@ -409,7 +411,7 @@ _RECALL_RUNTIME_CAPS = frozenset({
     "memory.recall.start", "memory.recall.refine", "memory.recall.reject",
     "memory.recall.accept", "memory.recall.navigate", "memory.recall.status",
     "memory.recall.close", "memory.recall.round2", "memory.words.recall",
-    "memory.words.get", "memory.context.validate",
+    "memory.words.get", "memory.context.validate", "memory.find_words",
 })
 
 
@@ -822,7 +824,15 @@ def _source_cleanup(principal: Principal, a: dict) -> dict:
 
 def _find_words(principal: Principal, a: dict) -> dict:
     """S08/WP05：find_words 与 words.recall 同一统一入口——session 化
-    （预算/回执/同一层 Jev/≤3 交付），不另写一套 pipeline。"""
+    （预算/回执/同一层 Jev/≤3 交付），不另写一套 pipeline。
+    全量审计 P1-05：与 words.recall 同样走 operation_id 幂等（此前
+    完全绕开 _with_operation_id——响应丢失后的重试会另建 session
+    重新检索重新 Jev）。"""
+    return _with_operation_id(principal, a, _find_words_core)
+
+
+def _find_words_core(principal: Principal, a: dict,
+                     op_ctx: dict | None = None) -> dict:
     from .. import config as _cfg
     from ..errors import Forbidden as _FW
     if not _cfg.RECALL_WORDS_ENABLED:
@@ -837,7 +847,8 @@ def _find_words(principal: Principal, a: dict) -> dict:
         plan["lexical_terms"] = [a.get("query", "") or
                                  a.get("original_request", "")]
     plan["channels"] = ["words"]
-    return recall_service.start(principal, {"query_plan": plan})
+    return recall_service.start(principal, {"query_plan": plan},
+                                op_ctx=op_ctx)
 
 
 def _recall_round2(principal: Principal, a: dict) -> dict:

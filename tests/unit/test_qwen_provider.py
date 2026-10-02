@@ -76,12 +76,12 @@ class TestQwenProviderWiring:
                   "2026-09-10")
         hold(actors["jiaming"], "在书房整理旧信件", "2026-09-11")
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_q-1","query_plan": {
                                 "original_request": "找灯塔",
                                 "channels": ["event"],
                                 "semantic_query": "那座海角的白色灯塔",
                                 "lexical_terms": ["qqqxyz"]}}, None)
-        cands = r["data"]["candidates"]
+        cands = r["data"]["data"]["candidates"]
         assert any(c.get("memory_id") == out["memory_id"] for c in cands)
         with db.formal() as conn:
             row = conn.execute(
@@ -116,7 +116,7 @@ class TestQwenProviderWiring:
         _fake_qwen(monkeypatch, "灯塔")
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "qwen3e4b")
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_q-0","query_plan": {
                                 "original_request": "找灯塔",
                                 "channels": ["event"],
                                 "semantic_query": "那座灯塔",

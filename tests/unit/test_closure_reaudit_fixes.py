@@ -72,14 +72,17 @@ class TestP11SessionOwnerIsolation:
         sid = r["data"]["data"]["recall_session_id"]
         for cap, args in (
                 ("memory.recall.refine",
-                 {"session_id": sid, "query_plan": {
-                     "original_request": "再查", "channels": ["words"],
-                     "lexical_terms": ["晚风"]}}),
+                 {"session_id": sid, "operation_id": "op-p11-refine",
+                  "query_plan": {
+                      "original_request": "再查", "channels": ["words"],
+                      "lexical_terms": ["晚风"]}}),
                 ("memory.recall.close",
-                 {"session_id": sid, "outcome": "cancelled"}),
+                 {"session_id": sid, "outcome": "cancelled",
+                  "operation_id": "op-p11-close"}),
                 ("memory.recall.round2",
                  {"session_id": sid,
-                  "reason": "EVIDENCE_INSUFFICIENT"})):
+                  "reason": "EVIDENCE_INSUFFICIENT",
+                  "operation_id": "op-p11-round2"})):
             with pytest.raises(Forbidden) as ei:
                 registry.invoke(actors["qiaosheng"], cap, args, None)
             assert ei.value.code == "SESSION_OWNER_MISMATCH", cap
@@ -160,7 +163,7 @@ class TestP13Round2ReasonFacts:
                 with pytest.raises(Forbidden) as ei:
                     registry.invoke(actors["jiaming"],
                                     "memory.recall.round2",
-                                    {"session_id": sid, "reason": reason},
+                                    { "operation_id": "op-auto-test_c-0","session_id": sid, "reason": reason},
                                     None)
                 gate = ei.value.detail["gate"]
                 assert gate["reason_fact_supported"] is False, reason

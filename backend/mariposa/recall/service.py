@@ -102,7 +102,10 @@ def _event_candidates(conn, plan: dict, rejected: set[str],
             f" WHERE {' AND '.join(lex_where)}"
             " ORDER BY m.memory_date DESC, m.memory_id DESC LIMIT ?",
             lex_params + [config.RECALL_LEXICAL_K]).fetchall()
-        coverage["event"] = "complete_within_scope"
+        # 全量审计 P1-01/ROUND2-03：browse 只看 latest-K 窗口，不是
+        # 完整 scope——不得签 complete（否则可冒充"完整搜过没有候选"
+        # 给 Round2 背书）
+        coverage["event"] = "partial_topk_window"
 
     lexical_hits = []
     for r in lexical_rows:
@@ -295,18 +298,23 @@ def _run_round_compute(session: dict, plan: dict,
                     from ..retrieval import query_plan as _qp
                     _wwhere, _wparams = _qp.source_scope_sql(
                         _qp.source_scope(plan), "w.speaker", "m.memory_date")
-                    wdense = wsem.words_semantic_search(
+                    wdense_res = wsem.words_semantic_search(
                         conn, plan["semantic_query"],
                         limit=config.RECALL_LEXICAL_K,
                         extra_where=_wwhere, extra_params=_wparams)
-                    wpending = 0
-                    if wdense and isinstance(wdense[-1], dict) \
-                            and "__pending_vectors__" in wdense[-1]:
-                        wpending = wdense.pop()["__pending_vectors__"]
+                    # 全量审计 P1-04：结构化状态区分"正常搜完零命中"
+                    #（complete）/"向量未就绪"（partial）/"未配置"
+                    #（unavailable）——零命中不再误报 unavailable
+                    wdense = wdense_res["hits"]
+                    wpending = wdense_res["pending_vectors"]
+                    if not wdense_res["provider_active"]:
+                        coverage["words_dense"] = "unavailable"
+                    elif wpending:
+                        coverage["words_dense"] = "partial_vectors_pending"
+                        coverage["words_dense_pending_vectors"] = wpending
+                    else:
+                        coverage["words_dense"] = "complete_within_scope"
                     if wdense:
-                        coverage["words_dense"] = (
-                            "partial_vectors_pending" if wpending
-                            else "complete_within_scope")
                         # 同通道 RRF：BM25 与 dense 各自成序后融合
                         lex_ranked = fusion.family_rank(words_hits)
                         dense_cards = []
@@ -360,8 +368,8 @@ def _run_round_compute(session: dict, plan: dict,
                         words_hits = fusion.rrf_fuse({
                             "lexical": lex_ranked,
                             "dense": dense_ranked})
-                    else:
-                        coverage["words_dense"] = "unavailable"
+                    # P1-04：零命中（provider 正常）已在上方签
+                    # complete_within_scope，不落 unavailable
 
         # 闭环复审 P1-2：第一轮不查 raw（S12/S13）——原文升级只有
         # Round2 门禁一条通路；证据不足时提示 continuation 走
@@ -399,7 +407,11 @@ def _run_round_compute(session: dict, plan: dict,
             if ji:
                 c["judge"] = ji.to_dict()
                 c["candidate_ref"] = ji.candidate_ref
-    unjudged = max(0, len(event_fused) - len(judge_candidates))
+    # 全量审计 P1-02：unjudged 必须按 event+words+raw 全集算——此前
+    # 只算 event（20 event + 40 words + cap40 时 20 个被截掉的 words
+    # 凭空消失），错误 unjudged_count=0 进入 receipt 给 Round2 背书
+    _judge_pool_total = len(event_fused) + len(words_hits) + len(raw_pre)
+    unjudged = max(0, _judge_pool_total - len(judge_candidates))
 
     # 候选合流：event RRF 序 + words 独立序（通道间不比较未校准原始分数）
     all_candidates = fusion.dedupe_by_resource(event_fused + words_hits +
@@ -679,7 +691,8 @@ def _commit_round_effects(conn, session_id: str, revision: int,
             judged_count=js.get("judged", 0),
             unavailable_count=js.get("unavailable", 0),
             unjudged_count=js.get("unjudged", 0),
-            delivery_action=effects.get("delivery_action", ""))
+            delivery_action=effects.get("delivery_action", ""),
+            completed=bool(effects.get("mark_round1_complete")))
     cur = conn.execute(
         "UPDATE recall_sessions SET status=?, updated_at=?"
         " WHERE session_id=? AND current_revision=?",
@@ -1374,17 +1387,20 @@ _ROUND2_REASONS = frozenset({
     "EXPLICIT_REJECT_AFTER_DELIVERY"})
 
 
-#: 三轮复审#1：coverage 里真正的"检索 family 状态键"闭集——
-#: lexical_scorer/stage_filter/words_forgotten/dense_pending_vectors/
-#: judge_cache/_first_round_facts 等 metadata 不参与完整性判断，
-#: 逐键白名单防止新增 metadata 字符串被误当"不完整 family"
-#:（lexical_scorer 误杀反例；words_forgotten=disabled:<策略> 同类）
+#: 三轮复审#1 + 全量审计 P1-01：coverage 里真正的"检索 family 状态键"
+#: 闭集——lexical_scorer/stage_filter/words_forgotten/dense_pending_
+#: vectors/judge_cache/_first_round_facts 等 metadata 不参与完整性
+#: 判断，逐键白名单防止新增 metadata 字符串被误当"不完整 family"
+#:（lexical_scorer 误杀反例；words_forgotten=disabled:<策略> 同类）。
+#: P1-01 收紧：blocked（words 通道被配置关闭≠完整搜过）与
+#: unavailable_pass（无写入点的死值）出列——unavailable/partial/
+#: pending/truncated/blocked 都不能冒充完整，与门禁注释语义一致
 _RETRIEVAL_FAMILY_STATUS_KEYS = frozenset({
     "event", "dense_event", "words_lexical", "words_dense", "judge",
 })
 _RETRIEVAL_COMPLETE_VALUES = frozenset({
     "complete_within_scope", "not_requested", "round2_only",
-    "evaluated", "not_configured", "blocked", "unavailable_pass",
+    "evaluated", "not_configured",
 })
 
 
@@ -1395,8 +1411,13 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     gate: dict = {"reason_in_closed_set": reason in _ROUND2_REASONS}
 
     # 3. 当前范围的有效 Round1 完成事实
+    # 全量审计 P1-01：统计回执存在 ≠ 完整完成——必须本 revision 的
+    # completed=1（只在 mark_round1_complete=True 的最终事务里置位；
+    # 故障/降级轮的统计回执不能再给 Round2 背书）
     receipt = store.read_round1_receipt(conn, sid, rev)
-    gate["round1_receipt"] = receipt is not None
+    gate["round1_receipt"] = (receipt is not None
+                              and receipt.get("completed") == 1)
+    gate["round1_completed"] = gate["round1_receipt"]
     if receipt is not None:
         # 复审#3 + 三轮复审#1：本轮请求过的每个 retrieval family 都必须
         # complete_within_scope——unavailable/partial/pending/truncated
@@ -1458,9 +1479,17 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     gate["judge_outbound_authorized"] = profile_ok
 
     # 5. 预算（真实 burst 计数）+ 同 burst 无既有 raw 轮
+    # 全量审计 P1-03：预检必须同时确认 session 总额与**当前 burst**
+    # 剩余额度——此前只查总额，burst 满 3/3 时 raw 搜索与 Jev 出站
+    # 已发生、最终事务才拒（有成本操作先于预算确认）。最终事务的
+    # ensure_round_available_conn 保留为并发 CAS 二次防线
+    used_in_burst = conn.execute(
+        "SELECT COUNT(*) AS c FROM recall_rounds WHERE session_id=?"
+        " AND burst_no=?", (sid, session["current_burst"])).fetchone()["c"]
     gate["budget_available"] = (
         store.count_rounds(conn, sid)
-        < config.RECALL_SESSION_BURSTS_MAX * config.RECALL_BURST_ROUNDS)
+        < config.RECALL_SESSION_BURSTS_MAX * config.RECALL_BURST_ROUNDS
+        and used_in_burst < config.RECALL_BURST_ROUNDS)
     gate["no_prior_raw_round"] = not store.has_raw_round(
         conn, sid, session["current_burst"])
 

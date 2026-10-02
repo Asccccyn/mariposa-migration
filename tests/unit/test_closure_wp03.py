@@ -94,21 +94,21 @@ class TestScopeIsolation:
         b = hold(actors["jiaming"], "另一次风筝放飞在江边")
         # 全可见时的名次
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": {
+                             { "operation_id": "op-auto-test_c-2","query_plan": {
                                  "original_request": "风筝",
                                  "channels": ["event"],
                                  "lexical_terms": ["风筝"]}}, None)
-        c1 = [c["memory_id"] for c in r1["data"]["candidates"]]
+        c1 = [c["memory_id"] for c in r1["data"]["data"]["candidates"]]
         # 隐藏 b：a 仍应可检索，且不受 b 的 df 影响
         with db.formal() as conn:
             conn.execute("UPDATE memories SET visibility='hidden'"
                          " WHERE memory_id=?", (b["memory_id"],))
         r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": {
+                             { "operation_id": "op-auto-test_c-1","query_plan": {
                                  "original_request": "风筝",
                                  "channels": ["event"],
                                  "lexical_terms": ["风筝"]}}, None)
-        c2 = [c["memory_id"] for c in r2["data"]["candidates"]]
+        c2 = [c["memory_id"] for c in r2["data"]["data"]["candidates"]]
         assert a["memory_id"] in c2, "隐藏其他桶不影响可见桶命中"
         assert b["memory_id"] not in c2
         assert a["memory_id"] in c1
@@ -119,13 +119,13 @@ class TestScopeIsolation:
         """
         hold(actors["jiaming"], "深夜山顶的星空很清楚")
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-0","query_plan": {
                                 "original_request": "星空",
                                 "channels": ["event"],
                                 "semantic_query": "夜空繁星"}}, None)
-        assert r["data"]["coverage"]["dense_event"] == "unavailable", \
+        assert r["data"]["data"]["coverage"]["dense_event"] == "unavailable", \
             "显式语义请求必须真实尝试 dense（此处 provider 关闭）"
-        assert not r["data"].get("lexical_terms")
+        assert not r["data"]["data"].get("lexical_terms")
 
 
 class TestCorpusGeneration:

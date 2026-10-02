@@ -138,7 +138,7 @@ class TestRound2Gate:
             "original_request": "reg", "channels": ["event"],
             "lexical_terms": ["reg"]}})
         with pytest.raises(Forbidden) as ei:
-            registry.invoke(actors["jiaming"], "memory.recall.round2", {
+            registry.invoke(actors["jiaming"], "memory.recall.round2", { "operation_id": "op-auto-test_v-0",
                 "session_id": packet["recall_session_id"],
                 "reason": "EVIDENCE_INSUFFICIENT"}, None)
         assert ei.value.code == "ROUND2_GATE_DENIED"

@@ -316,7 +316,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         }
     },
     "memory.recall.round2": {
-        "type": "object", "required": ["session_id", "reason"],
+        "type": "object", "required": ["session_id", "reason", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -327,7 +327,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.start": {
-        "type": "object", "required": ["query_plan"],
+        "type": "object", "required": ["query_plan", "operation_id"],
         "additionalProperties": False,
         "conversation_scope": {"type": "string"},
             "properties": {
@@ -336,7 +336,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.refine": {
-        "type": "object", "required": ["session_id", "query_plan"],
+        "type": "object", "required": ["session_id", "query_plan", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -347,7 +347,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.reject": {
-        "type": "object", "required": ["session_id"],
+        "type": "object", "required": ["session_id", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -360,7 +360,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.accept": {
-        "type": "object", "required": ["session_id"],
+        "type": "object", "required": ["session_id", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -370,7 +370,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.navigate": {
-        "type": "object", "required": ["session_id", "direction"],
+        "type": "object", "required": ["session_id", "direction", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -388,7 +388,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "conversation_scope": {"type": "string"}},
     },
     "memory.recall.close": {
-        "type": "object", "required": ["session_id"],
+        "type": "object", "required": ["session_id", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -398,7 +398,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.words.recall": {
-        "type": "object", "additionalProperties": False,
+        "type": "object", "required": ["operation_id"], "additionalProperties": False,
         "properties": {
             "query": {"type": "string"},
             "original_request": {"type": "string"},
@@ -411,6 +411,23 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "explicit_negative_constraints": {"type": "object"},
             "operation_id": {"type": "string", "minLength": 1},
             "limit": {"type": "integer"}},
+    },
+    "memory.find_words": {
+        "type": "object", "required": ["operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "query": {"type": "string"},
+            "original_request": {"type": "string"},
+            "query_plan": {"type": "object"},
+            "semantic_query": {"type": "string", "minLength": 1},
+            "lexical_terms": {"type": "array",
+                               "items": {"type": "string", "minLength": 1}},
+            "exact_phrases": {"type": "array",
+                               "items": {"type": "string", "minLength": 1}},
+            "explicit_constraints": {"type": "object"},
+            "explicit_negative_constraints": {"type": "object"},
+            "limit": {"type": "integer"},
+            "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.words.get": {
         "type": "object", "required": ["word_id"],

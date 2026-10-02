@@ -1342,6 +1342,14 @@ CREATE TABLE recall_raw_continuations(
   PRIMARY KEY(session_id, revision, burst_no)
 );
 """),
+    (8, """
+-- ===== 全量审计 P1-01（2026-10-01）：Round1 完成事实显式化 =====
+-- 统计回执不再隐含"本 revision 真正完整完成"：completed 只在
+-- mark_round1_complete=True 的同一最终事务里置 1。旧数据默认 0
+--（不可证明则不可升级——旧 session 的 round2 升级被拒，不伪造）。
+ALTER TABLE recall_round1_receipts
+  ADD COLUMN completed INTEGER NOT NULL DEFAULT 0;
+"""),
 ]
 
 
