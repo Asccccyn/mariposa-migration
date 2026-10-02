@@ -291,13 +291,30 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                           "minLength": 1}}},
     },
     "plan.update": {
+        # RA-001（2026-10-02 复审 P1）：与 handler 真实合同对齐——
+        # 受支持变更字段是顶层平铺（handler/UI 均发顶层），不是嵌套
+        # changes；state 枚举与 plans.STATES 一致
         "type": "object",
         "required": ["plan_id", "expected_version"],
         "additionalProperties": False,
         "properties": {
             "plan_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 1},
-            "changes": {"type": "object"},
+            "title": {"type": "string", "minLength": 1},
+            "content": {"anyOf": [{"type": "string"},
+                                  {"type": "null"}]},
+            "state": {"type": "string",
+                      "enum": ["planned", "active", "waiting", "blocked",
+                               "done", "cancelled"]},
+            "starts_at": {"anyOf": [{"type": "string"},
+                                    {"type": "null"}]},
+            "due_at": {"anyOf": [{"type": "string"},
+                                 {"type": "null"}]},
+            "date_start": {"anyOf": [{"type": "string"},
+                                     {"type": "null"}]},
+            "date_end": {"anyOf": [{"type": "string"},
+                                   {"type": "null"}]},
+            "weight": {"type": "integer"},
             "operation_id": {"type": "string"}},
     },
     "plan.complete": {

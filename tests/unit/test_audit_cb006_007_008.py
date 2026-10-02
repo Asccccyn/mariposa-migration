@@ -409,7 +409,9 @@ class TestIdempotencyNamespace:
             {"memory_id": mid, "operation_id": "same-key"}, "same-key")
         assert out["ok"] is True
         rows = self._idempotency_rows("memory.delete")
-        assert rows.get("same-key") == "completed"
+        # RA-004：transport 层记录固定 t: 前缀（与领域 op: 层互不相交
+        # ——transport="op:k" 存为 t:op:k，不再与 body k 的 op:k 碰撞）
+        assert rows.get("t:same-key") == "completed"
         assert rows.get("op:same-key") == "completed"
         assert "running" not in rows.values()
         with db.formal() as conn:
