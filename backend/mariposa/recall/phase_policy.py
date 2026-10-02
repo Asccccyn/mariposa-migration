@@ -154,10 +154,12 @@ def compute_phase(*, now: datetime, first_held_at: datetime | None,
     elif plan_status is not None:
         raise PolicyError("a related plan state must not override an event"
                           " bucket")
-    elif cats == {"plan"}:
+    elif "plan" in cats:
+        # 全量审计 P1-08 复审：有 plan 分类而无有效绑定 → GAP（含
+        # plan+daily 混合——此前 mixed 无绑定会按 daily H 算，绕过）
         raise DataGap(
-            "PLAN_MAPPING_GAP: a plan-only bucket needs an explicit resource"
-            " mapping")
+            "PLAN_MAPPING_GAP: a bucket with the plan category needs an"
+            " explicit plan resource binding")
     if isinstance(active_keep_owners, (str, bytes)):
         raise PolicyError(
             "active_keep_owners must be a collection of verified owners")
@@ -286,7 +288,12 @@ def phase_of(memory_id: str, *, now: datetime | None = None,
     # P1-08：有 plan 绑定的桶按 plan 资源计算（open→WIDE / 终态→CORE），
     # 事件 H 不参与；显式 resource_kind="plan" 的调用保持原语义
     plan_states = facts.get("plan_states") or []
-    if plan_states and resource_kind == "memory":
+    if (resource_kind == "memory" and "plan" in (facts["categories"] or [])
+            and plan_states):
+        # 全量审计 P1-08 复审：plan 生命周期只由 plan 分类触发——
+        # 仅 link 无 plan 分类是关系数据，不改事件阶段（daily 桶不因
+        # 被关联而变 plan）；plan 分类无绑定则落到 compute_phase 的
+        # PLAN_MAPPING_GAP
         resource_kind = "plan"
         plan_status = ("active" if any(st in PLAN_OPEN
                                        for st in plan_states) else "done")
@@ -352,8 +359,9 @@ def phase_from_facts(facts: dict, *, now: datetime,
                      **kw) -> PhaseResult:
     """用 facts_for_many 的结果直接计算阶段。"""
     plan_states = facts.get("plan_states") or []
-    if plan_states:
-        # P1-08：plan 绑定桶按 plan 资源自管（open→WIDE / 终态→CORE）
+    if "plan" in (facts.get("categories") or []) and plan_states:
+        # P1-08 复审：plan 分类 + 有效绑定才按 plan 资源自管；
+        # 仅 link 无 plan 分类不影响事件阶段
         return compute_phase(now=now,
                              first_held_at=facts["first_held_at"],
                              categories=facts["categories"],

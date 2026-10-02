@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
 import uuid
@@ -99,13 +100,36 @@ def upload_finalize(principal_id: str, token: str) -> dict:
     obj_dir.mkdir(parents=True, exist_ok=True)
     key = f"{content_hash}{_ext_for(meta['mime'])}"
     path = obj_dir / key
+
+    def _publish() -> None:
+        """P1-07 复审：原子发布——临时文件 + 回读校验 + os.replace。
+        直接 write_bytes 留下的半截文件会被后续 exists() 信任（crash
+        window）；已存在的 object 同样必须通过 size/hash 验证，不符
+        则原子重写。"""
+        if path.exists():
+            try:
+                if (path.stat().st_size == len(data)
+                        and hashlib.sha256(
+                            path.read_bytes()).hexdigest() == content_hash):
+                    return  # 完整复用
+            except OSError:
+                pass
+        tmp = obj_dir / f".{key}.tmp-{uuid.uuid4().hex[:8]}"
+        tmp.write_bytes(data)
+        if (tmp.stat().st_size != len(data)
+                or hashlib.sha256(tmp.read_bytes()).hexdigest()
+                != content_hash):
+            tmp.unlink(missing_ok=True)
+            raise Forbidden("object write failed verification",
+                            code="MEDIA_WRITE_UNVERIFIED")
+        os.replace(tmp, path)
+
     with db.formal() as conn:
         existing = conn.execute(
             "SELECT content_hash FROM media_objects WHERE content_hash=?",
             (content_hash,)).fetchone()
         if existing is None:
-            if not path.exists():
-                path.write_bytes(data)  # hash 去重：同内容只落一次盘
+            _publish()
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(

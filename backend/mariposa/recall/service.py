@@ -383,6 +383,7 @@ def _run_round_compute(session: dict, plan: dict,
     # 候选不得出站（完整 mixed 各 20/cap40 与 RRF 合序送判归
     # WP02/WP04/WP05 精化）
     judge_result = None
+    judge_items: list = []   # 对账后的可用判断项（P1-02 复审）
     raw_pre = raw_result["hits"] if raw_result else []
     judge_candidates = (event_fused + words_hits + raw_pre)[
         :config.RECALL_JUDGE_CANDIDATE_CAP]
@@ -401,12 +402,26 @@ def _run_round_compute(session: dict, plan: dict,
         }
         if judge_result.degraded_reason:
             degraded.append(f"judge_{judge_result.degraded_reason}")
-        by_ref = {i.candidate_ref: i for i in judge_result.items}
-        for c in judge_candidates:
-            ji = by_ref.get(c.get("candidate_ref") or c["resource_ref"])
-            if ji:
-                c["judge"] = ji.to_dict()
-                c["candidate_ref"] = ji.candidate_ref
+        # 全量审计 P1-02 复审：provider 返回与送判集合严格对账——
+        # 重复 ref / 陌生 ref / 漏返回都不许静默通过（可替换 provider
+        # 送 N 回 1 曾被当成"全部判完"）。基数违例 → 整轮 judge 作废
+        #（coverage=unavailable，gate judge_no_fault 拒 Round2）
+        sent_refs = [c.get("candidate_ref") or c["resource_ref"]
+                     for c in judge_candidates]
+        item_refs = [i.candidate_ref for i in judge_result.items]
+        if (len(set(item_refs)) != len(item_refs)
+                or set(item_refs) - set(sent_refs)):
+            coverage["judge"] = "unavailable"
+            degraded.append("judge_cardinality_violation")
+        else:
+            judge_items = judge_result.items
+            by_ref = {i.candidate_ref: i for i in judge_items}
+            for c in judge_candidates:
+                ji = by_ref.get(c.get("candidate_ref")
+                                or c["resource_ref"])
+                if ji:
+                    c["judge"] = ji.to_dict()
+                    c["candidate_ref"] = ji.candidate_ref
     # 全量审计 P1-02：unjudged 必须按 event+words+raw 全集算——此前
     # 只算 event（20 event + 40 words + cap40 时 20 个被截掉的 words
     # 凭空消失），错误 unjudged_count=0 进入 receipt 给 Round2 背书
@@ -498,12 +513,13 @@ def _run_round_compute(session: dict, plan: dict,
     }
     packet = _enforce_output_budget(packet)
     # S13：judge 统计（Round1 回执依据——attempts 的 completed 不算）
-    judged_n = sum(
-        1 for i in (judge_result.items if judge_result else [])
-        if i.evaluation_status == "evaluated")
-    unavailable_n = sum(
-        1 for i in (judge_result.items if judge_result else [])
-        if i.evaluation_status != "evaluated")
+    judged_n = sum(1 for i in judge_items
+                   if i.evaluation_status == "evaluated")
+    # P1-02 复审：unavailable = 送判数 − 判过数——provider 漏返回的
+    # 候选在此入账（judged+unavailable 恒等于送判数，缺口不得凭空
+    # 消失），receipt/gate 不再被"送 5 回 1"骗过
+    unavailable_n = (max(0, len(judge_candidates) - judged_n)
+                     if judge_result is not None else 0)
     effects = {
         "candidates": candidate_rows,
         "receipts": receipts,
