@@ -212,7 +212,7 @@ def get(conn, plan_id: str) -> dict:
             "forgetting_note": "v1.7：完成/放弃当天即进入 CORE；查看不续期"}
 
 
-def list_plans(states: list[str] | None = None) -> list[dict]:
+def list_plans(states: list[str] | None = None, conn=None) -> list[dict]:
     with db.formal() as conn:
         if states:
             marks = ",".join("?" * len(states))
@@ -225,7 +225,8 @@ def list_plans(states: list[str] | None = None) -> list[dict]:
         return [get(conn, r["id"]) for r in rows]
 
 
-def bootstrap_plans(now_local_date, upcoming_days: int = 3) -> list[dict]:
+def bootstrap_plans(now_local_date, upcoming_days: int = 3,
+                    conn=None) -> list[dict]:
     """v2 开窗计划池（BOOT-08/PLAN-06）。
 
     - active/waiting/blocked（进行中/需执行）全取；
@@ -237,7 +238,7 @@ def bootstrap_plans(now_local_date, upcoming_days: int = 3) -> list[dict]:
     horizon = (now_local_date + timedelta(days=upcoming_days)).isoformat()
     today = now_local_date.isoformat()
     out = []
-    for p in list_plans():
+    for p in list_plans(conn=conn):
         if p["state"] in OPEN_STATES:
             out.append(p)
         elif p["state"] == "planned":
