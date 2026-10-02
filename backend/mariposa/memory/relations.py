@@ -184,28 +184,54 @@ def _continuation_rows(conn, memory_id: str):
 def trace(memory_id: str, max_depth: int = 5) -> dict:
     """沿 continuation_of 追事件链（§6.3）：全分支覆盖、双向可达、
     有环有界并披露截断（earlier=本桶指向的更早事件；later=指向本桶
-    的更晚事件——方向文字不颠倒，§Q04）。"""
+    的更晚事件——方向文字不颠倒，§Q04）。
+
+    CB-034（2026-10-02 审计 P2）：earlier/later 各自沿固定方向独立
+    遍历——此前 BFS 混向走，节点按"最后一跳相对当前节点"归类，合流/
+    分叉/环上的折返节点会被错放进祖先侧；truncated 改为"深度耗尽后
+    frontier 仍有未访问邻居"——完整覆盖的叶节点不再误报截断。
+    """
     earlier: list[str] = []
     later: list[str] = []
-    seen = {memory_id}
-    frontier = [memory_id]
     truncated = False
-    depth = 0
     with db.formal() as conn:
-        while frontier and depth < max(1, min(int(max_depth), 20)):
-            depth += 1
-            nxt: list[str] = []
+        def _walk(want_outgoing: bool, bucket: list[str]) -> None:
+            nonlocal truncated
+            seen = {memory_id}
+            frontier = [memory_id]
+            depth = 0
+            while frontier and depth < max(1, min(int(max_depth), 20)):
+                depth += 1
+                nxt: list[str] = []
+                for cur in frontier:
+                    for r in _continuation_rows(conn, cur):
+                        outgoing = r["from_memory"] == cur
+                        if outgoing != want_outgoing:
+                            continue
+                        other = (r["to_memory"] if outgoing
+                                 else r["from_memory"])
+                        if other in seen:
+                            continue
+                        seen.add(other)
+                        bucket.append(other)
+                        nxt.append(other)
+                frontier = nxt
+            # 深度耗尽：frontier 节点还有未访问邻居才叫截断——
+            # 完整叶节点（无更多邻居）不算
             for cur in frontier:
                 for r in _continuation_rows(conn, cur):
                     outgoing = r["from_memory"] == cur
-                    other = r["to_memory"] if outgoing else r["from_memory"]
-                    if other in seen:
+                    if outgoing != want_outgoing:
                         continue
-                    seen.add(other)
-                    (earlier if outgoing else later).append(other)
-                    nxt.append(other)
-            frontier = nxt
-        truncated = bool(frontier)  # 深度耗尽仍有 frontier=未查尽
+                    other = (r["to_memory"] if outgoing
+                             else r["from_memory"])
+                    if other not in seen:
+                        truncated = True
+                        return
+
+        _walk(True, earlier)   # 沿 out（continuation_of 指向）= 更早
+        _walk(False, later)    # 沿 in（被续）= 更晚
+    visited = 1 + len(earlier) + len(later)
     return {"memory_id": memory_id, "earlier": earlier, "later": later,
-            "visited": len(seen), "truncated": truncated,
+            "visited": visited, "truncated": truncated,
             "max_depth": max(1, min(int(max_depth), 20))}

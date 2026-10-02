@@ -44,11 +44,15 @@ def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
     validated = [_validate_word(w) for w in words]
     now = _now()
     with db.formal() as conn:
-        if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
-                            (memory_id,)).fetchone():
-            raise NotFound("memory not found", memory_id=memory_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # CB-037：目标存在性检查在写锁内——事务外旧快照检查会让
+            # 并发删除竞态变成未结构化 FK IntegrityError；写锁内重查
+            # 得到结构化 NotFound
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
             row = conn.execute(
                 "SELECT COALESCE(MAX(ordinal),0) AS m FROM memory_our_words"
                 " WHERE memory_id=?", (memory_id,)).fetchone()

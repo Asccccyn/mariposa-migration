@@ -263,7 +263,12 @@ class TestQ:
                          "relation_type": "continuation_of"}, None)
         tr = registry.invoke(actors["jiaming"], "relations.trace",
                              {"memory_id": a, "max_depth": 20}, None)["data"]
-        assert tr["visited"] == 2  # 有环不失控
+        # CB-034：earlier/later 各自沿固定方向遍历——矛盾环（B 晚于 A
+        # 且 A 晚于 B）两侧各自有界，节点可同时出现在两侧（如实披露
+        # 矛盾结构，不再按最后一跳归类）；visited=两侧合计+自身
+        assert set(tr["earlier"]) <= {b} and set(tr["later"]) <= {b}
+        assert tr["visited"] == 3  # a + b（早侧） + b（晚侧）
+        assert tr["truncated"] is False  # 环不失控也不误报截断
 
     def test_q07_history_not_mixed_missing_flagged(self, actors):
         a, b = self._pair_x(actors)
