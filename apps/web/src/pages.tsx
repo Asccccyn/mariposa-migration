@@ -80,8 +80,7 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
                }}
                placeholder="关键词，例如：蓝瓷小钥匙" style={{ flex: 1 }} />
         <button className="primary" onClick={() => search(q)}>搜索</button>
-        <button onClick={() =>  })
-          .catch((e) => note(String(e), true))}></button>
+        <button onClick={() => setHits([])}>清空</button>
         <button onClick={hold}>写测试记忆</button>
       </div>
       {error ? <Err e={error} /> : null}
@@ -178,33 +177,50 @@ type Quote = {
   semantic_status: string;
 };
 
+type DelReq = {
+  id: string;                // request_id
+  memory_id: string;
+  human_reason: string;
+  rejection_reason?: string | null;
+  status: string;            // pending/approved/rejected/withdrawn/superseded
+  submitted_local_date: string;
+};
+
 export function Deletions({ note }: { note: (s: string, err?: boolean) => void }) {
+  // CB-052（2026-10-02 审计 P2）：按 Deletion v2.0 合同——申请走
+  // memory_id + reason + operation_id（无 action：archive 已退役）；
+  // reject 必填理由；withdraw 用 request_id
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
-  const [action, setAction] = useState("archive");
   const { data, error, reload } = useAsync<{ requests: DelReq[] }>(
     () => call("memory.deletion.list", {}), []);
 
   const submit = async () => {
     try {
-      const d = await call<{ request_id: string }>("memory.deletion.request", {
-        resource_id: target, reason, action });
+      const d = await call<{ request_id: string }>(
+        "memory.deletion.request", {
+          memory_id: target, reason,
+          operation_id: `ui-req-${target}-${Date.now()}`});
       setTarget(""); setReason("");
       note(`申请已提交 ${d.request_id}（pending，内容未变）`);
       reload();
     } catch (e) { note(String(e), true); }
   };
-  const decide = async (r: DelReq, decision: string) => {
+  const decide = async (r: DelReq, decision: string,
+                        rejectionReason?: string) => {
     try {
       await call("memory.deletion.decide", {
-        request_id: r.id, decision }, `ui-del-${r.id}-${decision}`);
-      note(decision === "approve" ? "已批准并执行" : "已拒绝");
+        request_id: r.id, decision,
+        ...(decision === "reject" && rejectionReason
+          ? { rejection_reason: rejectionReason } : {}),
+      }, `ui-del-${r.id}-${decision}`);
+      note(decision === "approve" ? "已批准并执行删除" : "已拒绝");
       reload();
     } catch (e) { note(String(e), true); reload(); }
   };
   const withdraw = async (rid: string) => {
     try {
-      await call("memory.deletion.withdraw", { resource_id: rid });
+      await call("memory.deletion.withdraw", { request_id: rid });
       note("已撤回"); reload();
     } catch (e) { note(String(e), true); }
   };
@@ -216,29 +232,28 @@ export function Deletions({ note }: { note: (s: string, err?: boolean) => void }
                placeholder="memory_id" style={{ flex: 1 }} />
         <input value={reason} onChange={(e) => setReason(e.target.value)}
                placeholder="理由（必填）" style={{ flex: 1 }} />
-        <select value={action} onChange={(e) => setAction(e.target.value)}>
-          <option value="archive">归档</option>
-          <option value="delete">删除</option>
-        </select>
-        <button className="danger" onClick={submit}>提交申请</button>
+        <button className="danger" onClick={submit}>提交删除申请</button>
       </div>
-      <Empty>规则与旧系统一致：理由必填；每日 10 条；每资源 5 次；仅周家明审批；审批前内容不变。</Empty>
+      <Empty>v2.0：申请即物理删除诉求（archive 已退役）；理由必填；每日 10 条；每资源 lifetime 5 次；仅周家明审批；审批前内容不变。</Empty>
       {error ? <Err e={error} /> : null}
       {data?.requests.slice(0, 30).map((r) => (
         <Item key={r.id}>
           <Meta>
             <span>{r.id}</span>
             <Tag kind={`state-${r.status}`}>{r.status}</Tag>
-            <span>{r.resource_kind}:{r.resource_id}</span>
-            <span>{r.action}</span><span>{r.local_date}</span>
+            <span>{r.memory_id}</span>
+            <span>{r.submitted_local_date}</span>
           </Meta>
           <div className="detail">理由：{r.human_reason}
-            {r.ai_reason ? <><br />批注：{r.ai_reason}</> : null}</div>
+            {r.rejection_reason ? <><br />拒绝理由：{r.rejection_reason}</> : null}</div>
           {r.status === "pending" ? (
             <div className="row">
-              <button className="primary" onClick={() => decide(r, "approve")}>批准</button>
-              <button className="danger" onClick={() => decide(r, "reject")}>拒绝</button>
-              <button onClick={() => withdraw(r.resource_id)}>撤回</button>
+              <button className="primary" onClick={() => decide(r, "approve")}>批准（物理删除）</button>
+              <button className="danger" onClick={() =>
+                decide(r, "reject",
+                       window.prompt("拒绝理由（必填）") || undefined)
+              }>拒绝</button>
+              <button onClick={() => withdraw(r.id)}>撤回</button>
             </div>
           ) : null}
         </Item>

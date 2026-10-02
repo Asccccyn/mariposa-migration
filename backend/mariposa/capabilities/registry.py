@@ -198,7 +198,7 @@ def _register() -> dict[str, Capability]:
     add("memory.deletion.withdraw", _del_withdraw, _owners(), True,
         description="撤回 pending 删除申请")
     add("memory.deletion.decide", _del_decide, {"jiaming"}, True,
-        description="审批删除申请（仅周家明；approve 才执行 archive/delete）")
+        description="审批删除申请（仅周家明；approve 执行物理删除——CB-055：archive 已退役，描述与 v2.0 语义对齐）")
     add("memory.deletion.get", _del_get, _owners(), False,
         description="读删除申请（含人类/拒绝理由；桶删除后仍可查）")
     add("memory.deletion.list", _del_list, _owners(), False,

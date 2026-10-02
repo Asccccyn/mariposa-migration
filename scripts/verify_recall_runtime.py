@@ -84,7 +84,7 @@ def main() -> int:
         # 端到端最小链（合成数据；隔离根）
         from mariposa.identity import service as identity
         identity.seed({"qiaosheng": "tok-q", "jiaming": "tok-j",
-                       "worker": "tok-w", "linshijian": "tok-l"})
+                       "worker": "tok-w"})  # CB-056：退役主体移除
         from mariposa.memory import service as memory
         from mariposa.recall import service as rs
         j = identity.Principal("jiaming", "周", "agent", "cc", "b")
