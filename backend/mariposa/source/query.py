@@ -226,7 +226,10 @@ def open_range(conversation_id: str, start_message_id: str,
             item["sibling_branch"] = True  # 区间内但不在 parent 路径（SL-06）
             off_path.append(item)
     return {
-        "conversation": resolved["conversation"],
+        # RA-009：sqlite Row 统一转 dict（MCP json.dumps 不再 500）
+        "conversation": dict(resolved["conversation"])
+        if not isinstance(resolved["conversation"], dict)
+        else resolved["conversation"],
         "start_message_id": start_row_id,
         "end_message_id": end_row_id,
         "start_provider_message_id": start["provider_message_id"],
