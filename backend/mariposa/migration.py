@@ -235,8 +235,10 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         # Memory（审计反例：type=archived 经 dry-run/apply 变当前资源）
         bucket_type = str(meta.get("type") or "").strip().lower()
         is_retired_content = bucket_type in ("self", "diary")
-        _known_memory_type = bucket_type in ("", "memory", "note", "daily",
-                                             "milestone", "event")
+        _known_memory_type = bucket_type in (
+            "", "memory", "note", "daily", "milestone", "event",
+            "dynamic", "feel", "think")  # 旧桶历史合法类型（样本/
+            # 差异目录证据：dynamic\恋爱 等）
         payload_hash = hashlib.sha256(
             body.strip().encode("utf-8")).hexdigest()
         if not (is_letter or is_retired_content) and not _known_memory_type:
