@@ -285,7 +285,8 @@ CREATE TABLE import_jobs(
 );
 """),
     (9, """
-ALTER TABLE letters ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+-- （letters archived 列随 v2.0 零残留清理移除：letters 表已随
+--  migration 24 退役，无部署库需要此升级步骤）
 """),
     (10, """
 CREATE TABLE memory_reengagements(
@@ -938,9 +939,8 @@ CREATE INDEX idx_deletion_status_v2
 DROP TABLE deletion_requests;
 ALTER TABLE deletion_requests_v2 RENAME TO deletion_requests;
 
--- ⑥ visibility：fresh 基础 DDL 已不含 archived；已部署库的 CHECK 字符串
---    保留（母表重建与全库 FK 网冲突，风险大于收益），全部写路径在
---    服务层退役——部署库功能语义与本规范一致，报告如实申报该偏差
+-- ⑥ visibility：CHECK 只含 active/hidden——无部署库（原 0925 空根
+--    已删除），fresh 建库即净，无兼容包袱
 """),
 ]
 
