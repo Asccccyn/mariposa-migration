@@ -80,7 +80,7 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
     stats: dict = {"total": 0, "by_target": {}, "no_date": 0, "bad_frontmatter": 0,
                    "unknown_type": 0, "deletion_terminal": 0,
                    "pinned": 0, "with_meaning": 0, "with_relations": 0,
-                   "archived_buckets": 0}
+                   }
     entries, unknown_keys = [], {}
     for f in files:
         stats["total"] += 1
@@ -94,33 +94,8 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
             stats["bad_frontmatter"] += 1
             continue
         btype = str(meta.get("type") or meta.get("bucket_type") or "").strip().lower()
-        # 旧系统归档目录把 type 改写为 archived：按归档桶迁移（visibility=archived，
-        # 不进新检索，§20.3）；archive 目录内的其他类型同样按目录证据判归档
-        is_archived_dir = rel.startswith("archive/")
-        if btype == "archived":
-            # v2.0 P-A01：Memory archive 退役——旧归档桶不迁移
-            # （正文/哈希不进报告），数据处置待用户单独裁定
-            entries.append({
-                "legacy_id": f.name,
-                "target": "out_of_scope",
-                "payload_hash": hashlib.sha256(
-                    f.read_text(encoding="utf-8").strip().encode()
-                ).hexdigest(),
-                "content_bytes": len(f.read_text(encoding="utf-8")
-                                     .encode()),
-            })
-            continue
-        if is_archived_dir:
-            # v2.0 P-A01：目录证据的归档桶同样不迁移（处置待裁定）
-            entries.append({
-                "legacy_id": f.name,
-                "target": "out_of_scope",
-                "payload_hash": hashlib.sha256(
-                    body.strip().encode("utf-8")).hexdigest(),
-                "content_bytes": len(body.encode("utf-8")),
-            })
-            stats["archived_buckets"] = stats.get("archived_buckets", 0) + 1
-            continue
+        # v2.0 P-A01 零残留：Memory archive 无兼容分支——旧归档桶
+        # 走通用 UNMAPPED（未知类型如实报告，不做专门处置）
         target = _TYPE_TARGET.get(btype)
         if target is None:
             if btype:
@@ -427,9 +402,6 @@ def apply_from_report(report_path: str) -> dict:
                 if e["mapping"].get("pinned"):
                     conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
                                  (mid,))
-                # v2.0 P-A01：archived 应用分支退役；旧归档桶在
-                # inventory 阶段已标 out_of_scope（见上方 archived 处理），
-                # 不再创建 archived/hidden 桶
                 if e.get("migrate_as_hidden"):
                     conn.execute("UPDATE memories SET visibility='hidden',"
                                  " updated_at=? WHERE memory_id=?",

@@ -199,8 +199,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "memory.our_words.source.correct": {
         "type": "object",
-        "required": ["word_id", "expected_source_ref",
-                     "correction_action", "operation_id"],
+        "required": ["word_id", "correction_action", "operation_id"],
         "additionalProperties": False,
         "properties": {
             "word_id": {"type": "string", "minLength": 1},
