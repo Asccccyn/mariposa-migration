@@ -198,8 +198,9 @@ def recall(conn, query: str = "", filters: dict | None = None,
 
     - 结构化筛选先缩小候选池（分类 any/all、心情标签、事件日期范围）；
     - query 为空 = 浏览该池（不强迫全文匹配）；query 非空在池内 BM25 排序；
-    - 文本命中只来自当前允许投影：未遗忘=事件正文，遗忘=事后摘要
-      （标题/心情文字/我们的话/回忆/原文永不参与——投影构造层保证）；
+    - 文本命中来自当前阶段允许的分字段投影（v1.7 字段矩阵：
+      WIDE 含 title/our_words，MID 含 title，CORE 仅 event_text；
+      why/meaning/mood_note/回忆/原文永不参与——投影构造层保证）；
     - 按 memory_id 去重；分页游标：浏览=[last_date, last_id]，
       关键词=offset；每条带 matched_by / matched_fields / 表示版本。
     """

@@ -56,6 +56,15 @@ def capabilities(request: Request):
 
 @app.post("/api/capability/{name}")
 async def invoke(name: str, request: Request):
+    # 复审（2026-10-01）：鉴权只用 header——先于读体；未鉴权的大
+    # body（含 chunked）不再被读进内存
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError as e:
+        return JSONResponse(
+            status_code=e.http_status,
+            content={"ok": False, "error": {"code": e.code,
+                                            "message": str(e)}})
     try:
         body = await _json_body(request)
     except MariposaError as e:
@@ -66,7 +75,6 @@ async def invoke(name: str, request: Request):
                                             "message": str(e)}})
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
     try:
-        principal = identity.authenticate(_bearer(request))
         result = registry.invoke(principal, name, body.get("arguments", {}), idem)
     except MariposaError as e:
         return JSONResponse(
@@ -84,19 +92,35 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
+async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
+    """复审（2026-10-01）：流式累计读取，超限**立即截停**——chunked/
+    无 Content-Length 的请求不再先整包进内存才判断。"""
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            _e = MariposaError(
+                f"request body exceeds {max_bytes}（媒体字节走"
+                " /api/media/stage/{token}）", code="BODY_TOO_LARGE")
+            _e.http_status = 413
+            raise _e
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _json_body(request: Request) -> dict:
-    # 全量审计 P1-07：JSON 端点硬上限——媒体字节必须走专用 stage
-    # 端点，不允许 base64 大负载从通用通道进来
+    # 复审（2026-10-01）：流式读取 + 即时截停（含 chunked 无
+    # Content-Length 的请求）；Content-Length 预检保留为快路径
     clen = request.headers.get("content-length")
     if clen and int(clen) > _JSON_BODY_MAX_BYTES:
         raise MariposaError(
             f"request body {clen} > {_JSON_BODY_MAX_BYTES}（媒体字节走"
-            " /api/media/stage/{token}）", code="BODY_TOO_LARGE")
-    raw = await request.body()
-    if len(raw) > _JSON_BODY_MAX_BYTES:
-        raise MariposaError(
-            f"request body {len(raw)} > {_JSON_BODY_MAX_BYTES}（媒体字节"
-            "走 /api/media/stage/{token}）", code="BODY_TOO_LARGE")
+            " /api/media/stage/{token}）", code="BODY_TOO_LARGE",
+                http_status=413)
+    raw = await _read_body_capped(request, _JSON_BODY_MAX_BYTES)
     if not raw:
         return {}
     try:
@@ -146,15 +170,16 @@ async def media_stage(token: str, request: Request):
     except MariposaError as e:
         return JSONResponse(status_code=401,
                             content={"ok": False, "error": {"code": e.code}})
-    # P1-07 复审：先按 Content-Length 预检（声明 size + 硬上限），
-    # 超限不必把整包读进内存
+    # 复审（2026-10-01）：流式累计 + 即时截停（chunked 同样护住）；
+    # 精确 size 校验仍由 stage_bytes 按声明 size 执行
     clen = request.headers.get("content-length")
     if clen and int(clen) > _media._MAX_SIZE:
         return JSONResponse(status_code=413,
                             content={"ok": False,
                                      "error": {"code": "BODY_TOO_LARGE"}})
-    data = await request.body()
-    if len(data) > _media._MAX_SIZE:
+    try:
+        data = await _read_body_capped(request, _media._MAX_SIZE)
+    except MariposaError:
         return JSONResponse(status_code=413,
                             content={"ok": False,
                                      "error": {"code": "BODY_TOO_LARGE"}})
