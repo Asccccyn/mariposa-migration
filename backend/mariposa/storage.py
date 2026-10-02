@@ -108,7 +108,23 @@ def restore_verify(backup_dir: str) -> dict:
                          "issue": f"integrity_check: "
                                   f"{ic[0] if ic else 'no result'}"})
                     continue
-                conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+                # RA-027（2026-10-02 复审 P2）：验应用身份——formal
+                # 必须含 memories 表、workspace 必须含既有 workspace
+                # 表集（当前迁移仍建 workspace 7 表）；无关 SQLite
+                # 不再判"可供 Mariposa 恢复"
+                required = (["memories", "memory_versions", "principals"]
+                            if name == "formal"
+                            else ["workspace_task_leases"])
+                for t in required:
+                    if not conn.execute(
+                            "SELECT 1 FROM sqlite_master WHERE"
+                            " type='table' AND name=?",
+                            (t,)).fetchone():
+                        problems.append(
+                            {"db": name,
+                             "issue": f"not_a_mariposa_{name}_backup"
+                                      f"（缺表 {t}）"})
+                        break
             finally:
                 conn.close()
         except sqlite3.Error as e:
