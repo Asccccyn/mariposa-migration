@@ -57,6 +57,10 @@ def backup() -> dict:
     return manifest
 
 
+#: verify 的必需数据库集（CB-002）：formal/workspace 缺一即 fail closed
+_REQUIRED_DBS = ("formal", "workspace")
+
+
 def restore_verify(backup_dir: str) -> dict:
     bdir = Path(backup_dir)
     manifest_path = bdir / "manifest.json"
@@ -65,20 +69,48 @@ def restore_verify(backup_dir: str) -> dict:
         print(json.dumps(result))
         return result
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # CB-002（2026-10-02 审计 P1）：空清单不得通过——一个数据库都
+    # 没有的备份没有恢复材料可言
+    databases = manifest.get("databases")
+    if not isinstance(databases, dict) or not databases:
+        result = {"ok": False, "error": "manifest databases empty"}
+        print(json.dumps(result, ensure_ascii=False))
+        return result
     problems = []
-    for name, info in manifest["databases"].items():
-        p = Path(info["path"])
-        if not p.exists():
+    for name in _REQUIRED_DBS:
+        if name not in databases:
+            problems.append({"db": name, "issue": "missing_from_manifest"})
+    # CB-002：验证调用方指定的备份目录本身。manifest 里的 path 是备份
+    # 时的绝对路径——目录迁移/复制后按它验证会给出假结果（旧位置完好
+    # =损坏副本通过；旧位置删除=好副本误报缺失）。按 bdir 下的约定
+    # 文件名定位；path 字段仅作描述，不再信任。
+    for name, info in databases.items():
+        p = bdir / f"{name}.sqlite3"
+        if not p.is_file():
             problems.append({"db": name, "issue": "file_missing"})
             continue
+        if info.get("bytes") is not None and p.stat().st_size != info["bytes"]:
+            problems.append({"db": name, "issue": "size_mismatch"})
+            continue
         actual = _sha256_file(p)
-        if actual != info["sha256"]:
+        if actual != info.get("sha256"):
             problems.append({"db": name, "issue": "sha256_mismatch"})
-        # 备份文件本身可打开且表可查
+            continue
+        # 备份文件必须可打开且通过 SQLite 完整性检查——"存在且哈希
+        # 对"只证明字节一致，不证明是可恢复的库
         try:
             conn = sqlite3.connect(str(p))
-            conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
-            conn.close()
+            try:
+                ic = conn.execute("PRAGMA integrity_check").fetchone()
+                if ic is None or ic[0] != "ok":
+                    problems.append(
+                        {"db": name,
+                         "issue": f"integrity_check: "
+                                  f"{ic[0] if ic else 'no result'}"})
+                    continue
+                conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            finally:
+                conn.close()
         except sqlite3.Error as e:
             problems.append({"db": name, "issue": f"unreadable: {e}"})
     result = {"ok": not problems, "problems": problems,

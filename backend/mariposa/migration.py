@@ -391,34 +391,44 @@ def apply_from_report(report_path: str) -> dict:
             continue
         if e["target"] == "memories":
             cats = e["mapping"].get("categories") or ["daily"]
-            out = memory.hold(_migrator,
-                              text=body.strip(),
-                              why_remember=meta.get("why_remembered"),
-                              memory_date=e["mapping"]["memory_date"],
-                              date_confidence="inferred",
-                              categories=cats)
-            mid = out["memory_id"]
+            # CB-003（2026-10-02 审计 P1）：Memory 创建、置顶/隐藏/复审
+            # 标记与 ID 映射同一写事务提交。此前 hold 自带事务先提交、
+            # 其余副作用在 autocommit 里各自落盘——中间中断会让重试
+            # 再建一个正式 Memory（一源两资源一映射）。
             with _db.formal() as conn:
-                if e["mapping"].get("pinned"):
-                    conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
-                                 (mid,))
-                if e.get("migrate_as_hidden"):
-                    conn.execute("UPDATE memories SET visibility='hidden',"
-                                 " updated_at=? WHERE memory_id=?",
-                                 (_dt.utcnow().isoformat(), mid))
-                if e.get("migrate_as_hidden"):
-                    _pj.remove(conn, mid)  # 隐藏不进新检索（§20.3）
-                if e.get("needs_migration_review"):
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    out = memory.hold_in_tx(
+                        conn, _migrator,
+                        text=body.strip(),
+                        why_remember=meta.get("why_remembered"),
+                        memory_date=e["mapping"]["memory_date"],
+                        date_confidence="inferred",
+                        categories=cats)
+                    mid = out["memory_id"]
+                    if e["mapping"].get("pinned"):
+                        conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
+                                     (mid,))
+                    if e.get("migrate_as_hidden"):
+                        conn.execute("UPDATE memories SET visibility='hidden',"
+                                     " updated_at=? WHERE memory_id=?",
+                                     (_dt.utcnow().isoformat(), mid))
+                        _pj.remove(conn, mid)  # 隐藏不进新检索（§20.3）
+                    if e.get("needs_migration_review"):
+                        conn.execute(
+                            "INSERT OR IGNORE INTO memory_tags(memory_id, namespace,"
+                            " tag, whose, confidence, created_by) VALUES(?,"
+                            " 'migration', 'needs_review', 'qiaosheng', 'system',"
+                            " 'migration')", (mid,))
                     conn.execute(
-                        "INSERT OR IGNORE INTO memory_tags(memory_id, namespace,"
-                        " tag, whose, confidence, created_by) VALUES(?,"
-                        " 'migration', 'needs_review', 'qiaosheng', 'system',"
-                        " 'migration')", (mid,))
-                conn.execute(
-                    "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
-                    " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
-                    (e["legacy_id"], "memories", mid, recomputed,
-                     _dt.utcnow().isoformat()))
+                        "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
+                        " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
+                        (e["legacy_id"], "memories", mid, recomputed,
+                         _dt.utcnow().isoformat()))
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
                             "target": "memories"})
         else:
