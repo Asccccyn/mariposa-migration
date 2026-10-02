@@ -15,8 +15,10 @@
 - **formal migration 26**：五域表重建+数据迁移（active 行保 ID 迁移、
   inactive/revoked 行迁纠错历史标 legacy 未知）、deletion_requests
   重建为 Memory-only、**memories.visibility CHECK 去 archived**（fresh
-  基础 DDL 同步；已部署库 CHECK 字符串保留但写路径全退役——母表
-  重建与全库 FK 网冲突，风险>收益，如实申报该偏差）。
+  基础 DDL 同步）。~~已部署库偏差~~ **已消除**：原 0925 旧数据根
+  （/Users/zhoujiaming/Data/mariposa，核心表全 0 行、无任何真实数据）
+  经取证后于 2026-10-02 删除（服务一并停止）——不存在部署库，
+  未来部署 fresh 建库即为纯净新 schema，无 archived 残留。
 - **领域原子写**：`relations.corrections.atomic_write`——同事务
   查完成记录→业务→回执→提交（复用 idempotency_records completed
   行；无进行中队列、不写 Recall 运行库）。
@@ -88,4 +90,4 @@ correction_action 枚举、action 字段结构性拒绝）。
 3. words 侧消费（指纹失效后的 dense 缓存清理）依赖既有指纹机制，
    本轮未改动检索政策（§13）；
 4. F-01..F-49 核心 findings 未处理（§13 明确留下轮）；
-5. 已部署库 memories CHECK 字符串保留 archived（见 §1 偏差申报）。
+5. ~~已部署库 CHECK 偏差~~ 已消除（空数据根删除，fresh 建库即净）。
