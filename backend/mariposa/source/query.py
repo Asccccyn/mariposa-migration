@@ -122,7 +122,8 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
 def get_message(message_id: str | None = None,
                 provider_message_id: str | None = None,
                 context: int = 5, include_content: bool = False,
-                include_unpublished: bool = False) -> dict:
+                include_unpublished: bool = False,
+                provider: str | None = None) -> dict:
     """按内部 ID 或 provider UUID 精确打开一条消息（含上下文）。
 
     include_unpublished=True 为诊断开关：可读未发布（失败批次）数据，
@@ -130,7 +131,8 @@ def get_message(message_id: str | None = None,
     """
     context = max(0, min(int(context), 50))
     with db.formal() as conn:
-        row = _find_message(conn, message_id, provider_message_id)
+        row = _find_message(conn, message_id, provider_message_id,
+                           provider=provider)
         if row is None or (not include_unpublished
                            and not row["published"]):
             raise NotFound("source message not found",
@@ -549,22 +551,26 @@ def _locate_window(text: str, kw: str, radius: int = 60) -> str | None:
 
 
 def _anchors_excerpt(text: str, keyword: str, anchors: list[str] | None,
-                     radius: int = 60) -> str:
-    """锚词序列的命中窗：按序尝试，第一个能定位的锚词给出窗口；
-    全部未定位才退头部窗口（SL-03：只从正文生成，不回退 evidence）。"""
+                     radius: int = 60) -> tuple[str, bool]:
+    """锚词序列的命中窗：按序尝试，第一个能定位的锚词给出窗口。
+
+    全量审计 P2-05：有锚词而全部定位失败 → 返回 ("", False)——
+    头部窗是"真的但无关"的文本，冒充命中证据比没有证据更危险；
+    调用方标 excerpt_locator=failed，候选按 fail-closed 处理。
+    无锚词（浏览/无关键词）时头部窗合法，返回 (head, True)。"""
     if not text:
-        return ""
+        return "", True
     head = text[:radius * 2] + ("…" if len(text) > radius * 2 else "")
     cand = [a for a in (anchors or []) if a and a.strip()]
     if not cand and keyword:
         cand = [keyword]
     if not cand:
-        return head
+        return head, True
     for a in cand:
         win = _locate_window(text, a, radius)
         if win is not None:
-            return win
-    return head
+            return win, True
+    return "", False
 
 
 def _evidence_excerpt(row, keyword: str, radius: int = 60) -> str:
@@ -609,24 +615,38 @@ def _excerpt_for(row, text: str, keyword: str, matched_by, sliced: bool,
     - 显式证据面（evidence_like）：正文优先，正文空才取证据摘录。
     """
     if sliced:
-        return text
+        return text, True
     if matched_by == "evidence_like":
         if keyword and not text:
-            return _evidence_excerpt(row, keyword)
+            return _evidence_excerpt(row, keyword), True
         return _anchors_excerpt(text, keyword, anchors)
     return _anchors_excerpt(text, keyword, anchors)
 
 
-def _find_message(conn, message_id=None, provider_message_id=None):
+def _find_message(conn, message_id=None, provider_message_id=None,
+                  provider: str | None = None):
     cols = f"{_COLS}, conversation_id, content_json"
     if message_id:
         return conn.execute(
             f"SELECT {cols} FROM source_messages WHERE id=?",
             (message_id,)).fetchone()
     if provider_message_id:
-        return conn.execute(
-            f"SELECT {cols} FROM source_messages WHERE provider_message_id=?",
-            (provider_message_id,)).fetchone()
+        # 全量审计 P2-04：provider_message_id 唯一性是
+        # (provider, provider_message_id)——UUID 跨 provider 可碰撞，
+        # 多命中必须显式 AMBIGUOUS，不得 fetchone 静默挑一条
+        pv = " AND provider=?" if provider else ""
+        rows = conn.execute(
+            f"SELECT {cols} FROM source_messages WHERE"
+            f" provider_message_id=?{pv}",
+            ((provider_message_id,) + ((provider,) if provider else ()))
+        ).fetchall()
+        if len(rows) > 1:
+            raise Forbidden(
+                "provider_message_id 跨 provider 命中多条；携带 provider"
+                " 精确指定",
+                code="SOURCE_MESSAGE_AMBIGUOUS",
+                providers=sorted({r["provider"] for r in rows}))
+        return rows[0] if rows else None
     return None
 
 
@@ -748,8 +768,9 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "updated_at": row["updated_at"],
         "occurred_date": row["occurred_date"],
         "text": text,
-        "excerpt": _excerpt_for(row, text, keyword, matched_by, sliced,
-                                anchors=anchors),
+        "excerpt": "",
+        # 占位——真实值在下方统一装配（P2-05：locator 状态外显）
+        "excerpt_locator": "ok",
         "attachments": json.loads(row["attachments"] or "[]"),
         "has_thinking": bool(row["has_thinking"]),
         "has_tool_content": bool(row["has_tool_content"]),
@@ -758,6 +779,13 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "conversation_title": row["conversation_title"]
         if "conversation_title" in row.keys() else None,
     }
+    _exc_text, _exc_located = _excerpt_for(
+        row, text, keyword, matched_by, sliced, anchors=anchors)
+    out["excerpt"] = _exc_text
+    if not _exc_located:
+        # P2-05：有锚词而全部定位失败——不拿无关头部文本冒充命中
+        # 证据（excerpt 空 + 显式标记，候选侧 fail-closed）
+        out["excerpt_locator"] = "failed"
     if matched_by:
         out["matched_fields"] = ["text" if matched_by == "fts_text"
                                  else "content_json"]
