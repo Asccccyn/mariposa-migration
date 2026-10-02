@@ -1004,10 +1004,12 @@ def _bootstrap(principal: Principal, a: dict) -> dict:
 
 
 def _bootstrap_next(principal: Principal, a: dict) -> dict:
+    # CB-045：section 必填（schema 枚举 memory_days/plans）——raw 已
+    # 退役不再是默认段
     return bootstrap.next_page(principal.principal_id, principal.entry_source,
                                str(a.get("snapshot_id", "")),
                                a.get("cursor") or {},
-                               str(a.get("section", "raw")))
+                               str(a.get("section", "memory_days")))
 
 
 def _time_now(principal: Principal, a: dict) -> dict:
@@ -1281,8 +1283,16 @@ def _media_get_meta(principal: Principal, a: dict) -> dict:
 
 
 def _memory_list(principal: Principal, a: dict) -> dict:
+    # CB-049：复合游标（date+id）——cursor_date 单独传入时按旧式
+    # 语义（该日期前全部），完整 next_cursor 原样透传
+    cur = a.get("cursor")
+    cursor_date = a.get("cursor_date")
+    cursor_id = None
+    if isinstance(cur, dict):
+        cursor_date = cur.get("memory_date", cursor_date)
+        cursor_id = cur.get("memory_id")
     return listing.list_memories(a.get("state"), int(a.get("limit", 50)),
-                                 a.get("cursor_date"))
+                                 cursor_date, cursor_id)
 
 
 def _by_date(principal: Principal, a: dict) -> dict:

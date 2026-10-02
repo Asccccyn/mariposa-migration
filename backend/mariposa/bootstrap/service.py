@@ -61,7 +61,14 @@ def _state_hash(conn) -> str:
             ("plans", "updated_at", ""),
             ("i_documents", "updated_at", ""),
             ("anniversary_definitions", "created_at", ""),
-            ("anniversary_occurrences", "occurrence_date", "")):
+            ("anniversary_occurrences", "occurrence_date", ""),
+            # CB-046（2026-10-02 审计 P2）：开窗实际展示的心情与分类
+            # 进入指纹——COUNT+MAX(updated_at) 漏掉"改标签不改时间戳"
+            # 的行级变化，mood.write/categories.replace 后旧快照仍
+            # unchanged（审计反例）。mood_tags 无时间列，聚合 tag 集
+            # 合本体（排序拼接防顺序漂移）
+            ("memory_moods", "captured_at", ""),
+            ("memory_categories", "created_at", "")):
         row = conn.execute(
             f"SELECT COUNT(*) AS c, MAX({time_col}) AS m {extra} FROM {table}"
         ).fetchone()
@@ -69,6 +76,22 @@ def _state_hash(conn) -> str:
         if "e" in row.keys():
             part += f":{row['e']}"  # 记忆表示版本（表示变化必失效）
         parts.append(part)
+    # CB-046：内容级成分——心情文本/标签集合与分类集合整体入指纹
+    # （单项增删改即失效，不依赖时间戳是否前移）
+    mood_note = conn.execute(
+        "SELECT COALESCE(MAX(mood_text), '') AS n FROM memory_moods"
+    ).fetchone()["n"]
+    tags = "|".join(sorted(r["memory_id"] + ":" + r["tag"] for r in
+                           conn.execute(
+                               "SELECT memory_id, tag FROM"
+                               " memory_mood_tags")))
+    cats = "|".join(sorted(r["memory_id"] + ":" + r["category"] for r in
+                           conn.execute(
+                               "SELECT memory_id, category FROM"
+                               " memory_categories")))
+    parts.append(f"mood_note:{mood_note}")
+    parts.append(f"mood_tags:{tags}")
+    parts.append(f"categories:{cats}")
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
 
 
@@ -176,28 +199,35 @@ def get(principal_id: str, entry_source: str, profile: str,
             "entry_source does not match bootstrap profile",
             entry_source=entry_source, profile=profile)
 
+    # CB-044 延伸：state hash 与各段读取共享一个读事务——指纹与
+    # 装配内容同快照，避免"hash 计算后又变化"的错配 unchanged
     with db.formal() as conn:
-        current_state = _state_hash(conn)
-        if loaded_snapshot_id:
-            snap = conn.execute(
-                "SELECT state_hash FROM bootstrap_snapshots WHERE snapshot_id=?",
-                (loaded_snapshot_id,)).fetchone()
-            if snap is None:
-                raise SnapshotStale("snapshot unknown; re-fetch bootstrap")
-            if snap["state_hash"] != current_state:
-                raise SnapshotStale(
-                    "underlying resources changed since snapshot; re-fetch",
-                    snapshot_id=loaded_snapshot_id)
-            # 开窗去重：同 session 同策略状态未变 -> 薄响应，不重复灌包
-            return {"snapshot_id": loaded_snapshot_id, "unchanged": True,
-                    "profile": profile,
-                    "note": "底层资源未变化；继续用已加载内容，不重发开窗包"}
+        conn.execute("BEGIN")
+        try:
+            current_state = _state_hash(conn)
+            if loaded_snapshot_id:
+                snap = conn.execute(
+                    "SELECT state_hash FROM bootstrap_snapshots WHERE"
+                    " snapshot_id=?",
+                    (loaded_snapshot_id,)).fetchone()
+                if snap is None:
+                    raise SnapshotStale(
+                        "snapshot unknown; re-fetch bootstrap")
+                if snap["state_hash"] != current_state:
+                    raise SnapshotStale(
+                        "underlying resources changed since snapshot;"
+                        " re-fetch", snapshot_id=loaded_snapshot_id)
+                # 开窗去重：同 session 同策略状态未变 -> 薄响应，不重复灌包
+                return {"snapshot_id": loaded_snapshot_id,
+                        "unchanged": True, "profile": profile,
+                        "note": "底层资源未变化；继续用已加载内容，"
+                                "不重发开窗包"}
 
-    tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
-    today, three_days = _three_day_window(tz)
-
-    with db.formal() as conn:
-        md = _memory_section(conn, three_days)
+            tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
+            today, three_days = _three_day_window(tz)
+            md = _memory_section(conn, three_days)
+        finally:
+            conn.execute("COMMIT")
 
     plan_items = plans.bootstrap_plans(today, BOOT_UPCOMING_DAYS)
     active_plans = [p for p in plan_items if p["state"] in plans.OPEN_STATES]
