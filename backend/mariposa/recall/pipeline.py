@@ -196,7 +196,19 @@ def raw_deep_search(principal, plan: dict, limit: int = 20,
     from ..retrieval import query_plan as _qp
     or_phrases = [_proj.compile_query(t) for t in terms]
     or_phrases = [q for q in or_phrases if q]
-    fts_query = " OR ".join(or_phrases) if or_phrases else None
+    # CB-015（2026-10-02 审计 P1）：exact_phrases 是逐字硬约束——
+    # 编译为 FTS 表达式的 AND 子句，而不只是 excerpt 锚词。此前
+    # exact-only 查询（terms 为空）fts_expr=None，Raw 退化为全量
+    # 浏览并交付无关原文。
+    and_phrases = [_proj.compile_query(p)
+                   for p in (plan.get("exact_phrases") or [])
+                   if isinstance(p, str) and p.strip()]
+    and_phrases = [q for q in and_phrases if q]
+    _parts: list[str] = []
+    if or_phrases:
+        _parts.append("(" + " OR ".join(or_phrases) + ")")
+    _parts.extend(and_phrases)
+    fts_query = " AND ".join(_parts) if _parts else None
     scope = _qp.source_scope(plan)
     anchors = terms + [p for p in (plan.get("exact_phrases") or [])
                        if isinstance(p, str) and p.strip()]
