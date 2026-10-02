@@ -167,23 +167,37 @@ def _append_document_snapshot(conn, principal_id: str, now: str) -> int:
     return version
 
 
-def get() -> dict:
-    with db.formal() as conn:
-        items = _current_items(conn)
-        doc = conn.execute("SELECT * FROM i_documents WHERE doc_id=?",
-                           (DOC_ID,)).fetchone()
-        if not items:
-            return {"doc_id": DOC_ID, "content": None, "version": 0,
-                    "items": [], "item_count": 0,
-                    "note": "I 尚未落笔；由周家明写入"}
-        return {
-            "doc_id": DOC_ID,
-            "content": _render_current(items),
-            "version": int(doc["current_version_no"]) if doc else 0,
-            "items": items,
-            "item_count": len(items),
-            "note": None,
-        }
+def get(conn=None) -> dict:
+    # CB-044（2026-10-02 审计 P2）：items 与 document 同一读事务——
+    # 此前两次 SELECT 之间可插入 item_revise，返回旧正文/revision1
+    # 挂新 version2 的混合快照。BEGIN（DEFERRED）在首个读时定快照；
+    # 调用方（Bootstrap 装配）可传 conn 共享同一读事务边界。
+    if conn is not None:
+        return _get_snapshot(conn)
+    with db.formal() as c:
+        c.execute("BEGIN")
+        try:
+            return _get_snapshot(c)
+        finally:
+            c.execute("COMMIT")
+
+
+def _get_snapshot(conn) -> dict:
+    items = _current_items(conn)
+    doc = conn.execute("SELECT * FROM i_documents WHERE doc_id=?",
+                       (DOC_ID,)).fetchone()
+    if not items:
+        return {"doc_id": DOC_ID, "content": None, "version": 0,
+                "items": [], "item_count": 0,
+                "note": "I 尚未落笔；由周家明写入"}
+    return {
+        "doc_id": DOC_ID,
+        "content": _render_current(items),
+        "version": int(doc["current_version_no"]) if doc else 0,
+        "items": items,
+        "item_count": len(items),
+        "note": None,
+    }
 
 
 def write(principal_id: str, content: str,
