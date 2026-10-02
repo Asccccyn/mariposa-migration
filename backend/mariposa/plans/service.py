@@ -118,52 +118,57 @@ def update(principal_id: str, plan_id: str, expected_version: int, **changes) ->
     - 任何内容/标题修改不触碰终结锚点；阅读走 get()，永不写这些字段。
     """
     with db.formal() as conn:
-        row, v = _current(conn, plan_id)
-        if row["current_version_no"] != expected_version:
-            raise Forbidden("plan version conflict",
-                            code="VERSION_CONFLICT",
-                            expected=expected_version,
-                            current=row["current_version_no"])
-        new_state = changes.get("state", v["state"])
-        if new_state not in STATES:
-            raise Forbidden(f"invalid state: {new_state}")
-        merged = {
-            "title": changes.get("title", v["title"]),
-            "content": changes.get("content", v["content"]),
-            "state": new_state,
-            "starts_at": changes.get("starts_at", v["starts_at"]),
-            "due_at": changes.get("due_at", v["due_at"]),
-            "date_start": changes.get("date_start", v["date_start"]),
-            "date_end": changes.get("date_end", v["date_end"]),
-            "weight": changes.get("weight", v["weight"]),
-        }
-        new_version = row["current_version_no"] + 1
-        now = _now()
-        tzname = _tz_of(v)
-        old_state = v["state"]
-        was_terminal = old_state in TERMINAL_STATES
-        now_terminal = new_state in TERMINAL_STATES
-        plans_update = {"state": new_state}
-        if not was_terminal and now_terminal:
-            anchors = _terminal_anchors(now, tzname)
-            plans_update.update({
-                TERMINAL_STATES[new_state]: now,
-                "terminal_date": anchors["terminal_date"],
-                "policy_timezone": tzname,
-                "terminal_revision": row["terminal_revision"] + 1,
-            })
-        elif was_terminal and not now_terminal:
-            # 明确重启执行：取消旧终结周期；只有状态更新能到这里
-            plans_update.update({
-                "completed_at": None, "abandoned_at": None,
-                "terminal_date": None, "due_date": None,
-                "terminal_revision": row["terminal_revision"] + 1,
-            })
-        # was_terminal and now_terminal：锚点保持不变（重复保存/换终结原因
-        # 都不重写终结时刻；PLAN-11）
-        sets = ", ".join(f"{k}=?" for k in plans_update)
+        # CB-018（2026-10-02 审计 P1）：读取/版本校验/合并全部放进
+        # BEGIN IMMEDIATE——此前预检在写锁外的旧快照上进行，两个并发
+        # update 同 expected_version 都通过，输家在 plan_versions
+        # UNIQUE 上抛未结构化 IntegrityError（500 + 幂等 running
+        # 残留）。写锁内裁决，输家得到结构化 VERSION_CONFLICT。
         conn.execute("BEGIN IMMEDIATE")
         try:
+            row, v = _current(conn, plan_id)
+            if row["current_version_no"] != expected_version:
+                raise Forbidden("plan version conflict",
+                                code="VERSION_CONFLICT",
+                                expected=expected_version,
+                                current=row["current_version_no"])
+            new_state = changes.get("state", v["state"])
+            if new_state not in STATES:
+                raise Forbidden(f"invalid state: {new_state}")
+            merged = {
+                "title": changes.get("title", v["title"]),
+                "content": changes.get("content", v["content"]),
+                "state": new_state,
+                "starts_at": changes.get("starts_at", v["starts_at"]),
+                "due_at": changes.get("due_at", v["due_at"]),
+                "date_start": changes.get("date_start", v["date_start"]),
+                "date_end": changes.get("date_end", v["date_end"]),
+                "weight": changes.get("weight", v["weight"]),
+            }
+            new_version = row["current_version_no"] + 1
+            now = _now()
+            tzname = _tz_of(v)
+            old_state = v["state"]
+            was_terminal = old_state in TERMINAL_STATES
+            now_terminal = new_state in TERMINAL_STATES
+            plans_update = {"state": new_state}
+            if not was_terminal and now_terminal:
+                anchors = _terminal_anchors(now, tzname)
+                plans_update.update({
+                    TERMINAL_STATES[new_state]: now,
+                    "terminal_date": anchors["terminal_date"],
+                    "policy_timezone": tzname,
+                    "terminal_revision": row["terminal_revision"] + 1,
+                })
+            elif was_terminal and not now_terminal:
+                # 明确重启执行：取消旧终结周期；只有状态更新能到这里
+                plans_update.update({
+                    "completed_at": None, "abandoned_at": None,
+                    "terminal_date": None, "due_date": None,
+                    "terminal_revision": row["terminal_revision"] + 1,
+                })
+            # was_terminal and now_terminal：锚点保持不变（重复保存/换终结原因
+            # 都不重写终结时刻；PLAN-11）
+            sets = ", ".join(f"{k}=?" for k in plans_update)
             # v1.7：遗忘到期队列已退役；plan 终态即 CORE 由阶段策略现算
             conn.execute(
                 "INSERT INTO plan_versions(plan_id, version_no, title, content, state,"
