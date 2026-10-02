@@ -384,9 +384,24 @@ class TypeSafeJevJudge(base.JudgeProvider):
             if not matched_map.get("event_text"):
                 pass
         else:
-            ev_text = match_snippet or _excerpt(event_body,
-                                                anchors=anchors)[0]
-            add("event_text", ["event_evidence"], ev_text, match_trunc)
+            # 全量审计 P1-06 复审：title-only / 结构拉入候选——有正文
+            # 一律走 anchored excerpt，不再被 _candidate_excerpt 的
+            # 正文头部 snippet 短路（头部窗恰恰是错的方向）；无正文的
+            # 旧卡形才回退 candidate 自带 snippet
+            if event_body:
+                ev_text, ev_tr = _excerpt(event_body, anchors=anchors)
+            else:
+                ev_text, ev_tr = match_snippet, match_trunc
+            add("event_text", ["event_evidence"], ev_text, ev_tr)
+            # 复审反例：真 title-only 时正文不含查询词，词面锚必落空、
+            # 头窗是盲选——长正文补尾部事实窗（事件事实高发区），
+            # Jev 才能看到后段真实内容
+            if ev_tr and not any(
+                    a and a.replace(" ", "") in
+                    event_body.replace(" ", "") for a in anchors):
+                tail_w = config.RECALL_EXCERPT_CHARS // 2
+                add("event_text", ["event_evidence"],
+                    "…" + event_body[-tail_w:], True)
         return segments
 
     def _candidate_projection(self, candidate: dict,

@@ -68,25 +68,36 @@ def _tools_for(principal: Principal) -> list[dict]:
     return tools
 
 
+_BODY_MAX_BYTES = 2 * 1024 * 1024  # P1-07：与 /api 通道同额
+
+
 async def handle(request: Request, profile: str) -> JSONResponse:
     """单条 JSON-RPC 请求处理（batch 不在第一版范围）。"""
-    try:
-        body = json.loads(await request.body())
-    except (json.JSONDecodeError, ValueError):
-        return _rpc_error(None, -32700, "Parse error")
-
-    msg_id = body.get("id")
-    method = body.get("method", "")
-
-    # initialize 与 notifications 不需要鉴权之外的状态；其余方法都要求有效凭据
+    # 全量审计 P1-07 复审：鉴权与 body 上限都先于读体——大 JSON 不再
+    # 能在未鉴权时整包进内存，媒体字节只能走专用 stage 端点
     try:
         token = _bearer(request)
         principal = identity.authenticate(token)
     except MariposaError as e:
         return JSONResponse(
-            {"jsonrpc": "2.0", "id": msg_id,
+            {"jsonrpc": "2.0", "id": None,
              "error": {"code": -32001, "message": f"{e.code}: {e}"}},
             status_code=401)
+    clen = request.headers.get("content-length")
+    if clen and int(clen) > _BODY_MAX_BYTES:
+        return _rpc_error(None, -32600,
+                          f"request body too large (> {_BODY_MAX_BYTES})")
+    raw = await request.body()
+    if len(raw) > _BODY_MAX_BYTES:
+        return _rpc_error(None, -32600,
+                          f"request body too large (> {_BODY_MAX_BYTES})")
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return _rpc_error(None, -32700, "Parse error")
+
+    msg_id = body.get("id")
+    method = body.get("method", "")
 
     allowed = PROFILE_PRINCIPALS[profile]
     if principal.principal_id not in allowed:
