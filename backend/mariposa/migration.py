@@ -45,9 +45,14 @@ def snapshot(source: str, dest: str | None = None) -> dict:
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(f, target)  # 逐字节；不解析不输出
+        # CB-025（2026-10-02 审计 P2）：清单哈希按复制产物（target）
+        # 计算——此前对源重读一次，复制后源再变化时"成功"清单与
+        # 快照目录字节不一致（审计反例 manifest_matches_destination=
+        # false）
         manifest.append({"path": str(rel).replace("\\", "/"),
-                         "bytes": f.stat().st_size,
-                         "sha256": hashlib.sha256(f.read_bytes()).hexdigest()})
+                         "bytes": target.stat().st_size,
+                         "sha256": hashlib.sha256(
+                             target.read_bytes()).hexdigest()})
         copied += 1
     (dst / "_manifest.json").write_text(
         json.dumps({"source": str(src), "files": manifest}, ensure_ascii=False),
@@ -225,9 +230,24 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         is_letter = (meta.get("type") == "letter") or "letter" in str(meta.get("bucket_type", ""))
         # D02（2026-10-01）：Home/Self/Diary 随旧 Content 体系退役——旧桶
         # out_of_scope（正文/哈希不进报告），数据由后续裁定处理
-        is_retired_content = meta.get("type") in ("self", "diary")
+        # CB-021（2026-10-02 审计 P2）：Memory 迁移白名单化——退役
+        # archive 等未知类型显式 unmapped，不再默认落成 active 正式
+        # Memory（审计反例：type=archived 经 dry-run/apply 变当前资源）
+        bucket_type = str(meta.get("type") or "").strip().lower()
+        is_retired_content = bucket_type in ("self", "diary")
+        _known_memory_type = bucket_type in ("", "memory", "note", "daily",
+                                             "milestone", "event")
         payload_hash = hashlib.sha256(
             body.strip().encode("utf-8")).hexdigest()
+        if not (is_letter or is_retired_content) and not _known_memory_type:
+            entries.append({
+                "legacy_id": legacy_id,
+                "target": "unmapped",
+                "reason": f"retired_or_unknown_type:{bucket_type or 'none'}",
+                "payload_hash": payload_hash,
+                "content_bytes": len(body.encode("utf-8")),
+            })
+            continue
         if is_letter or is_retired_content:
             # 信件已出 mariposa 范围：仅登记存在性与哈希，正文不进报告
             entries.append({

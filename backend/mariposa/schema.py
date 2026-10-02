@@ -1386,6 +1386,17 @@ def migrate_runtime() -> None:
     但生产数据根未显式 ALLOW_CREATE 时不在此处新建文件。
     """
     config.RECALL_DB.parent.mkdir(parents=True, exist_ok=True)
+    # CB-024（2026-10-02 审计 P2）：新建许可在连接前检查——此前条件
+    # 只拒"已存在但结构不可识别"的库，缺失/空文件仍会在
+    # ALLOW_DB_CREATE=false 下静默新建完整运行库（路径误配时
+    # session/operation 状态被重置）
+    _fresh = (not config.RECALL_DB.exists()
+              or config.RECALL_DB.stat().st_size == 0)
+    if _fresh and not config.ALLOW_DB_CREATE:
+        raise RuntimeError(
+            "recall 运行库不存在且未显式 MARIPOSA_ALLOW_CREATE=1："
+            "拒绝静默新建（路径误配时会话/operation 状态将被重置）。"
+            "隔离/测试根由 conftest 显式置位。")
     with db.recall_runtime() as conn:
         if not config.ALLOW_DB_CREATE and not conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table'"
