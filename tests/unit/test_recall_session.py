@@ -241,9 +241,14 @@ class TestScopesAndTTL:
         hold(actors, 1, text="搬家事件乙", memory_date="2026-08-15")
         p = start(actors)
         sid = p["recall_session_id"]
+        # CB-041：anchor 现被正确解析（此前 memory: 前缀未剥离、锚
+        # 静默失效退化为全量导航）——用最晚候选作锚，earlier 返回更早者
+        anchor = max(p["candidates"],
+                     key=lambda c: c.get("memory_date") or ""
+                     )["candidate_ref"]
         nav = recall_service.navigate(actors["jiaming"], {
             "session_id": sid, "direction": "earlier",
-            "anchor_candidate_ref": p["candidates"][0]["candidate_ref"]})
+            "anchor_candidate_ref": anchor})
         assert nav["candidates"][0]["matched_fields"] == ["event_time"]
         # plan_time 轴对事件导航不可用：明确报错，不用入库时间冒充
         recall_service.refine(actors["jiaming"], {
