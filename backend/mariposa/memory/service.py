@@ -118,22 +118,9 @@ def _raw_ref_hash(ref: dict) -> str:
 
 
 def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
-    """§9.3 同源重复 Hold：相同消息范围已绑定 -> 返回已有 memory_id。
-
-    审计 F39：接受当前写事务连接，在 BEGIN IMMEDIATE 写锁内执行——
-    两个并发同源 hold 不会都通过去重检查各建一个 memory。
-    """
-    if not raw_refs:
-        return None
-    for ref in raw_refs:
-        dup = conn.execute(
-            "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
-            " AND bind_confidence<>'revoked'",
-            (_raw_ref_hash(ref),)).fetchone()
-        if dup:
-            return dup["memory_id"]
+    """CB-051：legacy raw 表已退役——恒无重复。raw_refs 在 hold 入口
+    已被显式拒绝，本函数仅为历史内部调用点保留空实现。"""
     return None
-
 
 def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
                       why_remember, memory_date, date_confidence, mode,
@@ -222,21 +209,6 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
     _fp.build_for_memory(conn, memory_id)
 
 
-def _insert_raw_refs(conn, memory_id: str, raw_refs: list[dict],
-                     now: str) -> None:
-    for ref in raw_refs:
-        conn.execute(
-            "INSERT OR REPLACE INTO memory_raw_refs(memory_id,"
-            " conversation_id, message_from, message_to, source_hash,"
-            " bind_confidence, created_at) VALUES(?,?,?,?,?,'exact',?)",
-            (memory_id, ref.get("conversation_id"),
-             ref.get("message_from"), ref.get("message_to"),
-             _raw_ref_hash(ref), now))
-    conn.execute(
-        "UPDATE memories SET source_state='bound' WHERE memory_id=?",
-        (memory_id,))
-
-
 def hold(
     principal,
     text: str,
@@ -246,6 +218,9 @@ def hold(
     entry_source: str | None = None,
     raw_refs: list[dict] | None = None,
     raw_pending: bool = True,
+    # CB-051：raw_refs 形参保留签名兼容但被显式拒绝——legacy raw 表
+    # 已退役，此入参是可达的写路径残留（审计反例：no such table
+    # memory_raw_refs）
     original_title: str | None = None,
     categories: list[str] | None = None,
     plan_ids: list[str] | None = None,
@@ -303,6 +278,9 @@ def hold_in_tx(
     """
     if not text or not text.strip():
         raise Forbidden("hold text required")
+    if raw_refs:
+        raise Forbidden("raw_refs 已随 legacy raw 退役；来源绑定走"
+                        " source.bind", code="INVALID_ARGUMENT")
     # v2 分层识别：出现任一 v2 字段即走分层写入路径
     v2 = any(v is not None for v in (original_title, categories, mood,
                                      our_words, creation_mode,
@@ -359,8 +337,6 @@ def hold_in_tx(
         conn, memory_id=memory_id, principal_id=principal.principal_id,
         cats=cats, mood_data=mood_data, our_words=our_words,
         entry_source=entry_source, v2=v2, now=now)
-    if raw_refs:
-        _insert_raw_refs(conn, memory_id, raw_refs, now)
     audit.record(
         conn, "memory.created", principal.principal_id,
         resource_id=memory_id, resource_version=1,
