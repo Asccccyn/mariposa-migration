@@ -149,7 +149,7 @@ FORMAL_TABLES = [
     "handoffs",
     "plan_memory_links", "plan_versions", "plans",
     "activity_events",
-    "letter_versions", "letters", "deletion_requests",
+    "deletion_requests",
     "home_versions", "home", "self_versions", "self_entries",
     "diary_versions", "diary_entries", "memory_tags", "bootstrap_snapshots",
     "memory_relations", "memory_raw_refs", "provisional_sources",
