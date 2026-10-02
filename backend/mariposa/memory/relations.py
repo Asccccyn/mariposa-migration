@@ -76,12 +76,26 @@ def correct(principal_id: str, relation_id: str,
 
     同一事务：登记纠错历史→删该条有效边→（改绑）创建新边实例。
     同 relation_id 重放的幂等由上层 atomic_write 承担。
+
+    CB-006（2026-10-02 审计 P1）：replace 必须携带完整 replacement、
+    remove 禁止携带——"替换"不得退化为无新关系的解绑。同端点替换
+    （表有 UNIQUE(from,to,type)）在同事务内先删旧实例再建新实例：
+    复用旧 relation_id 再删除会把替换变成删除，且回执指向已不存在
+    的 replacement。
     """
     from ..relations.corrections import record_correction
     if correction_action not in ("remove_wrong_binding",
                                  "replace_wrong_binding"):
         raise Forbidden("correction_action must be remove_wrong_binding/"
                         "replace_wrong_binding")
+    if correction_action == "remove_wrong_binding" and replacement:
+        raise Forbidden("remove_wrong_binding 不接受 replacement（移除"
+                        "语义；改绑请用 replace_wrong_binding）",
+                        code="INVALID_ARGUMENT")
+    if correction_action == "replace_wrong_binding" and not replacement:
+        raise Forbidden("replace_wrong_binding 必须携带完整 replacement"
+                        "（from_memory/to_memory/relation_type）——缺新"
+                        "关系的替换即解绑", code="INVALID_ARGUMENT")
 
     def _do(conn):
         row = conn.execute(
@@ -90,6 +104,10 @@ def correct(principal_id: str, relation_id: str,
         if row is None:
             raise NotFound("relation instance not found",
                            relation_id=relation_id)
+        # 先删旧实例再 link 新实例：同端点唯一键让位（UNIQUE 约束），
+        # 同事务保证原子；失败整体回滚，旧边不受损
+        conn.execute("DELETE FROM memory_relations WHERE relation_id=?",
+                     (relation_id,))
         replacement_id = None
         if replacement:
             rep = link(principal_id,
@@ -110,8 +128,6 @@ def correct(principal_id: str, relation_id: str,
             original_created_at=row["created_at"],
             corrected_by=principal_id, note=note,
             replacement_instance_id=replacement_id)
-        conn.execute("DELETE FROM memory_relations WHERE relation_id=?",
-                     (relation_id,))
         return {"correction_id": cid, "removed_relation_id": relation_id,
                 "replacement_relation_id": replacement_id,
                 "action": correction_action}

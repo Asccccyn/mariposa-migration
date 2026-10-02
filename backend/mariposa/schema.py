@@ -958,6 +958,15 @@ ALTER TABLE deletion_requests_v2 RENAME TO deletion_requests;
 -- ⑥ visibility：CHECK 只含 active/hidden——无部署库（原 0925 空根
 --    已删除），fresh 建库即净，无兼容包袱
 """),
+    (27, """
+
+-- CB-007（2026-10-02 审计 P1）：word 来源绑定换代计数。word_id 标识
+-- 话语而非每次来源关系实例——仅按 source_ref 做 CAS 无法识别
+-- A→(撤销)→A 的换代，延迟旧请求会删掉新绑定。版本随每次来源纠错
+-- 递增并进入 CAS 与纠错历史（source_ref 仅为端点）。
+ALTER TABLE memory_our_words
+  ADD COLUMN source_binding_version INTEGER NOT NULL DEFAULT 0;
+"""),
 ]
 
 

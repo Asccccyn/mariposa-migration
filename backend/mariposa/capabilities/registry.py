@@ -394,10 +394,11 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
 
     try:
         result = cap.handler(principal, arguments)
-    except MariposaError:
-        # handler 的业务拒绝（参数/权限/状态类）不是崩溃：各写入路径均在
-        # 事务内抛出并回滚。落 failed 允许同 key 修正后重试，而不是把
-        # 干净拒绝伪装成 OUTCOME_UNKNOWN 逼人工对账。
+    except Exception:
+        # CB-008：handler 异常（业务拒绝 MariposaError 或未预期错误）
+        # 一律把本层占位置 failed 再抛——副作用在各服务事务内已回滚，
+        # 残留 running 会把干净失败伪装成 OUTCOME_UNKNOWN 逼人工对账；
+        # 真正的进程崩溃不经此处，由 stale→OUTCOME_UNKNOWN 兜底。
         with db.formal() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -1116,10 +1117,14 @@ def _word_source_correct(principal: Principal, a: dict) -> dict:
     op = str(a.get("operation_id", ""))
     if not op:
         raise Forbidden("operation_id 必填", code="SCHEMA_VIOLATION")
+    if a.get("expected_source_version") is None:
+        raise Forbidden("expected_source_version 必填（CB-007 来源绑定"
+                        "换代计数）", code="SCHEMA_VIOLATION")
     return atomic_write(
         principal.principal_id, "memory.our_words.source.correct", op,
         {"word_id": a.get("word_id"),
          "expected_source_ref": a.get("expected_source_ref"),
+         "expected_source_version": a.get("expected_source_version"),
          "correction_action": a.get("correction_action"),
          "replacement": a.get("replacement"), "note": a.get("note")},
         lambda conn: words_mod.correct_source(
@@ -1127,7 +1132,8 @@ def _word_source_correct(principal: Principal, a: dict) -> dict:
             a.get("expected_source_ref"),
             str(a.get("correction_action", "")),
             replacement=a.get("replacement"), note=a.get("note"),
-            conn=conn))
+            conn=conn,
+            expected_source_version=int(a["expected_source_version"])))
 
 
 def _memory_delete(principal: Principal, a: dict) -> dict:

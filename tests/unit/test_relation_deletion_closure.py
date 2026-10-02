@@ -82,24 +82,28 @@ class TestWordSourceCorrectViaRegistry:
             actors["jiaming"], "memory.our_words.source.correct",
             {"word_id": word_id,
              "expected_source_ref": f"source_msg:{msg_id}",
+             "expected_source_version": 0,
              "correction_action": "remove_wrong_binding",
              "operation_id": "ws-rm"}, None)["data"]
         assert cor["new_source_ref"] is None
+        assert cor["source_binding_version"] == 1
         # 纠错历史
         hist = registry.invoke(
             actors["jiaming"], "relations.corrections.list",
             {"instance_id": f"word:{word_id}"}, None)["data"]
         assert hist["total"] >= 1
         assert hist["corrections"][0]["domain"] == "word_source"
-        # 公开纠错：replace（来源必须经 Source 身份校验）
+        # 公开纠错：replace（来源必须经 Source 身份校验；版本随换代递增）
         msg2 = _seed_source_msg()
         cor2 = registry.invoke(
             actors["jiaming"], "memory.our_words.source.correct",
             {"word_id": word_id, "expected_source_ref": None,
+             "expected_source_version": 1,
              "correction_action": "replace_wrong_binding",
              "replacement": {"source_ref": f"source_msg:{msg2}"},
              "operation_id": "ws-rp"}, None)["data"]
         assert cor2["new_source_ref"] == f"source_msg:{msg2}"
+        assert cor2["source_binding_version"] == 2
 
     def test_public_path_rejects_legacy_prefix(self, actors):
         out = self._word_with_ref(actors, None)  # 建一条无来源 word
@@ -126,6 +130,7 @@ class TestWordSourceCorrectViaRegistry:
             registry.invoke(
                 actors["jiaming"], "memory.our_words.source.correct",
                 {"word_id": word_id, "expected_source_ref": None,
+                 "expected_source_version": 0,
                  "correction_action": "remove_wrong_binding",
                  "operation_id": "ws-cas"}, None)
         assert ei.value.code == "CONFLICT"
