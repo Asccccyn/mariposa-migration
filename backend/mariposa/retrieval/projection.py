@@ -2,7 +2,7 @@
 
 active+full        -> hold_text + why_remember（+ meaning 各层，第一版未启用 meaning 表）
 active+forgotten   -> 仅审批通过的 compressed_summary，其余一律不进 search_text
-hidden/archived    -> 无投影、无 FTS 行
+hidden             -> 无投影、无 FTS 行
 
 中文预分词：投影与查询统一按字符级切分后空格拼接（子串语义），
 原始正文保持不变；FTS 查询以短语形式编译，用户输入不直接拼进 FTS 语法。
