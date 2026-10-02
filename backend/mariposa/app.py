@@ -115,9 +115,15 @@ async def _json_body(request: Request) -> dict:
     # 复审（2026-10-01）：流式读取 + 即时截停（含 chunked 无
     # Content-Length 的请求）；Content-Length 预检保留为快路径
     clen = request.headers.get("content-length")
-    if clen and int(clen) > _JSON_BODY_MAX_BYTES:
+    # CB-048：坏 Content-Length（非数字）是坏请求不是 500
+    try:
+        clen_n = int(clen) if clen else None
+    except ValueError:
+        raise MariposaError("Content-Length is not a number",
+                            code="INVALID_HEADER", http_status=400)
+    if clen_n is not None and clen_n > _JSON_BODY_MAX_BYTES:
         raise MariposaError(
-            f"request body {clen} > {_JSON_BODY_MAX_BYTES}（媒体字节走"
+            f"request body {clen_n} > {_JSON_BODY_MAX_BYTES}（媒体字节走"
             " /api/media/stage/{token}）", code="BODY_TOO_LARGE",
                 http_status=413)
     raw = await _read_body_capped(request, _JSON_BODY_MAX_BYTES)
@@ -125,7 +131,9 @@ async def _json_body(request: Request) -> dict:
         return {}
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError as e:
+    # CB-048：非法 UTF-8 字节同样结构化 400（此前 UnicodeDecodeError
+    # 逃逸成 500）
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         # 格式错误的请求不得静默当作空参数执行（OPS-02 结构化拒绝）
         raise MariposaError(f"request body is not valid JSON: {e}",
                             code="INVALID_JSON") from e
