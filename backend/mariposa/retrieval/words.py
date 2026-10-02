@@ -98,52 +98,84 @@ def ensure_index_current(conn) -> bool:
     return False
 
 
-def _word_evidence(row) -> list[dict]:
-    """expression_kind → evidence_kind（含来源有效性校验，EVID-03）。"""
-    kind = row["expression_kind"]
-    source_ref = row["source_ref"]
-    keys = row.keys()
-    version = str(row["memory_version_no"] if "memory_version_no" in keys
-                  else row["current_version_no"])
+def _g(row, key, default=None):
+    """sqlite3.Row 与 dict 统一取值。"""
+    try:
+        return row[key] if key in row.keys() else default
+    except AttributeError:
+        return row.get(key, default)
+
+
+def _source_ref_valid(conn, source_ref) -> bool:
+    """来源仍有效。CB-039（2026-10-02 审计 P2）：现行 source_msg:<id>
+    按 Source 层当前事实校验（存在且 published）——此前恒 False，真实
+    已发布来源的 verbatim 也被降级 word_unverified；旧 raw 前缀随
+    legacy 退役一律 invalid（不查已删除的表）。"""
+    if not isinstance(source_ref, str) or \
+            not source_ref.startswith("source_msg:"):
+        return False
+    if conn is None:
+        return False
+    msg_id = source_ref[len("source_msg:"):]
+    row = conn.execute(
+        "SELECT published FROM source_messages WHERE id=? OR"
+        " provider_message_id=?", (msg_id, msg_id)).fetchone()
+    return row is not None and bool(row["published"])
+
+
+def _word_evidence(row, conn=None) -> list[dict]:
+    """expression_kind → evidence_kind（含来源有效性校验，EVID-03）。
+
+    CB-039：sparse 与 dense 共用本构造——证据等级取决于当前
+    provenance（expression_kind + source_ref 当前事实 + 撤销换代），
+    不取决于命中通道；来源被显式撤销（换代>0 且当前无来源）不是
+    "从未有来源"，不签无外部来源核验路径的 word_verbatim。
+    """
+    kind = _g(row, "expression_kind")
+    source_ref = _g(row, "source_ref")
+    keys = row.keys() if hasattr(row, "keys") else ()
+    version = str(_g(row, "memory_version_no",
+                     _g(row, "current_version_no")) or "")
+    gen = int(_g(row, "source_binding_version", 0) or 0)
+    wid = _g(row, "word_id")
+    text = _g(row, "text") or ""
     if kind == "verbatim":
         if not source_ref:
-            # 无 raw 绑定的 verbatim：正式话语记录本身即逐字声明，
-            # 无外部来源需要核验
+            if gen > 0:
+                # 来源被显式撤销：保留撤销状态，不按"从未有来源"的
+                # 逐字声明路径签 verified
+                return [evidence_mod.make_evidence(
+                    "word_unverified", "our_words.text", text,
+                    f"our_word:{wid}", source_version=version)] + [
+                    evidence_mod.make_evidence(
+                        "structured_fact", "our_words.source_ref",
+                        "", f"our_word:{wid}",
+                        structured_value={
+                            "source_ref_state": "revoked",
+                            "source_binding_version": gen})]
+            # 无来源绑定且从未纠错：正式话语记录本身即逐字声明
             return [evidence_mod.make_evidence(
-                "word_verbatim", "our_words.text", row["text"],
-                f"our_word:{row['word_id']}",
-                source_version=version)]
-        valid = _source_ref_valid(source_ref)
-        if valid:
+                "word_verbatim", "our_words.text", text,
+                f"our_word:{wid}", source_version=version)]
+        if _source_ref_valid(conn, source_ref):
             return [evidence_mod.make_evidence(
-                "word_verbatim", "our_words.text", row["text"],
-                f"our_word:{row['word_id']}",
-                source_version=version)]
+                "word_verbatim", "our_words.text", text,
+                f"our_word:{wid}", source_version=version)]
         # 来源版本变化/失效后不继续返回 verified word_verbatim
         return [evidence_mod.make_evidence(
-            "word_unverified", "our_words.text", row["text"],
-            f"our_word:{row['word_id']}",
-            source_version=version)] + [
+            "word_unverified", "our_words.text", text,
+            f"our_word:{wid}", source_version=version)] + [
             evidence_mod.make_evidence(
                 "structured_fact", "our_words.source_ref",
-                "", f"our_word:{row['word_id']}",
+                "", f"our_word:{wid}",
                 structured_value={"source_ref_state": "invalid_or_missing"})]
     if kind == "paraphrase":
         return [evidence_mod.make_evidence(
-            "word_paraphrase", "our_words.text", row["text"],
-            f"our_word:{row['word_id']}",
-            source_version=version)]
+            "word_paraphrase", "our_words.text", text,
+            f"our_word:{wid}", source_version=version)]
     return [evidence_mod.make_evidence(
-        "word_unverified", "our_words.text", row["text"],
-        f"our_word:{row['word_id']}",
-        source_version=version)]
-
-
-def _source_ref_valid(source_ref: str) -> bool:
-    """来源仍有效（D13，2026-10-01）：旧 raw_msg:/raw_binding: 前缀随
-    legacy raw 表退役——一律 invalid（降级 word_unverified），不查已
-    删除的表；现行 source_msg: 前缀由 Source 层校验。"""
-    return False
+        "word_unverified", "our_words.text", text,
+        f"our_word:{wid}", source_version=version)]
 
 
 def words_search(conn, plan: dict, limit: int | None = None) -> dict:
@@ -177,6 +209,18 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
                                                     "m.memory_date")
     where += scope_where
     params += scope_params
+    # CB-047：QueryPlan 的 memory 维度约束（categories/mood_tags 及
+    # match 模式）同样作用于 words 池——schema 接受的过滤不得静默
+    # 丢弃（与 event 通道同一 _pool_where 语义，m. 列在本 JOIN 可用）
+    ec = plan.get("explicit_constraints") or {}
+    mem_filters = {k: ec[k] for k in
+                   ("categories", "mood_tags", "category_match",
+                    "mood_match") if ec.get(k)}
+    if mem_filters:
+        from .search import _pool_where
+        pool_where, pool_params = _pool_where(mem_filters)
+        where += pool_where
+        params += pool_params
 
     sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker, w.text,"
            " w.expression_kind, w.source_ref, m.memory_date,"
@@ -220,7 +264,7 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
             "matched_fields": ["our_words.text"],
             "excerpt": excerpt_text,
             "truncated": truncated,
-            "evidence": _word_evidence(r),
+            "evidence": _word_evidence(r, conn),
         })
 
     forgotten = conn.execute(
@@ -261,5 +305,5 @@ def get_word(word_id: str) -> dict:
     d.pop("visibility", None)
     d["content_role"] = "retrieved_memory"
     d["instruction_authority"] = "none"
-    d["evidence"] = _word_evidence(row)
+    d["evidence"] = _word_evidence(row, conn)
     return d

@@ -42,11 +42,13 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
     from . import scoped_bm25
     terms, phrases = qp.plan_token_groups({"original_request": query})
     if not (terms or phrases):
-        return []
-    pool_ids, _trunc = pl._scope_pool_ids(conn, where, params)
+        return [], False
+    # CB-043（2026-10-02 审计 P2）：池安全阀截断状态贯穿返回——此前
+    # 丢弃后零命中与"池未查尽"无法区分（false negative + 不诚实覆盖）
+    pool_ids, pool_trunc = pl._scope_pool_ids(conn, where, params)
     pool_ids = [m for m in pool_ids if m]
     if not pool_ids:
-        return []
+        return [], pool_trunc
     allowed = _allowed_field_kinds(conn, pool_ids)
     docs: list[dict] = []
     for i in range(0, len(pool_ids), 500):
@@ -66,7 +68,8 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
                          "tokens": scoped_bm25._doc_tokens(
                              row["text_norm"] or "")})
     scored = scoped_bm25.score_documents(docs, terms, phrases)
-    return [(e["owner"], list(e["fields"])) for e in scored]
+    return ([(e["owner"], list(e["fields"])) for e in scored],
+            pool_trunc)
 
 
 def _pool_where(filters: dict) -> tuple[list[str], list]:
@@ -150,7 +153,7 @@ def _recall_keyword(conn, query: str, where: list[str], params: list,
     """
     offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
         cursor[0]).isdigit() else 0
-    ordered = _stage_scoped_hits(conn, query, where, params)
+    ordered, pool_trunc = _stage_scoped_hits(conn, query, where, params)
     page = ordered[offset:offset + limit]
     hits = []
     for mid, eff in page:
@@ -165,9 +168,15 @@ def _recall_keyword(conn, query: str, where: list[str], params: list,
     total_kept = len(ordered)
     next_cursor = ([str(offset + limit)]
                    if total_kept > offset + limit else None)
-    return {"hits": hits, "query": query, "mode": "keyword",
-            "filters_applied": _filters_summary(filters),
-            "next_cursor": next_cursor, "limit": limit}
+    # CB-043：池安全阀触顶——本页零命中不代表完整查尽，truncated
+    # 如实外露且不再签"终结"游标语义
+    out = {"hits": hits, "query": query, "mode": "keyword",
+           "filters_applied": _filters_summary(filters),
+           "next_cursor": next_cursor, "limit": limit}
+    if pool_trunc:
+        out["coverage"] = "partial_pool_cap"
+        out["pool_truncated"] = True
+    return out
 
 
 def _recall_browse(conn, where: list[str], params: list, filters: dict,
@@ -235,8 +244,8 @@ def search(conn, query: str, limit: int = 20,
         # 2026-09-30 裁定 + 全量审计 P2-01：接口兼容（名称/参数/返回
         # 结构），底座=Runtime scoped BM25——阶段字段过滤在 Top-K
         # 之前；why/meaning 等禁检来源不参与
-        ordered = _stage_scoped_hits(conn, query,
-                                     ["m.visibility='active'"], [])
+        ordered, _pool_trunc = _stage_scoped_hits(
+            conn, query, ["m.visibility='active'"], [])
         for mid, eff in ordered[:limit]:
             m = conn.execute(
                 "SELECT compression_state, current_version_no FROM memories"
