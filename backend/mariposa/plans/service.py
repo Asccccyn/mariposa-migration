@@ -262,6 +262,15 @@ def correct_memory_link(principal_id: str, link_id: str,
                                  "replace_wrong_binding"):
         raise Forbidden("correction_action must be remove_wrong_binding/"
                         "replace_wrong_binding")
+    # CB-006（2026-10-02 审计 P1）：replace 必带 replacement、remove 禁带
+    if correction_action == "remove_wrong_binding" and replacement:
+        raise Forbidden("remove_wrong_binding 不接受 replacement（移除"
+                        "语义；改绑请用 replace_wrong_binding）",
+                        code="INVALID_ARGUMENT")
+    if correction_action == "replace_wrong_binding" and not replacement:
+        raise Forbidden("replace_wrong_binding 必须携带完整 replacement"
+                        "（plan_id/memory_id）——缺新关系的替换即解绑",
+                        code="INVALID_ARGUMENT")
 
     def _do(conn):
         row = conn.execute(
@@ -269,6 +278,10 @@ def correct_memory_link(principal_id: str, link_id: str,
             (link_id,)).fetchone()
         if row is None:
             raise NotFound("plan link not found", link_id=link_id)
+        # CB-006：先删旧实例再建新实例——同端点 dup 命中旧 link 时复用
+        # 再删除会把替换变成解绑，回执指向不存在的 replacement
+        conn.execute("DELETE FROM plan_memory_links WHERE link_id=?",
+                     (link_id,))
         replacement_id = None
         if replacement:
             new_plan = replacement.get("plan_id", "")
@@ -298,8 +311,6 @@ def correct_memory_link(principal_id: str, link_id: str,
             original_created_by=None, original_created_at=None,
             corrected_by=principal_id, note=note,
             replacement_instance_id=replacement_id)
-        conn.execute("DELETE FROM plan_memory_links WHERE link_id=?",
-                     (link_id,))
         return {"correction_id": cid, "removed_link_id": link_id,
                 "replacement_link_id": replacement_id,
                 "action": correction_action}

@@ -116,11 +116,19 @@ def atomic_write(principal_id: str, capability: str, operation_key: str,
     idempotency_records（formal 库既有表，PR(principal_id,key) 唯一）。
     同 key 同 payload → 重放回执；同 key 异 payload → 结构化冲突；
     失败 → 整体回滚零痕迹。
+
+    CB-008（2026-10-02 审计 P1）：记录键加 `op:` 前缀——transport 层
+    幂等（registry._idempotent_invoke 的裸键）与领域 operation 键此前
+    共用 (principal, capability, key) 空间，客户端把 transport key 与
+    body operation_id 设成同一字符串时两层互相占坑（外层 running 与
+    内层 completed 撞 UNIQUE / payload 口径不同误报冲突）。命名空间
+    隔离后同字符串双键是合法调用；只重放本层记录。
     """
     import hashlib
     ph = hashlib.sha256(json.dumps(payload, ensure_ascii=False,
                                    sort_keys=True, default=str)
                         .encode()).hexdigest()
+    record_key = f"op:{operation_key}"
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -128,12 +136,12 @@ def atomic_write(principal_id: str, capability: str, operation_key: str,
                 "SELECT result_ref, payload_hash FROM idempotency_records"
                 " WHERE principal_id=? AND capability=? AND"
                 " idempotency_key=?",
-                (principal_id, capability, operation_key)).fetchone()
+                (principal_id, capability, record_key)).fetchone()
             if row is not None:
                 if row["payload_hash"] not in (None, ph):
                     raise IdempotencyConflict(
                         "same operation key with different payload",
-                        operation_key=key)
+                        operation_key=operation_key)
                 conn.execute("COMMIT")
                 out = _load_result(row["result_ref"])
                 out["idempotent_replay"] = True
@@ -143,7 +151,7 @@ def atomic_write(principal_id: str, capability: str, operation_key: str,
                 "INSERT INTO idempotency_records(principal_id, capability,"
                 " idempotency_key, payload_hash, status, result_ref,"
                 " created_at) VALUES(?,?,?,?,?,?,?)",
-                (principal_id, capability, operation_key, ph, "completed",
+                (principal_id, capability, record_key, ph, "completed",
                  _result_ref(result), _now()))
             conn.execute("COMMIT")
             return result

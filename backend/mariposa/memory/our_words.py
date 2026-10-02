@@ -124,16 +124,42 @@ def source_of(word_id: str) -> str | None:
 def correct_source(principal_id: str, word_id: str,
                    expected_source_ref: str | None,
                    correction_action: str, replacement: dict | None = None,
-                   note: str | None = None, conn=None) -> dict:
+                   note: str | None = None, conn=None,
+                   expected_source_version: int | None = None) -> dict:
     """话语来源纠错（§P-R02/§5.5 Word）。
 
-    预期来源指纹（expected_source_ref）必须与当前值一致——防并发
-    改错对象；撤销=置空来源（旧 verified 证据/指纹随之失效），
-    改绑=新来源经现行 Source 身份校验。不可经普通正文更新绕开。
+    预期来源指纹（expected_source_ref）与换代计数
+    （expected_source_version）必须与当前值一致——防并发改错对象；
+    撤销=置空来源（旧 verified 证据/指纹随之失效），改绑=新来源经
+    现行 Source 身份校验。不可经普通正文更新绕开。
+
+    CB-007（2026-10-02 审计 P1）：word_id 标识话语而非来源关系实例，
+    仅比 source_ref 无法识别 A→(撤销)→A 的实例换代——旧请求会删掉
+    新绑定。版本必填（None 拒绝）：CAS 精确指向一代绑定，每次纠错
+    版本+1 并记入纠错历史。
     """
     from .. import db as _db
     from ..errors import Forbidden, NotFound
     from ..relations.corrections import record_correction
+
+    if correction_action not in ("remove_wrong_binding",
+                                 "replace_wrong_binding"):
+        raise Forbidden("correction_action must be remove_wrong_binding/"
+                        "replace_wrong_binding")
+    # CB-006：与另四域一致——remove 禁带 replacement，replace 必带
+    if correction_action == "remove_wrong_binding" and replacement:
+        raise Forbidden("remove_wrong_binding 不接受 replacement（撤销"
+                        "语义；改绑请用 replace_wrong_binding）",
+                        code="INVALID_ARGUMENT")
+    if correction_action == "replace_wrong_binding" and not (
+            replacement and replacement.get("source_ref")):
+        raise Forbidden("replace_wrong_binding 必须携带 replacement"
+                        ".source_ref——缺新来源的替换即撤销",
+                        code="INVALID_ARGUMENT")
+    if expected_source_version is None:
+        raise Forbidden("expected_source_version 必填（来源绑定换代"
+                        "计数，随纠错返回值递增）——仅比 source_ref 无法"
+                        "识别换代实例", code="INVALID_ARGUMENT")
 
     def _do(conn):
         row = conn.execute(
@@ -142,12 +168,15 @@ def correct_source(principal_id: str, word_id: str,
         if row is None:
             raise NotFound("word not found", word_id=word_id)
         cur = row["source_ref"] or None
-        if (expected_source_ref or None) != cur:
+        cur_version = int(row["source_binding_version"] or 0)
+        if ((expected_source_ref or None) != cur
+                or int(expected_source_version) != cur_version):
             raise Forbidden(
-                "expected_source_ref 与当前来源不一致（并发保护）",
-                code="CONFLICT", current=cur)
+                "expected_source_ref/expected_source_version 与当前"
+                "来源不一致（并发/换代保护）",
+                code="CONFLICT", current=cur,
+                current_source_binding_version=cur_version)
         new_ref = None
-        replacement_word_id = None
         if replacement and replacement.get("source_ref"):
             new_ref = str(replacement["source_ref"])
             if not new_ref.startswith("source_msg:"):
@@ -156,26 +185,30 @@ def correct_source(principal_id: str, word_id: str,
                     "已退役）", code="INVALID_ARGUMENT")
             msg_id = new_ref[len("source_msg:"):]
             if not conn.execute(
-                    "SELECT 1 FROM source_messages WHERE id=? OR"
-                    " provider_message_id=?", (msg_id, msg_id)).fetchone():
+                "SELECT 1 FROM source_messages WHERE id=? OR"
+                " provider_message_id=?", (msg_id, msg_id)).fetchone():
                 raise NotFound("source message not found", ref=new_ref)
+        new_version = cur_version + 1
         cid = record_correction(
             conn, domain="word_source",
             original_instance_id=f"word:{word_id}",
             endpoint_a=row["memory_id"], endpoint_b=cur or "",
             original_meta={"source_ref": cur,
-                           "expression_kind": row["expression_kind"]},
+                           "expression_kind": row["expression_kind"],
+                           "source_binding_version": cur_version},
             original_created_by=row["created_by"],
             original_created_at=row["created_at"],
             corrected_by=principal_id, note=note,
             replacement_instance_id=(f"word:{word_id}:{new_ref}"
                                      if new_ref else None))
         conn.execute(
-            "UPDATE memory_our_words SET source_ref=? WHERE word_id=?",
-            (new_ref, word_id))
+            "UPDATE memory_our_words SET source_ref=?,"
+            " source_binding_version=? WHERE word_id=?",
+            (new_ref, new_version, word_id))
         # 证据指纹失效：word 向量/证据按指纹重算（retrieval 侧消费）
         return {"correction_id": cid, "word_id": word_id,
                 "removed_source_ref": cur, "new_source_ref": new_ref,
+                "source_binding_version": new_version,
                 "action": correction_action}
 
     if conn is not None:
