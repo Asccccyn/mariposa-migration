@@ -109,9 +109,10 @@ class StaleOperation(MariposaError):
 
 
 class DeleteBlocked(MariposaError):
-    """目标存在正式跨域引用（I revision 关系 / Source 绑定），不允许
-    物理删除；引用完整性优先于删除成功。应改走 archive 或先解除引用。"""
-    code = "DELETE_BLOCKED_BY_REFERENCES"
+    """目标存在正式跨域关系（五域任一），不允许物理删除；关系完整
+    性优先于删除成功。应先解除关系再删（CB-038：canonical code 与
+    v2.0 Relation 域用语对齐）。"""
+    code = "DELETE_BLOCKED_BY_RELATIONS"
     http_status = 409
 
 
