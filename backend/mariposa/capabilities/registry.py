@@ -334,6 +334,14 @@ def _payload_hash(arguments: dict) -> str:
 _IDEMPOTENCY_STALE_SECONDS = 60
 
 
+def _transport_key(key: str) -> str:
+    """RA-004（2026-10-02 复审 P1）：transport 幂等键统一无歧义编码。
+    领域层 operation 键为 op:<key>；此前本层存裸字符串，客户端
+    transport="op:k" 会与 body operation_id=k 的领域记录碰撞。两类
+    键分别固定 t:/op: 前缀，任何输入字符串都不产生跨层相等。"""
+    return f"t:{key}"
+
+
 def _claim_idempotency(principal_id: str, capability: str, key: str,
                        payload_hash: str) -> bool:
     """认领语义：新记录插入即占位；对账后 failed 的记录可被原子转移回
@@ -388,8 +396,9 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
     reconcile）核实业务结果后才能放行重试。
     """
     ph = _payload_hash(arguments)
-    if not _claim_idempotency(principal.principal_id, cap.name, key, ph):
-        replay = _await_completion(principal, cap, key, ph)
+    tkey = _transport_key(key)
+    if not _claim_idempotency(principal.principal_id, cap.name, tkey, ph):
+        replay = _await_completion(principal, cap, tkey, ph)
         if replay is not None:
             return {"ok": True, "data": replay, "idempotent_replay": True}
 
@@ -407,7 +416,7 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                     "UPDATE idempotency_records SET status='failed'"
                     " WHERE principal_id=? AND capability=? AND"
                     " idempotency_key=? AND status='running'",
-                    (principal.principal_id, cap.name, key))
+                    (principal.principal_id, cap.name, tkey))
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -421,7 +430,7 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
                 " WHERE principal_id=? AND capability=? AND idempotency_key=?"
                 " AND status='running'",
                 (json.dumps(result, ensure_ascii=False), principal.principal_id,
-                 cap.name, key))
+                 cap.name, tkey))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -761,7 +770,8 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
     return maintenance.idempotency_reconcile(
         principal.principal_id,
         str(a.get("record_principal", principal.principal_id)),
-        str(a.get("capability", "")), str(a.get("idempotency_key", "")),
+        str(a.get("capability", "")),
+        _transport_key(str(a.get("idempotency_key", ""))),
         int(a.get("stale_seconds", 60)))
 
 
