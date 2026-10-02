@@ -58,8 +58,7 @@ def snapshot(source: str, dest: str | None = None) -> dict:
 
 # 旧 frontmatter 键 -> 迁移目标/字段 白名单（§20.2 数据清单）
 _TYPE_TARGET = {"dynamic": "memories", "feel": "memories", "permanent": "memories",
-                "plan": "plans", "i": "self_entries",
-                "self": "self_entries", "diary": "diary_entries"}
+                "plan": "plans", "i": "self_entries"}
 # 2026-10-01：信件拆出 mariposa（独立项目另行开发）；letter 桶不迁移，
 # 落 UNMAPPED（正文/哈希均不进报告），由信件项目自行处理旧数据。
 _KNOWN_KEYS = {"type", "date", "created", "importance", "pinned", "protected",
@@ -232,9 +231,12 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         name = f.name
         legacy_id = name
         is_letter = (meta.get("type") == "letter") or "letter" in str(meta.get("bucket_type", ""))
+        # D02（2026-10-01）：Home/Self/Diary 随旧 Content 体系退役——旧桶
+        # out_of_scope（正文/哈希不进报告），数据由后续裁定处理
+        is_retired_content = meta.get("type") in ("self", "diary")
         payload_hash = hashlib.sha256(
             body.strip().encode("utf-8")).hexdigest()
-        if is_letter:
+        if is_letter or is_retired_content:
             # 信件已出 mariposa 范围：仅登记存在性与哈希，正文不进报告
             entries.append({
                 "legacy_id": legacy_id,

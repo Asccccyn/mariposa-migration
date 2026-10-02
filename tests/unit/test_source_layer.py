@@ -549,8 +549,6 @@ class TestLayerIsolation:
             assert c.execute("SELECT COUNT(*) n FROM retrieval_documents"
                              ).fetchone()["n"] == 0
             # 旧 raw 层未被写入
-            assert c.execute("SELECT COUNT(*) n FROM raw_messages"
-                             ).fetchone()["n"] == 0
 
     def test_reindex_search_docs_rebuildable(self, clean):
         import_ok("jiaming", "standard.json")

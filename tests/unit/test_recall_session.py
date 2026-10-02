@@ -118,10 +118,6 @@ class TestSessionActions:
         assert hit["evidence"][0]["instruction_authority"] == "none"
         assert hit["evidence"][0]["content_role"] == "retrieved_memory"
         # 没有任何副作用通道被触发（无 raw 回执）
-        with db.formal() as conn:
-            n = conn.execute("SELECT COUNT(*) AS n FROM raw_messages"
-                             ).fetchone()["n"]
-        assert n == 0
 
 
 class TestBudget:

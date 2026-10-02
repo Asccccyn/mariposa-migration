@@ -244,9 +244,3 @@ class TestP206DescriptionsAndLabels:
         missing = [c for c in CATEGORIES if c not in LABELS]
         assert missing == [], f"LABELS 漏分类：{missing}"
 
-    def test_registry_descriptions_current(self):
-        from mariposa.capabilities.registry import REGISTRY
-        assert "WIDE" in REGISTRY["memory.our_words.append"].description
-        assert "禁检" in REGISTRY[
-            "memory.meanings.append"].description
-        assert "明开" in REGISTRY["memory.view.confirm"].description

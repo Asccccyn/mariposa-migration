@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from mariposa import db
-from mariposa.calendar import service as calendar
 from mariposa.errors import Forbidden, NotFound, SnapshotStale
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
@@ -38,59 +37,9 @@ class TestBOOT:
         assert again.get("unchanged") is True
         assert "memory_days" not in again  # 不重发内容包
 
-class TestCAL:
-    def test_T_CAL_03_plan_date_change_reflected(self, actors):
-        """T-CAL-03：计划改日期后日历即时反映，同 plan_id 无第二份。"""
-        p = plans.create("jiaming", title="复诊", state="planned",
-                         due_at="2026-09-25T09:00:00")
-        assert any(i["resource_id"] == p["plan_id"]
-                   for i in calendar.day("2026-09-25")["items"])
-        plans.update("jiaming", p["plan_id"], 1, due_at="2026-09-26T09:00:00")
-        assert not any(i["resource_id"] == p["plan_id"]
-                       for i in calendar.day("2026-09-25")["items"])
-        day26 = [i for i in calendar.day("2026-09-26")["items"]
-                 if i["resource_id"] == p["plan_id"]]
-        assert len(day26) == 1
-
-    def test_T_CAL_04_undated_section(self, actors):
-        """T-CAL-04：日期未知进待定区，不冒充今天。"""
-        h = memory.hold(actors["jiaming"], text="没有日期的桶",
-                         categories=["daily"])  # memory_date=None
-        out = calendar.undated()
-        assert any(i["resource_id"] == h["memory_id"] for i in out["items"])
-        from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-        today = datetime.now(timezone.utc).astimezone(
-            ZoneInfo("Asia/Shanghai")).date().isoformat()
-        assert not any(i.get("resource_id") == h["memory_id"]
-                       for i in calendar.day(today)["items"])
-
-    def test_T_CAL_05_hidden_not_in_calendar(self, actors):
-        """T-CAL-05：隐藏/归档资源不进日历计数或列表。"""
-        h = memory.hold(actors["jiaming"], text="将被隐藏", memory_date="2026-06-01", categories=["daily"])
-        with db.formal() as conn:
-            conn.execute("UPDATE memories SET visibility='hidden' WHERE"
-                         " memory_id=?", (h["memory_id"],))
-        items = calendar.day("2026-06-01")["items"]
-        assert not any(i.get("resource_id") == h["memory_id"] for i in items)
-        # 锁信不在任何日历 provider（元数据保护）
-        assert "letter" not in calendar.PROVIDERS
 
 
 class TestTIME:
-    def test_T_TIME_03_backfill_uses_message_time(self, actors):
-        """T-TIME-03：两天前的用户消息回填原时刻，不当此刻见面。"""
-        from mariposa.raw import service as raw
-        from mariposa.time_context import service as time_ctx
-        from datetime import datetime, timedelta, timezone
-        t = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-        raw.import_payload("worker", {
-            "source_channel": "bf", "external_id": "bf1",
-            "messages": [{"source_message_id": "m0", "role": "user",
-                          "body": "两天前的联系",
-                          "occurred_at": t, "sequence": 0}]})
-        ctx = time_ctx.context("qiaosheng")
-        assert ctx["last_user_message_at"] == t
 
     def test_T_TIME_04_gap_wording(self, actors):
         """T-TIME-04：覆盖缺口时说明'记录可能未齐'，不说错误上下界。"""
@@ -102,24 +51,6 @@ class TestTIME:
             assert "已收录" in out["note"] or "不计" in out["note"]
 
 
-class TestSELF:
-    def test_T_SELF_03_q_correction_not_overwritten(self, actors):
-        """T-SELF-03：乔生的情绪标签修正不被后续写入静默覆盖。"""
-        from mariposa.content import service as content
-        h = memory.hold(actors["jiaming"], text="情绪修正", memory_date="2026-06-01", categories=["daily"])
-        content.tags_add("qiaosheng", h["memory_id"],
-                         [{"tag": "平静", "whose": "qiaosheng"}])
-        # 后续（模型观察路径的）同 tag 写入不覆盖
-        content.tags_add("jiaming", h["memory_id"],
-                         [{"tag": "平静", "whose": "qiaosheng"}])
-        with db.formal() as conn:
-            n = conn.execute(
-                "SELECT COUNT(*) AS c FROM memory_tags WHERE memory_id=? AND"
-                " tag='平静' AND whose='qiaosheng'", (h["memory_id"],)).fetchone()["c"]
-            creator = conn.execute(
-                "SELECT created_by FROM memory_tags WHERE memory_id=? AND"
-                " tag='平静'", (h["memory_id"],)).fetchone()["created_by"]
-        assert n == 1 and creator == "qiaosheng"
 
 class TestMIG:
     def test_T_MIG_03_04_semantic_flags(self, actors, tmp_path):

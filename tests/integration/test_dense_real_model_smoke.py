@@ -20,7 +20,6 @@ import pytest
 from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.identity import service as identity
-from mariposa.memory import listing as mlisting
 from mariposa.memory import service as memory
 from mariposa.retrieval import search as rsearch
 from tests.conftest import reset_all
@@ -157,9 +156,7 @@ class TestRealModelWarmupAndSmoke:
         """B：why/meaning/mood_note 独有关键词不触发 dense 召回。"""
         out = hold(actors["jiaming"], "完全平静的一段日常叙述",
                    why_remember="因为雾隐茶室的缘故")
-        mlisting.meanings_append(actors["jiaming"].principal_id,
-                                 out["memory_id"], "含义层提到梼杌")
-        for probe in ("雾隐茶室", "梼杌"):
+        for probe in ("雾隐茶室",):
             r = registry.invoke(actors["jiaming"], "memory.recall.start",
                                 { "operation_id": f"op-forbidden-{probe}","query_plan": {
                                     "original_request": f"找{probe}",
@@ -173,13 +170,12 @@ class TestRealModelWarmupAndSmoke:
     def test_no_fallback_when_unavailable(self, actors, monkeypatch):
         """C：provider 未配置 → 显式 unavailable，不回退旧整投影。"""
         from mariposa import config as cfg
-        out = hold(actors["jiaming"], "提供方关闭时的正文鸭跖草")
-        mlisting.meanings_append(actors["jiaming"].principal_id,
-                                 out["memory_id"], "含义层词霡霂")
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "")
+        out = hold(actors["jiaming"], "提供方关闭时的正文",
+                   why_remember="因为霡霂草的缘故")
         with db.formal() as conn:
             sm = rsearch.search(conn, "霡霂")
-        assert not sm["hits"], "禁检来源不得经任何文本通道命中"
+        assert not sm["hits"], "why 禁检来源不得经任何文本通道命中"
         assert sm["semantic"] == "unavailable"
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
                             { "operation_id": "op-0-181","query_plan": {

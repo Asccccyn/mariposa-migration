@@ -54,32 +54,7 @@ def activity_list(limit: int = 50, event_type: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def reminders_fire_due(now: str | None = None) -> dict:
-    """到期提醒惰性结算：标记 fired（幂等）。无通知通道时不发任何外部副作用。
 
-    常驻 scheduler = 后续交付（AUTO_WAKEUP_ENABLED=false）；
-    本入口供手动/未来 scheduler 调用。
-    """
-    now = now or _now()
-    with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT id, title FROM reminders WHERE status='scheduled'"
-            " AND remind_at<=?", (now,)).fetchall()
-        from .. import audit as _audit
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for r in rows:
-                conn.execute(
-                    "UPDATE reminders SET status='fired', updated_at=? WHERE id=?"
-                    " AND status='scheduled'", (now, r["id"]))
-                _audit.record(conn, "reminder.due", "system",
-                              resource_id=r["id"],
-                              payload={"title": r["title"]})
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"fired": [dict(r) for r in rows]}
 
 
 def idempotency_reconcile(principal_id: str, record_principal: str,

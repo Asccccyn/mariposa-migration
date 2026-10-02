@@ -18,24 +18,15 @@ from ..retrieval import search as retrieval_search
 from ..recall import service as recall_service
 from ..recall import store as recall_store
 from ..retrieval import words as words_mod
-from ..raw import service as raw
-from ..quotes import service as quotes
-from ..quotes import semantic_review
 from ..plans import service as plans
-from ..calendar import service as calendar
 from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
 from ..deletion import service as deletion
-from ..content import service as content
 from ..memory import extras, listing, relations, reengagement
 from ..memory import service as memory
 from ..retrieval import rebuild as rebuild_mod
-from ..workspace import tasks as ws_tasks
-from ..raw import binding
 from ..maintenance import service as maintenance
 from ..media import service as media
-from ..moments import service as moments
-from ..reminders import service as reminders
 from ..source import importer as source_importer
 from ..source import query as source_query
 from ..source import binding as source_binding
@@ -152,15 +143,6 @@ def _register() -> dict[str, Capability]:
     # workspace.memory.inspect 不再注册；旧请求获 UNKNOWN_CAPABILITY。
     add("maintenance.idempotency.reconcile", _idem_reconcile, _owners(), True,
         description="崩溃窗口对账：核实业务结果后清除 running 幂等占位")
-    add("raw.import", _raw_import, {"worker", "qiaosheng", "jiaming"}, True, True,
-        description="导入原文（同源同消息 ID 幂等，不覆盖已存在消息）")
-    add("raw.messages.list", _raw_list, _owners(), False,
-        description="最新 N 条真实消息（默认 30 条，按消息计）")
-    add("raw.search", _raw_search, _owners(), False,
-        description="独立原文查询，命中标 source=raw")
-    add("raw.conversations.list", _raw_convs, _owners(), False,
-        description="已收录会话列表")
-    # ===== Source Layer（原文层，2026-09-27；与 raw.* 相互独立）=====
     add("source.import", _source_import, _owners(), True, True,
         description="导入 Claude conversations 导出（.json/.zip；流式解析；"
                     "Raw Archive 留只读母本；同 provider+sha256 幂等）")
@@ -188,14 +170,6 @@ def _register() -> dict[str, Capability]:
         description="撤销一条原文绑定（行保留留历史）")
     add("source.memory.open", _source_memory_open, _owners(), False,
         description="按 memory 动态打开其绑定的原文区间（原文不复制进记忆）")
-    add("memory.quotes.keep", _quote_keep, {"jiaming"}, True,
-        description="周家明选取保留她的话（允许复述）")
-    add("memory.quotes.list", _quote_list, _owners(), False,
-        description="列出她的话（独立资源）")
-    add("memory.quotes.search", _quote_search, _owners(), False,
-        description="独立 quotes 检索；不得反向算作记忆命中")
-    add("memory.quotes.withdraw", _quote_withdraw, {"qiaosheng", "jiaming"}, True,
-        description="撤下一条（撤下后校对不得重新浮现）")
     add("handoff.write", _handoff_write, {"jiaming"}, True,
         description="周家明写给另一入口的交接便签（72h 过期不删除）")
     add("handoff.latest", _handoff_latest, _owners(), False,
@@ -205,11 +179,6 @@ def _register() -> dict[str, Capability]:
     add("plan.update", _plan_update, _owners(), True,
         description="修改计划（expected_version 乐观锁）")
     add("plan.list", _plan_list, _owners(), False, description="列出计划")
-    add("calendar.day", _cal_day, _owners(), False, description="单日聚合视图")
-    add("calendar.range", _cal_range, _owners(), False, description="日期区间聚合（端点含）")
-    add("calendar.month", _cal_month, _owners(), False, description="月视图聚合")
-    add("calendar.undated", _cal_undated, _owners(), False,
-        description="待定日期区（日期未知不冒充今天）")
     add("memory.reengagement.record", _reengage, _owners(), True,
         description="记录真实再提起（按证据原时刻；扫描/访问不算）")
     add("identity.bindings.revoke", _binding_revoke, {"qiaosheng"}, True,
@@ -232,35 +201,10 @@ def _register() -> dict[str, Capability]:
         description="审批删除申请（仅周家明；approve 才执行 archive/delete）")
     add("memory.deletion.list", _del_list, _owners(), False,
         description="删除申请列表")
-    add("home.get", _home_get, _owners(), False, description="共同 Home 正本")
-    add("home.update", _home_update, _owners(), True,
-        description="修改 Home（唯一正本，版本乐观锁）")
-    add("self.write", _self_write, {"jiaming"}, True,
-        description="周家明写 Self（立即正式，pending=隔日待回看）")
-    add("self.list", _self_list, _owners(), False,
-        description="Self 列表（retired 不主动浮现）")
-    add("self.review", _self_review, {"jiaming"}, True,
-        description="隔日回看 Self（另一共同当地日起）")
-    add("self.revise", _self_revise, {"jiaming"}, True,
-        description="修订 Self（隔日，版本留底）")
-    add("self.retire", _self_retire, {"jiaming"}, True,
-        description="退役 Self（不物理删，历史可查）")
-    add("diary.write", _diary_write, _owners(), True,
-        description="写日记（本人作品，全文保留）")
-    add("diary.list", _diary_list, _owners(), False, description="日记列表")
-    add("diary.search", _diary_search, _owners(), False,
-        description="日记独立检索（source=diary）")
-    add("diary.hide", _diary_hide, _owners(), True,
-        description="隐藏/显示日记（仅作者）")
     add("memory.tags.add", _tags_add, _owners(), True,
         description="加标签（情绪标签 whose 必填）")
     add("memory.by_emotion", _by_emotion, _owners(), False,
         description="按情绪查（结构化入口，遗忘桶仍可查）")
-    add("workspace.quotes.review.run", _quote_review_run,
-        {"worker", "jiaming", "qiaosheng"}, True,
-        description="执行她的话语义校对（provider 未配置一律挂起不写）")
-    add("workspace.quotes.reviews.list", _quote_reviews_list, _owners(), False,
-        description="校对工作项列表")
     add("memory.update", _memory_update, _owners(), True,
         description="修改桶正文（新版本，不就地覆盖；遗忘桶先恢复）")
     add("memory.pin", lambda pr, a: extras.set_flag(
@@ -282,45 +226,22 @@ def _register() -> dict[str, Capability]:
     add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
     add("memory.relations.trace", _rel_trace, _owners(), False,
         description="沿 continuation_of 追事件链")
-    add("raw.provisional.report", _prov_report, {"jiaming"}, True,
-        description="周家明报告现场复述片段（非已验证原文）")
-    add("raw.binding.bind", _raw_bind, _owners(), True,
-        description="原文范围绑定到桶（不改 Hold 内容；重复范围 DEDUPE_NEEDS_REVIEW）")
-    add("raw.binding.revoke", _raw_bind_revoke, _owners(), True,
-        description="撤销绑定（留历史，桶回 raw_pending）")
-    add("raw.binding.refs", _raw_refs, _owners(), False, description="桶的原文绑定列表")
     add("maintenance.outbox.drain", _outbox_drain, _owners(), True,
         description="消费 outbox（至少一次+幂等标记）")
     add("maintenance.outbox.status", _outbox_status, _owners(), False,
         description="outbox 待处理统计")
     add("maintenance.activity.list", _activity_list, _owners(), False,
         description="审计查询（管理接口，不参与召回）")
-    add("maintenance.reminders.fire_due", _fire_due,
-        {"worker", "qiaosheng", "jiaming"}, True,
-        description="到期提醒结算（幂等；无常驻 scheduler，无外部副作用）")
     add("media.upload.prepare", _media_prepare, _owners(), True,
         description="申请上传 token（字节走专用 HTTP 端点，不进工具参数）")
     add("media.upload.finalize", _media_finalize, _owners(), True, True,
         description="完成上传（hash 去重）")
     add("media.list", _media_list, _owners(), False, description="媒体对象列表")
     add("media.get", _media_get_meta, _owners(), False, description="媒体元数据")
-    add("moments.post", _moments_post, _owners(), True, description="发朋友圈（post）")
-    add("moments.list", _moments_list, _owners(), False, description="朋友圈列表")
-    add("moments.comment", _moments_comment, _owners(), True, description="评论")
-    add("moments.react", _moments_react, _owners(), True, description="回应")
-    add("reminder.create", _reminder_create, _owners(), True, description="创建提醒")
-    add("reminder.list", _reminder_list, _owners(), False, description="提醒列表")
-    add("reminder.cancel", _reminder_cancel, _owners(), True, description="取消提醒")
     add("memory.list", _memory_list, _owners(), False,
         description="记忆倒序列表（遗忘桶只给摘要表示）")
     add("memory.by_date", _by_date, _owners(), False, description="按事件日期查")
     add("memory.by_tag", _by_tag, _owners(), False, description="按标签查（结构化入口）")
-    add("memory.meanings.append", _meaning_append, {"jiaming"}, True,
-        description="追加 meaning 层（只周家明；禁检来源——不进任何检索投影）")
-    add("memory.meanings.replace", _meaning_replace, {"jiaming"}, True,
-        description="替换 meaning 层（旧层留底，层号归档）")
-    add("memory.meanings.list", _meaning_list, _owners(), False,
-        description="列出当前 meaning 层")
     add("maintenance.rebuild_index", _rebuild_index, _owners(), True,
         description="按当前版本重建全部派生索引（旧投影+分字段+words+source）")
     add("maintenance.source.cleanup", _source_cleanup, _owners(), True,
@@ -328,36 +249,12 @@ def _register() -> dict[str, Capability]:
                     "返回清理计数")
     add("maintenance.semantic.warmup", _semantic_warmup, _owners(), True,
         description="全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）")
-    add("workspace.tasks.list", _tasks_list, {"worker", "qiaosheng", "jiaming"}, False,
-        description="可认领工作项列表")
-    add("workspace.tasks.claim", _task_claim, {"worker", "qiaosheng", "jiaming"}, True,
-        description="认领任务租约（30 分钟，持久化）")
-    add("workspace.tasks.release", _task_release, {"worker", "qiaosheng", "jiaming"}, True,
-        description="释放租约（仅认领人）")
-    add("memory.quotes.get", _quote_get, _owners(), False, description="单条她的话")
-    add("memory.quotes.by_memory", _quote_by_memory, _owners(), False,
-        description="按记忆找相关她的话")
-    add("diary.read", _diary_read, _owners(), False, description="读单篇日记")
-    add("diary.revise", _diary_revise, _owners(), True,
-        description="修订日记（版本留底，全文不摘要）")
-    add("calendar.providers", _cal_providers, _owners(), False,
-        description="已注册日历源列表")
     add("presence.status", _presence_status, _everyone(), False,
         description="当前活动状态（三时间线概览）")
     add("maintenance.jobs.status", _jobs_status, _owners(), False,
         description="维护任务状态总览")
     add("maintenance.settings.get", _settings_get, _owners(), False,
         description="只读配置快照（时区/开窗/遗忘/provider 状态）")
-    add("sticker.list", _sticker_list, _owners(), False, description="表情列表")
-    add("sticker.add", _sticker_add, {"qiaosheng", "jiaming"}, True,
-        description="添加表情（复用媒体 hash 去重）")
-    add("sticker.search", _sticker_search, _owners(), False, description="按标签搜表情")
-    add("raw.import.prepare", _raw_import_prepare, {"worker", "qiaosheng", "jiaming"}, True,
-        description="两阶段导入：登记任务（解析器版本化）")
-    add("raw.import.status", _raw_import_status, {"worker", "qiaosheng", "jiaming"}, False,
-        description="导入任务状态")
-    add("raw.read", _raw_read, _owners(), False,
-        description="按 ID 读单条原文（source=raw）")
     add("emotion.context.get", _emotion_reserved, _owners(), False,
         description="情绪补充召回（reserved，默认禁用）")
     add("listening.status", _listening_reserved, _owners(), False,
@@ -863,22 +760,7 @@ def _keeps_list(principal: Principal, a: dict) -> dict:
                 str(a.get("memory_id", "")))}
 
 
-def _raw_import(principal: Principal, a: dict) -> dict:
-    return raw.import_payload(principal.principal_id, a)
 
-
-def _raw_list(principal: Principal, a: dict) -> dict:
-    return {"messages": raw.list_recent(int(a.get("limit", raw.BOOT_RAW_MESSAGES)),
-                                         a.get("before")),
-            "counts_messages_not_turns": True}
-
-
-def _raw_search(principal: Principal, a: dict) -> dict:
-    return raw.search(str(a.get("query", "")), int(a.get("limit", 20)))
-
-
-def _raw_convs(principal: Principal, a: dict) -> dict:
-    return {"conversations": raw.conversations_list(int(a.get("limit", 50)))}
 
 
 # ===== Source Layer handlers =====
@@ -977,25 +859,7 @@ def _source_memory_open(principal: Principal, a: dict) -> dict:
         include_content=bool(a.get("include_content")))
 
 
-def _quote_keep(principal: Principal, a: dict) -> dict:
-    return quotes.keep(principal.principal_id, str(a.get("text", "")),
-                       a.get("said_at"),
-                       a.get("date_confidence")
-                       or a.get("said_at_confidence", "unknown"),
-                       a.get("raw_ref"))
 
-
-def _quote_list(principal: Principal, a: dict) -> dict:
-    return {"quotes": quotes.list_quotes(bool(a.get("include_withdrawn", False)),
-                                         int(a.get("limit", 100)))}
-
-
-def _quote_search(principal: Principal, a: dict) -> dict:
-    return quotes.search(str(a.get("query", "")), int(a.get("limit", 20)))
-
-
-def _quote_withdraw(principal: Principal, a: dict) -> dict:
-    return quotes.withdraw(principal.principal_id, str(a.get("quote_id", "")))
 
 
 def _handoff_write(principal: Principal, a: dict) -> dict:
@@ -1032,21 +896,7 @@ def _plan_list(principal: Principal, a: dict) -> dict:
     return {"plans": plans.list_plans(a.get("states"))}
 
 
-def _cal_day(principal: Principal, a: dict) -> dict:
-    return calendar.day(str(a.get("date", "")), a.get("types"))
 
-
-def _cal_range(principal: Principal, a: dict) -> dict:
-    return calendar.range_items(str(a.get("start_date", "")),
-                                str(a.get("end_date", "")), a.get("types"))
-
-
-def _cal_month(principal: Principal, a: dict) -> dict:
-    return calendar.month(int(a.get("year", 0)), int(a.get("month", 0)), a.get("types"))
-
-
-def _cal_undated(principal: Principal, a: dict) -> dict:
-    return calendar.undated(a.get("types"))
 
 
 def _reengage(principal: Principal, a: dict) -> dict:
@@ -1112,57 +962,7 @@ def _del_list(principal: Principal, a: dict) -> dict:
     return {"requests": deletion.deletion_list(a.get("status"))}
 
 
-def _home_get(principal: Principal, a: dict) -> dict:
-    with db.formal() as conn:
-        return content.home_get(conn)
 
-
-def _home_update(principal: Principal, a: dict) -> dict:
-    return content.home_update(principal.principal_id, str(a.get("content", "")),
-                               int(a.get("expected_version", 0)))
-
-
-def _self_write(principal: Principal, a: dict) -> dict:
-    return content.self_write(principal.principal_id, str(a.get("content", "")),
-                              str(a.get("aspect", "")))
-
-
-def _self_list(principal: Principal, a: dict) -> dict:
-    return {"entries": content.self_list(bool(a.get("include_retired", False)))}
-
-
-def _self_review(principal: Principal, a: dict) -> dict:
-    return content.self_review(principal.principal_id, str(a.get("self_id", "")))
-
-
-def _self_revise(principal: Principal, a: dict) -> dict:
-    return content.self_revise(principal.principal_id, str(a.get("self_id", "")),
-                               str(a.get("content", "")),
-                               int(a.get("expected_version", 0)))
-
-
-def _self_retire(principal: Principal, a: dict) -> dict:
-    return content.self_retire(principal.principal_id, str(a.get("self_id", "")))
-
-
-def _diary_write(principal: Principal, a: dict) -> dict:
-    return content.diary_write(principal.principal_id, str(a.get("title", "")),
-                               str(a.get("content", "")),
-                               a.get("covers_from"), a.get("covers_to"))
-
-
-def _diary_list(principal: Principal, a: dict) -> dict:
-    return {"entries": content.diary_list(bool(a.get("include_hidden", False)),
-                                          a.get("author"))}
-
-
-def _diary_search(principal: Principal, a: dict) -> dict:
-    return content.diary_search(str(a.get("query", "")), int(a.get("limit", 20)))
-
-
-def _diary_hide(principal: Principal, a: dict) -> dict:
-    return content.diary_hide(principal.principal_id, str(a.get("diary_id", "")),
-                              bool(a.get("hide", True)))
 
 
 def _tags_add(principal: Principal, a: dict) -> dict:
@@ -1176,13 +976,7 @@ def _by_emotion(principal: Principal, a: dict) -> dict:
     return content.by_emotion(str(a.get("tag", "")), str(a.get("whose", "")))
 
 
-def _quote_review_run(principal: Principal, a: dict) -> dict:
-    return semantic_review.run_review(str(a.get("quote_id", "")),
-                                      a.get("raw_text"))
 
-
-def _quote_reviews_list(principal: Principal, a: dict) -> dict:
-    return {"items": semantic_review.reviews_list(a.get("states"))}
 
 
 def _memory_update(principal: Principal, a: dict) -> dict:
@@ -1219,25 +1013,7 @@ def _rel_trace(principal: Principal, a: dict) -> dict:
                            int(a.get("max_depth", 5)))
 
 
-def _prov_report(principal: Principal, a: dict) -> dict:
-    return binding.report_fragment(principal.principal_id,
-                                   str(a.get("fragment", "")), a.get("memory_id"))
 
-
-def _raw_bind(principal: Principal, a: dict) -> dict:
-    return binding.bind(
-        principal.principal_id, str(a.get("memory_id", "")),
-        str(a.get("conversation_id", "")), str(a.get("message_from", "")),
-        str(a.get("message_to", "")), str(a.get("confidence", "high")))
-
-
-def _raw_bind_revoke(principal: Principal, a: dict) -> dict:
-    return binding.revoke(principal.principal_id, str(a.get("memory_id", "")),
-                          str(a.get("conversation_id", "")))
-
-
-def _raw_refs(principal: Principal, a: dict) -> dict:
-    return {"refs": binding.refs_of(str(a.get("memory_id", "")))}
 
 
 def _outbox_drain(principal: Principal, a: dict) -> dict:
@@ -1253,8 +1029,7 @@ def _activity_list(principal: Principal, a: dict) -> dict:
                                                 a.get("event_type"))}
 
 
-def _fire_due(principal: Principal, a: dict) -> dict:
-    return maintenance.reminders_fire_due(a.get("now"))
+
 
 
 def _media_prepare(principal: Principal, a: dict) -> dict:
@@ -1279,38 +1054,10 @@ def _media_get_meta(principal: Principal, a: dict) -> dict:
     return meta
 
 
-def _moments_post(principal: Principal, a: dict) -> dict:
-    return moments.post(principal.principal_id, str(a.get("content", "")),
-                        a.get("media_hash"))
 
 
-def _moments_list(principal: Principal, a: dict) -> dict:
-    return {"moments": moments.list_moments(str(a.get("kind", "post")),
-                                             int(a.get("limit", 50)))}
 
 
-def _moments_comment(principal: Principal, a: dict) -> dict:
-    return moments.comment(principal.principal_id, str(a.get("moment_id", "")),
-                           str(a.get("content", "")))
-
-
-def _moments_react(principal: Principal, a: dict) -> dict:
-    return moments.react(principal.principal_id, str(a.get("moment_id", "")),
-                         str(a.get("reaction", "")))
-
-
-def _reminder_create(principal: Principal, a: dict) -> dict:
-    return reminders.create(principal.principal_id, str(a.get("title", "")),
-                            str(a.get("remind_at", "")), a.get("note"),
-                            a.get("timezone"))
-
-
-def _reminder_list(principal: Principal, a: dict) -> dict:
-    return {"reminders": reminders.list_reminders(a.get("states"))}
-
-
-def _reminder_cancel(principal: Principal, a: dict) -> dict:
-    return reminders.cancel(principal.principal_id, str(a.get("reminder_id", "")))
 
 
 def _memory_list(principal: Principal, a: dict) -> dict:
@@ -1327,22 +1074,7 @@ def _by_tag(principal: Principal, a: dict) -> dict:
                           a.get("whose"))
 
 
-def _meaning_append(principal: Principal, a: dict) -> dict:
-    return listing.meanings_append(principal.principal_id,
-                                   str(a.get("memory_id", "")),
-                                   str(a.get("content", "")))
 
-
-def _meaning_replace(principal: Principal, a: dict) -> dict:
-    layers = a.get("new_layers") or []
-    if not isinstance(layers, list):
-        raise Forbidden("new_layers must be a list")
-    return listing.meanings_replace(principal.principal_id,
-                                    str(a.get("memory_id", "")), layers)
-
-
-def _meaning_list(principal: Principal, a: dict) -> dict:
-    return {"layers": listing.meanings_list(str(a.get("memory_id", "")))}
 
 
 def _rebuild_index(principal: Principal, a: dict) -> dict:
@@ -1355,41 +1087,7 @@ def _semantic_warmup(principal: Principal, a: dict) -> dict:
         return _sem.warmup(conn)
 
 
-def _tasks_list(principal: Principal, a: dict) -> dict:
-    return {"tasks": ws_tasks.tasks_list()}
 
-
-def _task_claim(principal: Principal, a: dict) -> dict:
-    return ws_tasks.task_claim(principal.principal_id,
-                               str(a.get("task_key", "")))
-
-
-def _task_release(principal: Principal, a: dict) -> dict:
-    return ws_tasks.task_release(principal.principal_id,
-                                 str(a.get("lease_id", "")))
-
-
-def _quote_get(principal: Principal, a: dict) -> dict:
-    return quotes.get_quote(str(a.get("quote_id", "")))
-
-
-def _quote_by_memory(principal: Principal, a: dict) -> dict:
-    return {"quotes": quotes.by_memory(str(a.get("memory_id", "")))}
-
-
-def _diary_read(principal: Principal, a: dict) -> dict:
-    return content.diary_read(str(a.get("diary_id", "")))
-
-
-def _diary_revise(principal: Principal, a: dict) -> dict:
-    return content.diary_revise(principal.principal_id,
-                                str(a.get("diary_id", "")),
-                                int(a.get("expected_version", 0)),
-                                a.get("title"), a.get("content"))
-
-
-def _cal_providers(principal: Principal, a: dict) -> dict:
-    return {"providers": content.calendar_providers()}
 
 
 def _presence_status(principal: Principal, a: dict) -> dict:
@@ -1402,15 +1100,12 @@ def _jobs_status(principal: Principal, a: dict) -> dict:
 
 def _settings_get(principal: Principal, a: dict) -> dict:
     from .. import config as _cfg
-    from ..calendar import service as _cal
-    from ..raw import service as _raw
     from ..bootstrap import service as _bs
     return {
         "relationship_timezone": _cfg.RELATIONSHIP_TIMEZONE,
         "http": {"bind": _cfg.HTTP_BIND, "port": _cfg.HTTP_PORT},
         "forgetting": {"status": "retired_v1_7"},
         "bootstrap": {
-            "raw_messages": _raw.BOOT_RAW_MESSAGES,
             "memory_days": _bs.BOOT_MEMORY_DAYS,
             "plan_upcoming_days": _bs.PLAN_UPCOMING_DAYS,
             "soft_token_budget": _bs.BOOT_SOFT_TOKEN_BUDGET,
@@ -1427,49 +1122,7 @@ def _settings_get(principal: Principal, a: dict) -> dict:
     }
 
 
-def _sticker_list(principal: Principal, a: dict) -> dict:
-    with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT content_hash, label, mime FROM stickers ORDER BY label"
-        ).fetchall()
-    return {"stickers": [dict(r) for r in rows]}
 
-
-def _sticker_add(principal: Principal, a: dict) -> dict:
-    import hashlib as _hl
-    from .. import config as _cfg
-    from datetime import datetime as _dt, timezone as _tz
-    label = str(a.get("label", "")).strip()
-    content_hash = str(a.get("content_hash", ""))
-    if not label:
-        raise Forbidden("sticker label required")
-    with db.formal() as conn:
-        exists_media = conn.execute(
-            "SELECT 1 FROM media_objects WHERE content_hash=?",
-            (content_hash,)).fetchone()
-        if not exists_media:
-            raise Forbidden("sticker must reference an uploaded media object")
-        conn.execute(
-            "INSERT OR REPLACE INTO stickers(content_hash, label, mime,"
-            " storage_key, created_at) VALUES(?,?,?,?,?)",
-            (content_hash, label,
-             conn.execute("SELECT mime FROM media_objects WHERE content_hash=?",
-                          (content_hash,)).fetchone()["mime"],
-             conn.execute("SELECT storage_key FROM media_objects WHERE"
-                          " content_hash=?", (content_hash,)).fetchone()["storage_key"],
-             _dt.now(_tz.utc).isoformat()))
-    return {"content_hash": content_hash, "label": label}
-
-
-def _sticker_search(principal: Principal, a: dict) -> dict:
-    q = str(a.get("query", ""))
-    with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT content_hash, label, mime FROM stickers ORDER BY label"
-        ).fetchall()
-    target = _st_tok(q)  # normalize_search_text 已是规范化字符串
-    hits = [dict(r) for r in rows if not q or target in _st_tok(r["label"])]
-    return {"stickers": hits}
 
 
 def _st_tok(text: str) -> str:
@@ -1477,19 +1130,7 @@ def _st_tok(text: str) -> str:
     return _pj.normalize_search_text(text)
 
 
-def _raw_import_prepare(principal: Principal, a: dict) -> dict:
-    return raw.import_prepare(principal.principal_id,
-                              str(a.get("source_channel", "")),
-                              str(a.get("external_id", "")),
-                              int(a.get("message_count", 0)))
 
-
-def _raw_import_status(principal: Principal, a: dict) -> dict:
-    return raw.import_status(str(a.get("job_id", "")))
-
-
-def _raw_read(principal: Principal, a: dict) -> dict:
-    return raw.read_message(str(a.get("message_id", "")))
 
 
 def _emotion_reserved(principal: Principal, a: dict) -> dict:
@@ -1505,6 +1146,12 @@ def _listening_reserved(principal: Principal, a: dict) -> dict:
 
 
 REGISTRY = _register()
+
+# 旧规格兼容层（plan.get 等薄实现）随 registry 一并装配——不依赖
+# app 导入（单元测试/工具直用 REGISTRY 时同样可用；register 内部
+# 幂等，app.py 的再次调用无害）
+from . import v1_compat as _v1_compat  # noqa: E402
+_v1_compat.register_v1_compat()
 
 
 def list_capabilities(principal: Principal) -> list[dict]:
