@@ -399,8 +399,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "end_message_id": {"type": "string", "minLength": 1},
             "start_char_offset": {"type": "integer", "minimum": 0},
             "end_char_offset": {"type": "integer", "minimum": 0},
+            # RA-026（2026-10-02 复审 P2）：与 service/DB CHECK 统一
+            # ——现行置信度为 exact/high/low（inferred 非现行值）
             "confidence": {"type": "string",
-                           "enum": ["exact", "inferred"]}},
+                           "enum": ["exact", "high", "low"]}},
     },
     "bootstrap.get": {
         # CB-045：与现行 handler/service 对齐——loaded_snapshot_id 是
