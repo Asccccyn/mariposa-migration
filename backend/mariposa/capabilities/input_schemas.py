@@ -220,7 +220,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "memory.update": {
         "type": "object",
-        "required": ["memory_id", "expected_version", "text"],
+        "required": ["memory_id", "expected_version"],
         "additionalProperties": False,
         "properties": {
             "memory_id": {"type": "string", "minLength": 1},
