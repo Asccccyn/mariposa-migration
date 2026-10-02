@@ -226,6 +226,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "memory_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 1},
             "text": {"type": "string", "minLength": 1},
+            "operation_id": {"type": "string"},
             "why_remember": {"anyOf": [{"type": "string"},
                                       {"type": "null"}]},
             "memory_date": {"anyOf": [{"type": "string"},
@@ -296,7 +297,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "plan_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 1},
-            "changes": {"type": "object"}},
+            "changes": {"type": "object"},
+            "operation_id": {"type": "string"}},
     },
     "plan.complete": {
         "type": "object", "required": ["plan_id", "expected_version"],
