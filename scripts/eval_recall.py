@@ -118,9 +118,13 @@ def main() -> int:
         print("empty dataset")
         return 1
 
+    # CB-056：隔离根先建库再 seed（此前未 migrate 即 seed/检索）
+    from mariposa import schema as _schema
+    _schema.migrate()
+    _schema.migrate_runtime()
     from mariposa.identity import service as identity
     identity.seed({"qiaosheng": "tok-q", "jiaming": "tok-j",
-                   "worker": "tok-w", "linshijian": "tok-l"})
+                   "worker": "tok-w"})  # CB-056：退役主体移除
     principal = identity.Principal("jiaming", "周", "agent", "cc", "b")
 
     runners = {"A": run_group_a, "B": run_group_b}
