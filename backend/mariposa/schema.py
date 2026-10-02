@@ -1361,6 +1361,21 @@ ALTER TABLE recall_round1_receipts
 CREATE UNIQUE INDEX idx_recall_rounds_raw_per_burst
   ON recall_rounds(session_id, burst_no) WHERE kind='raw';
 """),
+    (10, """
+-- ===== CB-011（2026-10-02 审计 P1）：raw 深搜跨进程租约 =====
+-- 进程锁只护单进程；跨进程并发 Round2 此前都执行 Raw/Jev 昂贵调用、
+-- 输家在最终事务才失败（调用已花两次）。租约在昂贵调用前建立
+-- (session, revision, burst) 互斥，TTL 过期可抢占（异常退出的持有者
+-- 不永久阻塞）；commit-at-end 与 raw-per-burst 唯一索引保留兜底。
+CREATE TABLE recall_raw_leases(
+  session_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  burst_no INTEGER NOT NULL,
+  lease_token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, revision, burst_no)
+);
+"""),
 ]
 
 
