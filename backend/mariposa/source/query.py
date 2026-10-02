@@ -371,37 +371,66 @@ def get_conversation(conversation_id: str, after_seq=None,
                            conversation_id=conversation_id)
         pub = " AND published=1"
         if around_seq is not None:
-            # CB-020（2026-10-02 审计 P2）：around 窗口总条数硬约束 ≤
-            # limit——exact 组（同 sequence 多行）此前无 LIMIT，可随
-            # 合法增量导入增长突破请求页大小（审计反例 limit=1 返 7
-            # 条）。两侧 half+1 探测 has_more；exact 用剩余槽位，被截
-            # 断时续页经复合游标可达。
-            half = limit // 2
-            before_rows = conn.execute(
-                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence<?{pub} ORDER BY sequence DESC, id DESC"
-                " LIMIT ?",
-                (conv["id"], int(around_seq), half + 1)).fetchall()
-            more_before = len(before_rows) > half
-            before_rows = before_rows[:half]
-            after = conn.execute(
-                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence>?{pub} ORDER BY sequence ASC, id ASC LIMIT ?",
-                (conv["id"], int(around_seq), half + 1)).fetchall()
-            more_after = len(after) > half
-            after = after[:half]
-            room = max(1, limit - len(before_rows) - len(after))
-            exact = conn.execute(
-                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence=?{pub} ORDER BY id LIMIT ?",
-                (conv["id"], int(around_seq), room)).fetchall()
-            exact_total = conn.execute(
-                "SELECT COUNT(*) AS c FROM source_messages WHERE"
-                f" conversation_id=? AND sequence=?{pub}",
-                (conv["id"], int(around_seq))).fetchone()["c"]
-            msgs = list(reversed(before_rows)) + list(exact) + list(after)
-            has_more = (more_before or more_after
-                        or exact_total > len(exact))
+            # CB-020 + RA-022（2026-10-02 复审 P2）：窗口在复合顺序
+            # (sequence, id) 上**连续**且有界——整体按 DESC 复合序取
+            # limit 条（含 exact 组全部成员的连续窗），再对窗口首条
+            # 判 has_more_before（窗口外更早侧）、尾条判 has_more_after；
+            # 两侧游标都指向窗口边缘，被跨过的中间成员可续取。
+            anchor_rows = conn.execute(
+                f"SELECT {_COLS} FROM source_messages WHERE"
+                f" conversation_id=? AND sequence=?{pub} ORDER BY id",
+                (conv["id"], int(around_seq))).fetchall()
+            if not anchor_rows:
+                # 无精确命中：退化为双侧各 half 的传统窗口
+                half = limit // 2
+                before_rows = conn.execute(
+                    f"SELECT {_COLS} FROM source_messages WHERE"
+                    f" conversation_id=? AND sequence<?{pub}"
+                    " ORDER BY sequence DESC, id DESC LIMIT ?",
+                    (conv["id"], int(around_seq), half)).fetchall()
+                after = conn.execute(
+                    f"SELECT {_COLS} FROM source_messages WHERE"
+                    f" conversation_id=? AND sequence>?{pub}"
+                    " ORDER BY sequence ASC, id ASC LIMIT ?",
+                    (conv["id"], int(around_seq), half)).fetchall()
+                first = (before_rows[-1] if before_rows else
+                         (after[0] if after else None))
+                last = (after[-1] if after else
+                        (before_rows[0] if before_rows else None))
+                msgs = list(reversed(before_rows)) + list(after)
+                has_more = len(msgs) >= limit
+            else:
+                first_anchor = anchor_rows[0]
+                # 以 exact 组为中心的连续窗：含组全体 + 复合序两侧补满
+                rows_desc = conn.execute(
+                    f"SELECT {_COLS} FROM source_messages WHERE"
+                    f" conversation_id=?{pub} AND (sequence<? OR"
+                    f" (sequence=? AND id<=?))"
+                    " ORDER BY sequence DESC, id DESC LIMIT ?",
+                    (conv["id"], int(around_seq), int(around_seq),
+                     first_anchor["id"], limit)).fetchall()
+                msgs = list(reversed(rows_desc))
+                first = msgs[0] if msgs else None
+                last = msgs[-1] if msgs else None
+                has_more = False
+
+            def _more_outside(row, later_side: bool) -> bool:
+                if row is None:
+                    return False
+                op = ">" if later_side else "<"
+                r = conn.execute(
+                    f"SELECT 1 FROM source_messages WHERE"
+                    f" conversation_id=?{pub} AND (sequence{op}? OR"
+                    f" (sequence=? AND id{op}?)) LIMIT 1",
+                    (conv["id"], row["sequence"], row["sequence"],
+                     row["id"])).fetchone()
+                return r is not None
+            more_before = _more_outside(first, False)
+            more_after = _more_outside(last, True)
+            if has_more is False:
+                has_more = more_before or more_after
+            else:
+                has_more = True
         elif before_cur is not None:
             if before_cur[0] == "cmp":
                 cond = " AND (sequence<? OR (sequence=? AND id<?))"

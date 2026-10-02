@@ -121,60 +121,66 @@ def upload_finalize(principal_id: str, token: str) -> dict:
     key = f"{content_hash}{_ext_for(meta['mime'])}"
 
     with db.formal() as conn:
-        existing = conn.execute(
-            "SELECT content_hash, storage_key, mime, size FROM"
-            " media_objects WHERE content_hash=?",
-            (content_hash,)).fetchone()
-        if existing is not None:
-            # CB-019（2026-10-02 审计 P2）：同 hash 异 MIME 重传——
-            # canonical 路径以 DB 行为准（首见身份），不按本次 MIME
-            # 另写一个无 DB 引用的 object；自愈修复的也是行所指文件
-            #（此前修的是新扩展名文件，DB 仍指向损坏的旧文件）。
-            # 返回 mime 用行上首见值，扩展名身份不漂移。
-            key = existing["storage_key"]
-        path = obj_dir / key
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # RA-028（2026-10-02 复审 P2）：hash 身份在写锁内原子认领
+            # ——并发首次同 hash 双方此前都在锁外读到 existing=None，
+            # 各自"新建"并留下无引用 object；锁内认领后输家重读胜者
+            # canonical 行并以其为准
+            existing = conn.execute(
+                "SELECT content_hash, storage_key, mime, size FROM"
+                " media_objects WHERE content_hash=?",
+                (content_hash,)).fetchone()
+            if existing is not None:
+                # CB-019（2026-10-02 审计 P2）：同 hash 异 MIME 重传——
+                # canonical 路径以 DB 行为准（首见身份），不按本次 MIME
+                # 另写一个无 DB 引用的 object；自愈修复的也是行所指
+                # 文件。返回 mime 用行上首见值，扩展名身份不漂移。
+                key = existing["storage_key"]
+            path = obj_dir / key
 
-        def _publish() -> None:
-            """P1-07 复审：原子发布——临时文件 + 回读校验 + os.replace。
-            直接 write_bytes 留下的半截文件会被后续 exists() 信任（crash
-            window）；已存在的 object 同样必须通过 size/hash 验证，不符
-            则原子重写。"""
-            if path.exists():
-                try:
-                    if (path.stat().st_size == len(data)
-                            and hashlib.sha256(
-                                path.read_bytes()).hexdigest() == content_hash):
-                        return  # 完整复用
-                except OSError:
-                    pass
-            tmp = obj_dir / f".{key}.tmp-{uuid.uuid4().hex[:8]}"
-            tmp.write_bytes(data)
-            if (tmp.stat().st_size != len(data)
-                    or hashlib.sha256(tmp.read_bytes()).hexdigest()
-                    != content_hash):
-                tmp.unlink(missing_ok=True)
-                raise Forbidden("object write failed verification",
-                                code="MEDIA_WRITE_UNVERIFIED")
-            os.replace(tmp, path)
+            def _publish() -> None:
+                """P1-07 复审：原子发布——临时文件 + 回读校验 +
+                os.replace。直接 write_bytes 留下的半截文件会被后续
+                exists() 信任（crash window）；已存在的 object 同样
+                必须通过 size/hash 验证，不符则原子重写。"""
+                if path.exists():
+                    try:
+                        if (path.stat().st_size == len(data)
+                                and hashlib.sha256(
+                                    path.read_bytes()).hexdigest()
+                                == content_hash):
+                            return  # 完整复用
+                    except OSError:
+                        pass
+                tmp = obj_dir / f".{key}.tmp-{uuid.uuid4().hex[:8]}"
+                tmp.write_bytes(data)
+                if (tmp.stat().st_size != len(data)
+                        or hashlib.sha256(tmp.read_bytes()).hexdigest()
+                        != content_hash):
+                    tmp.unlink(missing_ok=True)
+                    raise Forbidden("object write failed verification",
+                                    code="MEDIA_WRITE_UNVERIFIED")
+                os.replace(tmp, path)
 
-        # 复审（2026-10-01）：已有 DB 行也必须验证磁盘 object——损坏
-        # （半截/被改）则用本次 staging 内容原子修复；deduplicated=True
-        # 不等于文件健康
-        _publish()
-        if existing is None:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
+            # 复审（2026-10-01）：已有 DB 行也必须验证磁盘 object——
+            # 损坏（半截/被改）则用本次 staging 内容原子修复；
+            # deduplicated=True 不等于文件健康
+            _publish()
+            if existing is None:
                 conn.execute(
-                    "INSERT OR IGNORE INTO media_objects(content_hash, mime, size,"
-                    " storage_key, owned_by, created_at) VALUES(?,?,?,?,?,?)",
-                    (content_hash, meta["mime"], len(data), key, principal_id, _now()))
+                    "INSERT OR IGNORE INTO media_objects(content_hash, mime,"
+                    " size, storage_key, owned_by, created_at)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (content_hash, meta["mime"], len(data), key,
+                     principal_id, _now()))
                 audit.record(conn, "media.stored", principal_id,
                              resource_id=content_hash[:16],
                              payload={"mime": meta["mime"], "size": len(data)})
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     _drop_token(token, meta)
     return {"content_hash": content_hash,
             "mime": existing["mime"] if existing is not None
