@@ -160,15 +160,6 @@ def _register_thin() -> int:
 
 
 
-    def _deletion_get(p, a):
-        from ..deletion import service as deletion
-        rid = str(a.get("request_id", ""))
-        for r in deletion.deletion_list():
-            if r["id"] == rid:
-                return r
-        raise NotFound("deletion request not found", request_id=rid)
-
-    add("memory.deletion.get", _deletion_get)
 
     # v1.7：遗忘提案兼容层（workspace.proposals.get/withdraw 与
     # memory.forgetting.*）已随遗忘链整体退役，不再注册。
@@ -176,13 +167,6 @@ def _register_thin() -> int:
 
 
 
-    def _deletion_restore(p, a):
-        """撤销/恢复删除申请的 pending（语义=撤回；旧系统 restore 未核验到独立端点）。"""
-        from ..deletion import service as deletion
-        return deletion.deletion_withdraw(p.principal_id,
-                                         str(a.get("resource_id", "")))
-
-    add("memory.deletion.restore", _deletion_restore, write=True)
 
 
 

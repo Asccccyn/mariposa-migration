@@ -69,7 +69,8 @@ class TestF38ApproveRejectConcurrency:
             try:
                 results[name] = deletion.deletion_decide(
                     actors["jiaming"].principal_id,
-                    req["request_id"], decision)
+                    req["request_id"], decision,
+                    rejection_reason="并发测试拒绝")
             except Exception as e:  # noqa: BLE001
                 errors[name] = e
 
@@ -84,14 +85,13 @@ class TestF38ApproveRejectConcurrency:
         # 失败方可能落入两种结构化拒绝之一：CAS 冲突（事务内）或
         # 入口发现已非 pending（事务外读取时决定已落定）。
         assert isinstance(loser_err, (AlreadyDecided, NotFound)), loser_err
-        winner = results.popitem()[1]
-        # 状态与副作用一致：唯一落定的决定决定 memory 去留
+        # 状态与副作用一致：唯一落定方决定 memory 去留
+        #（v2.0：decide 返回申请行，winner 身份不再从返回值判）
         with db.formal() as conn:
             status = conn.execute(
-                "SELECT status FROM deletion_requests WHERE id=?",
+                "SELECT status FROM deletion_requests WHERE request_id=?",
                 (req["request_id"],)).fetchone()["status"]
-        if winner["decision"] == "approve":
-            assert status == "approved"
+        if status == "approved":
             assert not memory_exists(mid), "approved 但物理删除未发生"
         else:
             assert status == "rejected"
@@ -102,12 +102,13 @@ class TestF38ApproveRejectConcurrency:
         mid = out["memory_id"]
         req = submit_delete(actors, mid)
         deletion.deletion_decide(actors["jiaming"].principal_id,
-                                    req["request_id"],
-                                "reject")
-        with pytest.raises(NotFound):
+                                 req["request_id"], "reject",
+                                 rejection_reason="不再处理")
+        # v2.0：已决定的申请再决定=AlreadyDecided（原 NotFound 断言随
+        # 申请行永久保留而更新）
+        with pytest.raises(AlreadyDecided):
             deletion.deletion_decide(actors["jiaming"].principal_id,
-                                    req["request_id"],
-                                    "approve")
+                                     req["request_id"], "approve")
 
     def test_approve_deletes_unreferenced_memory(self, actors):
         out = hold_v2(actors, "无引用可正常删除的正文")
@@ -145,7 +146,7 @@ class TestF34ReferentialIntegrity:
                 "SELECT COUNT(*) AS c FROM i_revision_memory_relations"
                 " WHERE memory_id=?", (mid,)).fetchone()["c"]
             status = conn.execute(
-                "SELECT status FROM deletion_requests WHERE id=?",
+                "SELECT status FROM deletion_requests WHERE request_id=?",
                 (req["request_id"],)).fetchone()["status"]
         assert n == 1, "I revision 关系被误删"
         assert status == "pending"
@@ -234,21 +235,18 @@ class TestF34ReferentialIntegrity:
         assert refs.get("source_bindings") == 1
         assert memory_exists(mid)
 
-    def test_archive_action_unaffected_by_references(self, actors):
-        """archive 不受引用阻止（正文保留，只是归档不可见）。"""
-        out = hold_v2(actors, "归档路径的正文")
+    def test_archive_retired_from_flow(self, actors):
+        """v2.0 P-A01：archive 分支退役——approve 一律真删除路径，
+        有关系时结构化拒绝（提示指向纠错，不再建议 archive）。"""
+        out = hold_v2(actors, "归档退役场景")
         mid = out["memory_id"]
-        i_service.item_create(
-            "jiaming", "归档引用 I",
-            relations=[{"memory_id": mid, "relation_type": "related"}])
-        req = deletion.deletion_submit(actors["qiaosheng"].principal_id, mid,
-                                      "审计测试归档", action="archive")
-        res = deletion.deletion_decide(actors["jiaming"].principal_id,
-                                      req["request_id"], "approve")
-        assert res["status"] == "approved"
-        assert memory_exists(mid)
-        with db.formal() as conn:
-            vis = conn.execute(
-                "SELECT visibility FROM memories WHERE memory_id=?",
-                (mid,)).fetchone()["visibility"]
-        assert vis == "archived"
+        from mariposa.memory import relations as rel
+        other = hold_v2(actors, "另一桶")
+        rel.link("jiaming", mid, other["memory_id"], "related_to")
+        req = submit_delete(actors, mid)
+        with pytest.raises(DeleteBlocked) as ei:
+            deletion.deletion_decide(actors["jiaming"].principal_id,
+                                     req["request_id"], "approve")
+        assert "archive" not in str(ei.value)
+        assert deletion.deletion_get(req["request_id"])["status"] == "pending"
+

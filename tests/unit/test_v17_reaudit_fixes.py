@@ -97,48 +97,22 @@ class TestN02LegacySummaryRebuild:
 
 
 class TestN12SupersededConcurrentLoser:
-    def test_superseded_branch_cas_loser_is_structured(self, actors,
-                                                       monkeypatch):
-        """目标不活跃触发 superseded 分支时 CAS 输家必须得到
-        AlreadyDecided（409），不得被二次 ROLLBACK 的 OperationalError
-        掩盖。直接驱动 CAS 输家分支。"""
-        out = hold_v2(actors["jiaming"], "superseded CAS 场景正文")
-        mid = out["memory_id"]
+    def test_superseded_branch_cas_loser_is_structured(self, actors):
+        """v2.0：superseded 由直删/另路删除触发（archive 已退役）；
+        换路径重试旧 decide = AlreadyDecided（结构化）。"""
+        mid = hold_v2(actors["jiaming"], "N12 正文")["memory_id"]
         req = deletion.deletion_submit(
-            actors["qiaosheng"].principal_id, mid, "N12 测试")
-        # 目标转不活跃（归档可见性），使 decide 走 superseded 分支
-        with db.formal() as conn:
-            conn.execute(
-                "UPDATE memories SET visibility='archived'"
-                " WHERE memory_id=?", (mid,))
-        # 让 UPDATE 的 rowcount 归零：请求已在另一并发决定中离开 pending
-        with db.formal() as conn:
-            conn.execute(
-                "UPDATE deletion_requests SET status='approved'"
-                " WHERE id=?", (req["request_id"],))
-        # 入口预检查（status != pending）会先挡下；绕过预检查直驱
-        # superseded CAS：手工构造 row dict（decide 前置读取的结果）
-        from mariposa.deletion import service as ls
-        with db.formal() as conn:
-            row = conn.execute(
-                "SELECT * FROM deletion_requests WHERE id=?",
-                (req["request_id"],)).fetchone()
-        fake_row = dict(row)
-        fake_row["status"] = "pending"  # 迟到者读到的旧快照
-        # 直接调用内部逻辑等价路径：手工执行 superseded CAS 输家分支
-        with pytest.raises((AlreadyDecided, NotFound, Forbidden)):
-            ls.deletion_decide(actors["jiaming"].principal_id,
-                               req["request_id"], "approve")
-        # 关键断言：不得出现 OperationalError（sqlite3 异常）
-        with db.formal() as conn:
-            status = conn.execute(
-                "SELECT status FROM deletion_requests WHERE id=?",
-                (req["request_id"],)).fetchone()["status"]
-        assert status == "approved", "输家不得改写赢家的终态"
-
-
-class TestSourceBatch4:
-    """N09 hash 同构 / N10 跨会话归属 / 失败清场边界 / mismatch 计数。"""
+            actors["qiaosheng"].principal_id, mid, "N12 测试",
+            operation_key="n12-k")
+        # 另一条合法路径先删除目标 → pending 置 superseded
+        deletion.direct_delete("jiaming", mid)
+        assert deletion.deletion_get(req["request_id"])["status"] == \
+            "superseded"
+        with pytest.raises(AlreadyDecided) as ei:
+            deletion.deletion_decide(
+                actors["jiaming"].principal_id, req["request_id"],
+                "approve")
+        assert ei.value.detail.get("status") == "superseded"
 
     def _tmp(self, tmp_path):
         import json as _json

@@ -221,7 +221,7 @@ class TestF07StaleReplay:
         assert any(c.get("memory_id") == mid for c in packet["candidates"])
         with db.formal() as conn:
             conn.execute(
-                "UPDATE memories SET visibility='archived'"
+                "UPDATE memories SET visibility='hidden'"
                 " WHERE memory_id=?", (mid,))
         replay, _ = start_op(actors, ["石楠花"], "op-arch-1")
         assert all(c.get("memory_id") != mid
