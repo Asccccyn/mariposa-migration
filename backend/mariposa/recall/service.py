@@ -542,6 +542,12 @@ def _run_round_compute(session: dict, plan: dict,
         jv, cv = i.candidate_version, c.get("content_version")
         if jv and cv and str(jv) != str(cv):
             return False
+        # RA-003（2026-10-02 复审 P1）：非法分值（NaN/inf/bool/越界）
+        # 不是有效判断——与 selection._valid_signal 同一口径，receipt
+        # 不再为 NaN 结果签完成证明
+        from ..retrieval.selection import _valid_signal
+        if not _valid_signal(getattr(i, "relevance_signal", None)):
+            return False
         return True
 
     judged_n = sum(1 for i in judge_items if _valid_judge_item(i))
@@ -1700,6 +1706,18 @@ def _acquire_raw_lease(sid: str, revision: int, burst: int) -> str | None:
             raise
 
 
+def _raw_lease_owned(sid: str, revision: int, burst: int,
+                     token: str) -> bool:
+    """RA-002（2026-10-02 复审 P1）：租约归属检查——TTL 过期被接管后，
+    原持有者不得继续外发或提交（fencing）。"""
+    with db.recall_runtime() as conn:
+        row = conn.execute(
+            "SELECT lease_token FROM recall_raw_leases WHERE"
+            " session_id=? AND revision=? AND burst_no=?",
+            (sid, revision, burst)).fetchone()
+    return row is not None and row["lease_token"] == token
+
+
 def _release_raw_lease(sid: str, revision: int, burst: int,
                        token: str) -> None:
     with db.recall_runtime() as conn:
@@ -1751,14 +1769,26 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     sid0 = str(a.get("session_id", ""))
     session0 = store.expire_if_due(store.require_session(sid0))
     if not str(a.get("continuation_token") or "").strip():
-        with _raw_round_exclusive(sid0, session0["current_revision"],
-                                  session0["current_burst"]):
-            return _round2_body(principal, a, op_ctx)
+        token = _acquire_raw_lease(
+            sid0, session0["current_revision"],
+            session0["current_burst"])
+        if token is None:
+            raise Forbidden(
+                "另一进程正在执行本 (session, revision, burst) 的"
+                " Raw 深搜；昂贵调用不重复执行",
+                code="RAW_ROUND_IN_PROGRESS", session_id=sid0)
+        try:
+            return _round2_body(principal, a, op_ctx, lease_token=token)
+        finally:
+            _release_raw_lease(sid0, session0["current_revision"],
+                               session0["current_burst"], token)
     return _round2_body(principal, a, op_ctx)
 
 
-def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
-    """round2 主体（首轮由 round2 的租约互斥包装调用）。"""
+def _round2_body(principal, a: dict, op_ctx: dict | None = None,
+                 lease_token: str | None = None) -> dict:
+    """round2 主体（首轮由 round2 的租约互斥包装调用，携带 fencing
+    token——TTL 被接管后原持有者不得外发/提交，RA-002）。"""
     from .. import db as _db
     from . import pipeline as _pl
     from ..errors import Forbidden as _F, StaleOperation
@@ -1810,6 +1840,13 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
     raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
     raw_out = _pl.raw_deep_search(
         principal, plan, limit=raw_limit, offset=offset)
+    # RA-002：昂贵调用后、Jev 外发前校验租约归属——TTL 过期被接管的
+    # 原持有者在此中止（接管者已获得新租约）
+    if lease_token is not None and not _raw_lease_owned(
+            sid, session["current_revision"],
+            session["current_burst"], lease_token):
+        raise _F("Raw 租约已被接管（TTL 过期）；本执行者放弃外发与提交",
+                 code="RAW_LEASE_LOST", session_id=sid)
     raw_cards = []
     for h in raw_out.get("hits", []):
         raw_cards.append({
@@ -1850,18 +1887,23 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
         # 两个相同 ref 仍 coverage=evaluated 且交付）
         _r2_sent = {c.get("candidate_ref") or c["resource_ref"]
                     for c in judge_candidates}
-        by_ref: dict = {}
+        _r2_seen: set = set()
         _r2_dropped = 0
         for i in judge_result.items:
-            if i.candidate_ref in by_ref or i.candidate_ref not in _r2_sent:
+            if i.candidate_ref in _r2_seen or i.candidate_ref not in _r2_sent:
                 _r2_dropped += 1
                 continue
-            by_ref[i.candidate_ref] = i
-        for c in judge_candidates:
-            ji = by_ref.get(c.get("candidate_ref")
-                            or c["resource_ref"])
-            if ji:
-                c["judge"] = ji.to_dict()
+            _r2_seen.add(i.candidate_ref)
+        # RA-003：基数违例使整批判断无效——不保留首项附着（此前首项
+        # 仍挂卡上被 selection 放行交付正文）；无 judge 的卡过不了
+        # S10 硬门，fail closed
+        if not _r2_dropped:
+            by_ref = {i.candidate_ref: i for i in judge_result.items}
+            for c in judge_candidates:
+                ji = by_ref.get(c.get("candidate_ref")
+                                or c["resource_ref"])
+                if ji:
+                    c["judge"] = ji.to_dict()
         coverage["judge"] = ("unavailable" if _r2_dropped
                              else judge_result.provider_status)
         if judge_result.degraded_reason:
@@ -1900,6 +1942,17 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
             # 整体回滚，不把旧 revision 的结果挂上已前进的 session
             _revalidate_session_in_tx(conn, sid,
                                       session["current_revision"], "refine")
+            # RA-002：提交事务内 fencing——失去租约所有权的执行者不得
+            # 成为提交赢家（与接管者竞争时输家在此回滚）
+            if lease_token is not None:
+                owned = conn.execute(
+                    "SELECT lease_token FROM recall_raw_leases WHERE"
+                    " session_id=? AND revision=? AND burst_no=?",
+                    (sid, session["current_revision"],
+                     session["current_burst"])).fetchone()
+                if owned is None or owned["lease_token"] != lease_token:
+                    raise _F("Raw 租约已被接管；本执行者拒绝提交",
+                             code="RAW_LEASE_LOST", session_id=sid)
             # 游标先行：翻尽清除、未翻尽签发/重签（单活跃），packet 的
             # continuation 在 operation 行落库前定型。自审（2026-10-01）：
             # 翻页签发走 CAS——校验与最终事务之间无锁，并发双花恰一
