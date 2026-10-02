@@ -199,12 +199,17 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "memory.our_words.source.correct": {
         "type": "object",
-        "required": ["word_id", "correction_action", "operation_id"],
+        "required": ["word_id", "correction_action", "operation_id",
+                     "expected_source_version"],
         "additionalProperties": False,
         "properties": {
             "word_id": {"type": "string", "minLength": 1},
             "expected_source_ref": {"anyOf": [{"type": "string"},
                                               {"type": "null"}]},
+            # CB-007：word 来源换代计数进入 CAS——仅比 source_ref 无法
+            # 识别 A→(撤销)→A 的实例换代，旧请求会删掉新绑定
+            "expected_source_version": {"type": "integer",
+                                        "minimum": 0},
             "correction_action": {"type": "string",
                 "enum": ["remove_wrong_binding",
                          "replace_wrong_binding"]},
