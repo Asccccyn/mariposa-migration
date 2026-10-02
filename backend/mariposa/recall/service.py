@@ -1635,7 +1635,10 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "conflicts": sel["conflicts"],
         "degraded_reasons": sorted(set(degraded)),
         "continuation": None,  # 事务内签发（三轮复审#2：服务端游标）
-        "budget": budget.snapshot(session),
+        # 全量审计 P2-03：首页按"本轮已成功"预览（与 Round1 同口径，
+        # 不再少算一轮）；翻页不消耗轮次，用当前快照
+        "budget": budget.snapshot(
+            _with_round_preview(session) if not cont_token else session),
         "token_count": config.RECALL_TOKENIZER,
     }
     packet = _enforce_output_budget(packet)

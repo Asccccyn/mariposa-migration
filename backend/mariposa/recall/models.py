@@ -116,6 +116,14 @@ def _validate_constraints(plan: dict, channel: str,
                                     code="INVALID_ARGUMENT")
                 for item in v:
                     _check_date_range(item, k)
+                    # 全量审计 P2-02：负向区间必须含 from——检索层此前
+                    # 只执行带 from 的区间，{to:...} 被静默吃掉；显式
+                    # 拒绝，不一边接受一边不执行
+                    if not item.get("from"):
+                        raise Forbidden(
+                            f"{k} 每个区间必须含 from（open-left 负向"
+                            "区间未实现，不静默忽略）",
+                            code="INVALID_ARGUMENT")
             else:
                 _check_date_range(v, k)
         if k == "speaker" and (not isinstance(v, str)

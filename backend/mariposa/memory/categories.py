@@ -24,6 +24,7 @@ LABELS = {
     "plan": "plan",
     "sex": "做爱",
     "anniversary": "纪念",
+    "reloplay": "重演",
 }
 
 #: 自然日周期；None = 永久（不自动遗忘）。plan 无独立期限（plan_managed）。
