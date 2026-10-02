@@ -193,6 +193,11 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         sql += " WHERE " + " AND ".join(where) + \
             " ORDER BY m.memory_date DESC, w.word_id LIMIT ?"
     rows = conn.execute(sql, params + [limit + 1]).fetchall()
+    # CB-013（2026-10-02 审计 P1）：limit+1 探测出的越界行表达
+    # has_more——此前直接丢弃并把 coverage 恒签 complete_within_scope，
+    # 截断浏览窗口冒充当前 scope 完成（可提前升级 Raw 并漏掉后部
+    # 已有逐字证据）。与 event 通道一致标 partial_topk_window。
+    has_more = len(rows) > limit
 
     hits = []
     for r in rows[:limit]:
@@ -224,7 +229,9 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         " 'forgotten_summary'").fetchone()["n"]
     return {
         "hits": hits,
-        "coverage": "complete_within_scope",
+        "coverage": ("partial_topk_window" if has_more
+                     else "complete_within_scope"),
+        "has_more": has_more,
         "forgotten_words_count": forgotten,
         "forgotten_recall": config.WORDS_FORGOTTEN_RECALL,
         "forgotten_decision_state": config.WORDS_FORGOTTEN_DECISION_STATE,
