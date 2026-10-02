@@ -107,7 +107,11 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
 
 
 def jobs_status() -> dict:
-    """维护任务状态总览：outbox 待处理、租约、导入任务。"""
+    """维护任务状态总览：outbox 待处理、导入任务。
+
+    CB-051（2026-10-02 审计 P2）：Workspace Tasks/Lease 已退役——
+    不再查询已删除的 workspace_task_leases/work_items（此前该状态页
+    在 fresh schema 上直接 no such table 崩溃）。"""
     with db.formal() as conn:
         pending = conn.execute(
             "SELECT COUNT(*) AS c FROM events_outbox WHERE processed=0"
@@ -115,15 +119,7 @@ def jobs_status() -> dict:
         imports = conn.execute(
             "SELECT status, COUNT(*) AS c FROM import_jobs GROUP BY status"
         ).fetchall()
-    with db.workspace() as wconn:
-        leases = wconn.execute(
-            "SELECT COUNT(*) AS c FROM workspace_task_leases WHERE released=0"
-            " AND expires_at>?", (_now(),)).fetchone()["c"]
-        open_items = wconn.execute(
-            "SELECT COUNT(*) AS c FROM work_items WHERE state IN"
-            " ('draft','submitted','deferred')").fetchone()["c"]
-    return {"outbox_pending": pending, "active_leases": leases,
-            "open_work_items": open_items,
+    return {"outbox_pending": pending,
             "import_jobs": {r["status"]: r["c"] for r in imports}}
 
 

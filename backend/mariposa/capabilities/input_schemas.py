@@ -197,6 +197,192 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "note": {"type": "string"},
             "operation_id": {"type": "string", "minLength": 1}},
     },
+    # ===== CB-050（2026-10-02 审计 P2）：全部无 schema 的 write 能力
+    # 补齐严格入参合同——错误布尔/类型形状在公开边界拒绝，不再被
+    # handler 的 bool()/int() 强转静默改写正式标记 =====
+    "memory.pin": {
+        "type": "object", "required": ["memory_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                       "value": {"type": "boolean"}},
+    },
+    "memory.protect": {
+        "type": "object", "required": ["memory_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                       "value": {"type": "boolean"}},
+    },
+    "memory.anchor": {
+        "type": "object", "required": ["memory_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                       "value": {"type": "boolean"}},
+    },
+    "memory.update": {
+        "type": "object",
+        "required": ["memory_id", "expected_version", "text"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1},
+            "text": {"type": "string", "minLength": 1},
+            "why_remember": {"anyOf": [{"type": "string"},
+                                      {"type": "null"}]},
+            "memory_date": {"anyOf": [{"type": "string"},
+                                     {"type": "null"}]},
+            "date_confidence": {"type": "string",
+                                "enum": ["exact", "inferred",
+                                         "unknown"]}},
+    },
+    "memory.tags.add": {
+        "type": "object", "required": ["memory_id", "tags"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "tags": {"type": "array", "minItems": 1, "maxItems": 20,
+                     "items": {"type": "string", "minLength": 1}}},
+    },
+    "memory.keep.revoke": {
+        "type": "object", "required": ["mark_id"],
+        "additionalProperties": False,
+        "properties": {"mark_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.relations.link": {
+        "type": "object",
+        "required": ["from_memory", "to_memory", "relation_type"],
+        "additionalProperties": False,
+        "properties": {
+            "from_memory": {"type": "string", "minLength": 1},
+            "to_memory": {"type": "string", "minLength": 1},
+            "relation_type": {"type": "string",
+                              "enum": ["continuation_of", "related_to",
+                                       "contradicts", "custom"]},
+            "custom_label": {"type": "string"},
+            "reverse_label": {"type": "string"}},
+    },
+    "memory.reengagement.record": {
+        "type": "object",
+        "required": ["memory_id", "evidence_kind", "occurred_at"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "evidence_kind": {"type": "string", "minLength": 1},
+            "occurred_at": {"type": "string", "minLength": 1},
+            "evidence_ref": {"anyOf": [{"type": "string"},
+                                      {"type": "null"}]}},
+    },
+    "plan.create": {
+        "type": "object", "required": ["title"],
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "content": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "state": {"type": "string",
+                      "enum": ["planned", "active", "waiting", "blocked",
+                               "done", "cancelled"]},
+            "starts_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "due_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "date_start": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "date_end": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "weight": {"type": "integer"},
+            "link_memory_ids": {"type": "array",
+                                "items": {"type": "string",
+                                          "minLength": 1}}},
+    },
+    "plan.update": {
+        "type": "object",
+        "required": ["plan_id", "expected_version"],
+        "additionalProperties": False,
+        "properties": {
+            "plan_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1},
+            "changes": {"type": "object"}},
+    },
+    "plan.complete": {
+        "type": "object", "required": ["plan_id", "expected_version"],
+        "additionalProperties": False,
+        "properties": {
+            "plan_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1}},
+    },
+    "plan.cancel": {
+        "type": "object", "required": ["plan_id", "expected_version"],
+        "additionalProperties": False,
+        "properties": {
+            "plan_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1}},
+    },
+    "handoff.write": {
+        "type": "object", "required": ["content"],
+        "additionalProperties": False,
+        "properties": {
+            "content": {"type": "string", "minLength": 1},
+            "topic": {"type": "string"}},
+    },
+    "presence.touch": {
+        "type": "object", "additionalProperties": False,
+        "properties": {},
+    },
+    "presence.handoff.write": {
+        "type": "object", "required": ["content"],
+        "additionalProperties": False,
+        "properties": {"content": {"type": "string", "minLength": 1}},
+    },
+    "identity.bindings.revoke": {
+        "type": "object", "required": ["binding_id"],
+        "additionalProperties": False,
+        "properties": {"binding_id": {"type": "string", "minLength": 1}},
+    },
+    "maintenance.rebuild_index": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string"}},
+    },
+    "maintenance.semantic.warmup": {
+        "type": "object", "additionalProperties": False,
+        "properties": {},
+    },
+    "maintenance.outbox.drain": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"limit": {"type": "integer", "minimum": 1,
+                                 "maximum": 1000}},
+    },
+    "maintenance.source.cleanup": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"max_age_hours": {"type": "integer", "minimum": 1,
+                                         "maximum": 24 * 30}},
+    },
+    "maintenance.idempotency.reconcile": {
+        "type": "object",
+        "required": ["capability", "idempotency_key"],
+        "additionalProperties": False,
+        "properties": {
+            "capability": {"type": "string", "minLength": 1},
+            "idempotency_key": {"type": "string", "minLength": 1},
+            "record_principal": {"type": "string"},
+            "stale_seconds": {"type": "integer", "minimum": 1}},
+    },
+    "source.import": {
+        "type": "object", "required": ["path"],
+        "additionalProperties": False,
+        "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "filename": {"type": "string"}},
+    },
+    "source.binding.bind": {
+        "type": "object",
+        "required": ["memory_id", "conversation_id", "start_message_id",
+                     "end_message_id"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "conversation_id": {"type": "string", "minLength": 1},
+            "start_message_id": {"type": "string", "minLength": 1},
+            "end_message_id": {"type": "string", "minLength": 1},
+            "start_char_offset": {"type": "integer", "minimum": 0},
+            "end_char_offset": {"type": "integer", "minimum": 0},
+            "confidence": {"type": "string",
+                           "enum": ["exact", "inferred"]}},
+    },
     "bootstrap.get": {
         # CB-045：与现行 handler/service 对齐——loaded_snapshot_id 是
         # 去重快照参数（v1 pack schema 缺此字段致公开路径被拒）
@@ -300,8 +486,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                  "enum": ["exact", "inferred", "unknown"]},
             "occurred_start": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "occurred_end": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "raw_refs": {"type": "array"},
-            "raw_pending": {"type": "boolean"},
+                        "raw_pending": {"type": "boolean"},
             "original_title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "categories": {"type": "array", "items": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan", "sex",
