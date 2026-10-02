@@ -122,7 +122,7 @@ class TestSourceRangeFullIdentity:
         bd_a = binding.bind("jiaming", a, conv, m1, m1,
                             start_char_offset=0, end_char_offset=4)
         bd_b = binding.bind("jiaming", b, conv, m1, m1,
-                            start_char_offset=10, end_char_offset=15)
+                            start_char_offset=6, end_char_offset=9)
         assert bd_a and bd_b
         # A 的 range 端点反查：只命中 A 的绑定
         rev = routing.list_relations({"resource": {
