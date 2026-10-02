@@ -1078,11 +1078,13 @@ def _tags_add(principal: Principal, a: dict) -> dict:
     tags = a.get("tags") or []
     if not isinstance(tags, list):
         raise Forbidden("tags must be a list")
-    return content.tags_add(principal.principal_id, str(a.get("memory_id", "")), tags)
+    return listing.tags_add(principal.principal_id,
+                            str(a.get("memory_id", "")), tags)
 
 
 def _by_emotion(principal: Principal, a: dict) -> dict:
-    return content.by_emotion(str(a.get("tag", "")), str(a.get("whose", "")))
+    return listing.by_emotion(str(a.get("tag", "")),
+                              a.get("whose") or None)
 
 
 
@@ -1350,7 +1352,7 @@ def _settings_get(principal: Principal, a: dict) -> dict:
         "forgetting": {"status": "retired_v1_7"},
         "bootstrap": {
             "memory_days": _bs.BOOT_MEMORY_DAYS,
-            "plan_upcoming_days": _bs.PLAN_UPCOMING_DAYS,
+            "plan_upcoming_days": _bs.BOOT_UPCOMING_DAYS,
             "soft_token_budget": _bs.BOOT_SOFT_TOKEN_BUDGET,
         },
         "retrieval": {
@@ -1359,8 +1361,9 @@ def _settings_get(principal: Principal, a: dict) -> dict:
             "semantic_status": "unavailable" if not _cfg.SEMANTIC_PROVIDER
                                else "configured",
         },
-        "quote_semantic_auto_apply": _cfg.QUOTE_SEMANTIC_AUTO_APPLY,
-        "calendar_providers": sorted(_cal.PROVIDERS),
+        "quote_semantic_auto_apply": getattr(
+            _cfg, "QUOTE_SEMANTIC_AUTO_APPLY", None),
+        # RA-010：calendar/quote 已退役——不再引用不存在常量
         "note": "只读快照；修改经部署参数（policy version 变更入审计）",
     }
 

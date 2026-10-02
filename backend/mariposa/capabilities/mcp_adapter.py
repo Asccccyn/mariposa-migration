@@ -84,7 +84,13 @@ async def handle(request: Request, profile: str) -> JSONResponse:
              "error": {"code": -32001, "message": f"{e.code}: {e}"}},
             status_code=401)
     clen = request.headers.get("content-length")
-    if clen and int(clen) > _BODY_MAX_BYTES:
+    # RA-008（2026-10-02 复审 P2）：坏 Content-Length 是 -32600 不是 500
+    try:
+        clen_n = int(clen) if clen else None
+    except ValueError:
+        return _rpc_error(None, -32600,
+                          "invalid Content-Length header")
+    if clen_n is not None and clen_n > _BODY_MAX_BYTES:
         return _rpc_error(None, -32600,
                           f"request body too large (> {_BODY_MAX_BYTES})")
     # 复审（2026-10-01）：流式累计 + 即时截停（chunked 无 CL 同样护住）
@@ -142,7 +148,11 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             return _rpc_error(msg_id, -32600,
                               "invalid params: must be an object")
         name = str(params.get("name", ""))
-        arguments = params.get("arguments") or {}
+        # RA-008：缺省与 false/[]/0 区分——显式非 object 一律拒绝，
+        # false 不得经 or {} 变空参执行成写请求
+        arguments = params.get("arguments")
+        if arguments is None:
+            arguments = {}
         if not isinstance(arguments, dict):
             return _rpc_error(msg_id, -32600,
                               "invalid params: arguments must be an object")
@@ -157,7 +167,7 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                              "text": json.dumps(
                                  {"ok": False, "error": {"code": e.code,
                                                          "message": str(e)}},
-                                 ensure_ascii=False)}],
+                                 ensure_ascii=False, default=str)}],
                 "isError": True,
             })
         return _rpc_result(msg_id, {
