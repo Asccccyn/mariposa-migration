@@ -794,8 +794,36 @@ def _find_words_core(principal: Principal, a: dict,
     plan.setdefault("original_request",
                     a.get("original_request") or a.get("query") or "")
     if not plan.get("lexical_terms"):
-        plan["lexical_terms"] = [a.get("query", "") or
-                                 a.get("original_request", "")]
+        plan["lexical_terms"] = ([a.get("lexical_terms")]
+                                 if isinstance(a.get("lexical_terms"), list)
+                                 and a.get("lexical_terms")
+                                 else [a.get("query", "") or
+                                       a.get("original_request", "")])
+    # CB-047（2026-10-02 审计 P2）：schema 接受的顶层参数全部进入统一
+    # plan——query_plan 内显式字段优先，顶层仅回填缺失（此前
+    # exact_phrases/semantic_query/正负 constraints 被静默丢弃，
+    # 用户的明确过滤不生效）
+    if not plan.get("exact_phrases") and a.get("exact_phrases"):
+        plan["exact_phrases"] = a["exact_phrases"]
+    if not plan.get("semantic_query") and a.get("semantic_query"):
+        plan["semantic_query"] = a["semantic_query"]
+    if not plan.get("delivery_limit") and a.get("limit"):
+        plan["delivery_limit"] = a["limit"]
+    ec = dict(plan.get("explicit_constraints") or {})
+    for k in ("categories", "mood_tags", "event_date",
+              "category_match", "mood_match"):
+        if k in (a.get("explicit_constraints") or {}) and k not in ec:
+            ec[k] = a["explicit_constraints"][k]
+    if ec:
+        plan["explicit_constraints"] = ec
+    neg = dict(plan.get("explicit_negative_constraints") or {})
+    for k in ("event_date_excluded", "speakers_excluded",
+              "date_ranges_excluded"):
+        if k in (a.get("explicit_negative_constraints") or {}) \
+                and k not in neg:
+            neg[k] = a["explicit_negative_constraints"][k]
+    if neg:
+        plan["explicit_negative_constraints"] = neg
     plan["channels"] = ["words"]
     return recall_service.start(principal, {"query_plan": plan},
                                 op_ctx=op_ctx)

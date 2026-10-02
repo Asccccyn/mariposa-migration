@@ -329,13 +329,20 @@ def _run_round_compute(session: dict, plan: dict,
                                 (h["memory_id"],)).fetchone()
                             _mv_s = (str(_mv["current_version_no"])
                                      if _mv else None)
-                            _ek = ("word_verbatim"
-                                   if h.get("expression_kind")
-                                   == "verbatim"
-                                   else "word_paraphrase"
-                                   if h.get("expression_kind")
-                                   == "paraphrase"
-                                   else "word_unverified")
+                            # CB-039：dense 与 sparse 共用同一证据
+                            # 构造——等级取决于当前 provenance（来源
+                            # 当前事实/撤销换代），不取决于命中通道
+                            from ..retrieval.words import _word_evidence
+                            _wrow = {
+                                "word_id": h["word_id"],
+                                "expression_kind": h.get(
+                                    "expression_kind"),
+                                "source_ref": h.get("source_ref"),
+                                "source_binding_version": h.get(
+                                    "source_binding_version", 0),
+                                "text": h.get("text"),
+                                "current_version_no": _mv_s,
+                            }
                             dense_cards.append({
                                 "resource_ref":
                                     f"our_word:{h['word_id']}",
@@ -358,8 +365,9 @@ def _run_round_compute(session: dict, plan: dict,
                                 "expression_kind":
                                     h.get("expression_kind"),
                                 "excerpt": h.get("text"),
-                                "evidence": [evidence_mod.make_evidence(
-                                    _ek, "our_words", h.get("text")
+                                "evidence": _word_evidence(_wrow, conn) or [
+                                    evidence_mod.make_evidence(
+                                    "word_unverified", "our_words", h.get("text")
                                     or "", f"our_word:{h['word_id']}",
                                     source_version=_mv_s)],
                             })
@@ -664,41 +672,55 @@ def _enforce_output_budget(packet: dict) -> dict:
     不是只依赖 config 常量。"""
     import json as _json
 
+    def _carriers(c: dict) -> list:
+        """CB-042：候选上所有正文载体——evidence snippets、excerpt、
+        _matched 字段值（此前只裁 evidence，9997 字符的 _matched 原样
+        出站）。返回 [(holder_dict, key)] 供统一裁剪。"""
+        slots = []
+        for ev in c.get("evidence") or []:
+            slots.append((ev, "snippet"))
+        if isinstance(c.get("excerpt"), str):
+            slots.append((c, "excerpt"))
+        m = c.get("_matched")
+        if isinstance(m, dict):
+            for k, v in m.items():
+                if isinstance(v, str):
+                    slots.append((m, k))
+        return slots
+
     def total_body(p):
         n = 0
         for c in p.get("candidates") or []:
-            for ev in c.get("evidence") or []:
-                n += len(ev.get("snippet") or "")
+            for holder, key in _carriers(c):
+                n += len(holder.get(key) or "")
         return n
 
-    # 单候选窗
+    # 单候选窗（全部载体）
     for c in packet.get("candidates") or []:
         over = None
-        for ev in c.get("evidence") or []:
-            snip = ev.get("snippet")
-            if isinstance(snip, str) and \
-                    len(snip) > OUTPUT_MAX_PER_CANDIDATE_CHARS:
+        for holder, key in _carriers(c):
+            val = holder.get(key)
+            if isinstance(val, str) and \
+                    len(val) > OUTPUT_MAX_PER_CANDIDATE_CHARS:
                 from ..retrieval import evidence as _em
                 cut, _tr = _em.excerpt(
-                    snip, limit=OUTPUT_MAX_PER_CANDIDATE_CHARS)
-                ev["snippet"] = cut
-                ev["truncated"] = True
+                    val, limit=OUTPUT_MAX_PER_CANDIDATE_CHARS)
+                holder[key] = cut
                 over = True
         if over:
             c.setdefault("budget_flags", []).append("candidate_600")
-    # 正文总量
+    # 正文总量（全部载体）
     if total_body(packet) > OUTPUT_MAX_BODY_CHARS:
         room = OUTPUT_MAX_BODY_CHARS
         for c in packet.get("candidates") or []:
-            for ev in c.get("evidence") or []:
-                snip = ev.get("snippet")
-                if not isinstance(snip, str) or not snip:
+            for holder, key in _carriers(c):
+                val = holder.get(key)
+                if not isinstance(val, str) or not val:
                     continue
-                if len(snip) > room:
-                    ev["snippet"] = snip[:max(0, room)]
-                    ev["truncated"] = True
+                if len(val) > room:
+                    holder[key] = val[:max(0, room)]
                     c.setdefault("budget_flags", []).append("body_4000")
-                room -= len(ev.get("snippet") or "")
+                room -= len(holder.get(key) or "")
                 if room <= 0:
                     break
     # 完整 JSON 字节
@@ -723,6 +745,15 @@ def _enforce_output_budget(packet: dict) -> dict:
             packet["budget_truncated"] = True
             packet["candidates"] = []
             break
+    # CB-042：终检——固定四次裁剪后仍超限时按序丢卡直至达标（或空
+    # 集），不再放行超限 JSON（metadata 全量计入后的最终序列化检查）
+    while packet.get("candidates"):
+        blob = _json.dumps(packet, ensure_ascii=False).encode("utf-8")
+        if len(blob) <= OUTPUT_MAX_JSON_BYTES:
+            break
+        packet["candidates"].pop()
+        packet["budget_truncated"] = True
+        packet.setdefault("budget_flags", []).append("dropped_candidate")
     packet.setdefault("budget", {}).setdefault(
         "output_limits", {
             "json_bytes": OUTPUT_MAX_JSON_BYTES,
@@ -1049,24 +1080,47 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
                 code="AXIS_UNAVAILABLE", axis=axis)
         op = "<" if direction == "earlier" else ">"
         order = "DESC" if direction == "earlier" else "ASC"
-        where = ["m.visibility='active'"]
-        params: list = []
+        # CB-041（2026-10-02 审计 P2）：导航复用当前 QueryPlan 的
+        # AllowedScope——此前 WHERE 只有 visibility，明确分类/日期
+        # 条件被丢弃（sweet 范围导航返回 daily 桶）
+        from ..retrieval import query_plan as _qp
+        where_t, params_t, _rej, _plan = _qp.AllowedScope.for_plan(
+            plan, rejected)
+        where = list(where_t)
+        params: list = list(params_t)
         if anchor:
+            # CB-041：公开 candidate_ref 是 memory:<id> 形态——先解析
+            # 前缀并验证属于本 session，再作锚（此前原样当主键查，
+            # 锚静默失效）
+            anchor_id = str(anchor)
+            if anchor_id.startswith("memory:"):
+                anchor_id = anchor_id[len("memory:"):]
+            owned = store.list_candidates(a["session_id"])
+            known = {c["candidate_ref"] for c in owned} | \
+                {c["resource_ref"] for c in owned}
+            if anchor not in known:
+                raise Forbidden(
+                    "anchor_candidate_ref 不属于本 session 的候选",
+                    code="INVALID_ARGUMENT", anchor=anchor)
             row = conn.execute(
                 "SELECT memory_date, created_at FROM memories m"
                 " JOIN retrieval_documents rd ON rd.memory_id=m.memory_id"
-                " WHERE m.memory_id=?", (anchor,)).fetchone()
+                " WHERE m.memory_id=?", (anchor_id,)).fetchone()
             if row:
                 key = (row["memory_date"] if axis == "event_time"
                        else row["created_at"])
                 where.append(f"({axis_field} {op} ? OR"
                              f" ({axis_field} = ? AND m.memory_id <> ?))")
-                params += [key, key, anchor]
-        if rejected:
-            marks = ",".join("?" * len(rejected))
+                params += [key, key, anchor_id]
+        # CB-041：NOT IN 占位符与绑定等长——先过滤出 memory ref 再
+        # 生成 marks（此前按全部 rejected 生成占位符、只绑定 memory
+        # 项，words reject 后直接 SQLite ProgrammingError）
+        rejected_mem = [r[len("memory:"):] for r in rejected
+                        if r.startswith("memory:")]
+        if rejected_mem:
+            marks = ",".join("?" * len(rejected_mem))
             where.append(f"m.memory_id NOT IN ({marks})")
-            params += [r[len("memory:"):] for r in rejected
-                       if r.startswith("memory:")]
+            params += rejected_mem
         rows = conn.execute(
             "SELECT m.memory_id, m.memory_date, m.compression_state,"
             " m.current_version_no, rd.projection_kind FROM memories m"
