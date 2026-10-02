@@ -28,12 +28,15 @@ def open_memory(principal, memory_id: str) -> dict:
         raise Forbidden("only the two owners may open a memory",
                         principal=principal.principal_id)
     with db.formal() as conn:
-        content = memory.get(conn, memory_id)
-        version = memory.representation_version(conn, memory_id)
-        receipt_id = f"vr_{uuid.uuid4().hex[:16]}"
-        now = _now()
+        # P1-4（2026-10-02 接续复审）：读内容/版本与签票据同一事务
+        # ——此前先读后开写锁，窗口内 Memory 更新/删除会让票据版本
+        # 与返回正文不一致，或对已删桶签出票据
         conn.execute("BEGIN IMMEDIATE")
         try:
+            content = memory.get(conn, memory_id)
+            version = memory.representation_version(conn, memory_id)
+            receipt_id = f"vr_{uuid.uuid4().hex[:16]}"
+            now = _now()
             conn.execute(
                 "INSERT INTO memory_view_receipts(receipt_id, principal_id,"
                 " binding_id, memory_id, representation_version, confirm_key,"

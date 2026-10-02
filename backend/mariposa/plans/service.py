@@ -213,16 +213,25 @@ def get(conn, plan_id: str) -> dict:
 
 
 def list_plans(states: list[str] | None = None, conn=None) -> list[dict]:
-    with db.formal() as conn:
-        if states:
-            marks = ",".join("?" * len(states))
-            rows = conn.execute(
-                f"SELECT id FROM plans WHERE state IN ({marks}) ORDER BY updated_at DESC",
-                tuple(states)).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id FROM plans ORDER BY updated_at DESC").fetchall()
-        return [get(conn, r["id"]) for r in rows]
+    """P1 复审（2026-10-02 接续）：conn 由 Bootstrap 同事务装配传入——
+    此前 with db.formal() as conn 直接遮蔽参数，Plan 路径仍偷偷开第
+    二个连接，state_hash 与返回的 Plan 可来自不同快照。"""
+    if conn is not None:
+        return _list_plans_on(conn, states)
+    with db.formal() as c:
+        return _list_plans_on(c, states)
+
+
+def _list_plans_on(conn, states: list[str] | None = None) -> list[dict]:
+    if states:
+        marks = ",".join("?" * len(states))
+        rows = conn.execute(
+            f"SELECT id FROM plans WHERE state IN ({marks}) ORDER BY updated_at DESC",
+            tuple(states)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id FROM plans ORDER BY updated_at DESC").fetchall()
+    return [get(conn, r["id"]) for r in rows]
 
 
 def bootstrap_plans(now_local_date, upcoming_days: int = 3,

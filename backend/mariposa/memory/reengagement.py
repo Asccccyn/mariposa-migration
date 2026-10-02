@@ -24,11 +24,13 @@ def record(principal_id: str, memory_id: str, evidence_kind: str,
     except ValueError:
         raise Forbidden("occurred_at must be ISO-8601")
     with db.formal() as conn:
-        if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
-                            (memory_id,)).fetchone():
-            raise NotFound("memory not found", memory_id=memory_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # P1-4：存在性检查在写锁内
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
             conn.execute(
                 "INSERT OR IGNORE INTO memory_reengagements(memory_id,"
                 " evidence_kind, evidence_ref, occurred_at, recorded_at,"
