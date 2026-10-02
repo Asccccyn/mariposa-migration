@@ -17,11 +17,7 @@ class TestMigrationDryRun:
         out = tmp_path / "dry.json"
         r = migration.dry_run(str(FIXTURES), str(out))
         assert r["ok"] is True
-        assert r["counts"] == {"total": 3, "to_memories": 2, "to_letters": 1}
-        letter = next(e for e in r["entries"] if e["target"] == "letters")
-        # 锁信正文不进报告
-        assert letter["mapping"]["hold_text"].startswith("<restricted:")
-        assert "合成测试样本" not in json.dumps(r)
+        assert r["counts"] == {"total": 2, "to_memories": 2, "out_of_scope": 0}
         mem = next(e for e in r["entries"]
                    if e["legacy_id"].startswith("2026-08-15"))
         assert mem["mapping"]["pinned"] is True
@@ -35,7 +31,7 @@ class TestMigrationDryRun:
         out = tmp_path / "dry.json"
         migration.dry_run(str(FIXTURES), str(out))
         v = migration.verify(str(out))
-        assert v["ok"] is True and v["checked"] == 3
+        assert v["ok"] is True and v["checked"] == 2
 
     def test_verify_detects_tampering(self, tmp_path):
         out = tmp_path / "dry.json"
@@ -56,16 +52,31 @@ class TestMigrationDryRun:
         r = migration.dry_run(str(big))
         assert r["ok"] is False and "真实数据" in r["error"]
 
+    def test_letters_out_of_scope_body_protected(self, tmp_path):
+        """信件已拆出 mariposa：dry-run 只登记存在性，正文不进报告。"""
+        src = tmp_path / "fx"
+        src.mkdir()
+        (src / "2026-09-07 22-00-00 旧信_bbb444555666.md").write_text(
+            "---\ntype: letter\nlock_type: timed\n---\n极其隐私的正文内容",
+            encoding="utf-8")
+        out = tmp_path / "dry.json"
+        r = migration.dry_run(str(src), str(out))
+        assert r["counts"] == {"total": 1, "to_memories": 0, "out_of_scope": 1}
+        e = r["entries"][0]
+        assert e["target"] == "out_of_scope" and "mapping" not in e
+        assert "极其隐私" not in json.dumps(r)
+        v = migration.verify(str(out))
+        assert v["ok"] is True
+
     def test_inventory_metadata_only(self, tmp_path, capsys):
         src = tmp_path / "src"
         (src / "archive").mkdir(parents=True)
         (src / "archive" / "2026-07-01 10-00-00 私人样本_abc123def456.md").write_text(
-            "---\ntype: letter\nlock_type: timed\n---\n极其隐私的正文内容",
+            "---\ntype: dynamic\n---\n极其隐私的正文内容",
             encoding="utf-8")
         r = migration.inventory(str(src))
         assert r["ok"] is True
         assert r["total_files"] == 1
-        assert r["locked_letters_detected"] == 1
         captured = capsys.readouterr().out
         assert "极其隐私" not in captured  # 正文不进输出
 

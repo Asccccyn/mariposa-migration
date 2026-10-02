@@ -1,6 +1,6 @@
 # 118 条验收用例逐条映射（v1.1 执行包原件）
 
-> 生成 2026-09-22T06:46:29；证据=测试文件/文档/实测。**PASS 106 / BLOCKED 12 / NOT_IMPLEMENTED 0 / unmapped 0**。
+> 生成 2026-10-02T04:24:58；证据=测试文件/文档/实测。**PASS 105 / BLOCKED 12 / NOT_IMPLEMENTED 0 / unmapped 0**。
 
 
 ## T-ID
@@ -132,10 +132,10 @@
 ## T-LEG
 | ID | 状态 | 证据 | 备注 |
 |---|---|---|---|
-| T-LEG-01 | **PASS** | docs/legacy_behavior_matrix.md + 16 项特征测试 | 每条指向现场源码证据 |
-| T-LEG-02 | **PASS** | inventory frontmatter-only 测试 + 迁移报告无正文断言 | 锁信正文零输出 |
+| T-LEG-01 | **PASS** | docs/legacy_behavior_matrix.md + test_deletion.py 特征测试 | 每条指向现场源码证据（letters 部分随拆分移除） |
+| T-LEG-02 | **PASS** | inventory 元数据测试 + dry-run out_of_scope 无正文断言 | 迁移报告正文零输出 |
 | T-LEG-03 | **PASS** | 架构测试 test_no_purge_or_exec_capability | 无绕过审批的 purge |
-| T-LEG-04 | **PASS** | letters 锁参数保留测试 + 迁移 dry-run-real 锁元数据 | 锁规则/日期/所有者一致 |
+| T-LEG-04 | **REMOVED** | letters 模块 2026-10-01 拆出 mariposa（独立项目另行开发） | 锁语义随信件项目走，不再属本仓验收范围 |
 
 ## T-MIG
 | ID | 状态 | 证据 | 备注 |

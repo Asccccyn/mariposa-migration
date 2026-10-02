@@ -70,18 +70,16 @@ class TestSnapshotAndRealDryRun:
         out = migration.dry_run_real(str(tmp_path / "staging"), str(report))
         st = out["stats"]
         assert st["total"] == 5
-        assert st["by_target"] == {"memories": 2, "letters": 1,
-                                   "self_entries": 1, "plans": 1}
+        assert st["by_target"] == {"memories": 2, "self_entries": 1, "plans": 1}
         assert st["archived_buckets"] == 1
-        assert st["locked_letters"] == 1
         assert st["with_meaning"] == 1
-        assert st["unknown_type"] == 0 and st["bad_frontmatter"] == 0
-        assert not [e for e in out["entries"] if e["target"] == "UNMAPPED"]
+        # letter 桶出范围：计 unknown_type 且落 UNMAPPED（无正文无哈希）
+        assert st["unknown_type"] == 1 and st["bad_frontmatter"] == 0
+        unmapped = [e for e in out["entries"] if e["target"] == "UNMAPPED"]
+        assert len(unmapped) == 1 and unmapped[0]["type"] == "letter"
         # 正文与锁信正文不进报告（断言完整正文串，避开 note 文案）
         text = report.read_text(encoding="utf-8")
         assert "锁信正文（合成）" not in text and "正文甲" not in text
         assert "旧正文" not in text and "我想成为" not in text
         # dont_surface 等旧字段进 legacy extension 清单（§5.3 不猜语义）
         assert "dont_surface" in out["legacy_extension_keys"]
-        letter = next(e for e in out["entries"] if e["target"] == "letters")
-        assert letter["letter_lock"]["lock_type"] == "timed"
