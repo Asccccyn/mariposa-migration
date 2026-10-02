@@ -141,13 +141,13 @@ class TestPlanConcurrentVersion:
         results: dict[str, object] = {}
 
         def run(tag: str, title: str):
-            args = {"title": title}
+            # RA-001 后 schema 与 handler 均为顶层平铺字段
             barrier.wait()
             try:
                 out = registry.invoke(
                     actors["jiaming"], "plan.update",
                     {"plan_id": pid, "expected_version": 1,
-                     "changes": args, "operation_id": f"pu-{tag}"},
+                     "title": title, "operation_id": f"pu-{tag}"},
                     f"transport-{tag}")
                 results[tag] = ("ok", out["data"]["version"])
             except Forbidden as e:
