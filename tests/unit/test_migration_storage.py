@@ -97,4 +97,7 @@ class TestStorage:
         v = storage.restore_verify(str(bdir))
         assert v["ok"] is False
         issues = {p["issue"] for p in v["problems"]}
-        assert issues & {"sha256_mismatch", "unreadable"}
+        # CB-002：verify 现在按备份目录内文件核对（不再信 manifest 绝对
+        # 路径），字节级篡改会先命中 size 快速短路或 sha256——均为有效
+        # 损坏检测
+        assert issues & {"sha256_mismatch", "unreadable", "size_mismatch"}
