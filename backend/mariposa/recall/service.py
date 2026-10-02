@@ -1524,9 +1524,52 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     return allowed, gate
 
 
+#: 复审（2026-10-01）：同 (session, revision, burst) 的 Round2 首轮
+#: 进程锁——gate→Raw/Jev→commit 全程串行，避免并发双跑重复花 Jev；
+#: 跨进程/万一竞态由最终事务内复查 + raw-per-burst 唯一索引兜底
+_ROUND2_LOCKS: dict[tuple, "threading.Lock"] = {}
+_ROUND2_LOCKS_GUARD = None
+
+
+def _round2_lock(sid: str, revision: int, burst: int):
+    import threading
+    global _ROUND2_LOCKS_GUARD
+    if _ROUND2_LOCKS_GUARD is None:
+        _ROUND2_LOCKS_GUARD = threading.Lock()
+    key = (sid, revision, burst)
+    with _ROUND2_LOCKS_GUARD:
+        if len(_ROUND2_LOCKS) > 512:  # 粗回收：清掉所有未持有的旧锁
+            for k in [k for k, v in _ROUND2_LOCKS.items()
+                      if not v.locked()]:
+                _ROUND2_LOCKS.pop(k, None)
+        lock = _ROUND2_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ROUND2_LOCKS[key] = lock
+        return lock
+
+
 def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     """Round 2 raw 深搜（S13）：服务端 plan、六条件门禁、raw 候选过
-    同一层 Jev 出站、commit-at-end 单事务提交。"""
+    同一层 Jev 出站、commit-at-end 单事务提交。
+
+    复审（2026-10-01）并发防护三层：①同 (session, revision, burst)
+    首轮全程持进程锁（单进程内串行，不重复花 Raw/Jev 成本）；②最终
+    事务内复查 has_raw_round（跨进程 fail-closed）；③raw-per-burst
+    partial unique index（最后不变量）。翻页走 continuation CAS，不进锁。
+    """
+    from ..errors import Forbidden as _F
+    sid0 = str(a.get("session_id", ""))
+    session0 = store.expire_if_due(store.require_session(sid0))
+    if not str(a.get("continuation_token") or "").strip():
+        with _round2_lock(sid0, session0["current_revision"],
+                          session0["current_burst"]):
+            return _round2_body(principal, a, op_ctx)
+    return _round2_body(principal, a, op_ctx)
+
+
+def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
+    """round2 主体（由 round2 的进程锁包装调用）。"""
     from .. import db as _db
     from . import pipeline as _pl
     from ..errors import Forbidden as _F, StaleOperation
@@ -1685,6 +1728,12 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
             # 翻页不消耗新轮（三轮复审#2）：round/budget/attempt 只在
             # raw round 首页记录
             if not cont_token:
+                # 复审（2026-10-01）②：事务内复查——进程锁只护单进程，
+                # 跨进程并发时输家在此 fail-closed（不落轮、不提交）
+                if store.has_raw_round(
+                        conn, sid, session["current_burst"]):
+                    raise _F("并发 Round2 输家：本 burst 已有 raw 轮"
+                             "（事务内复查）", code="ROUND2_GATE_DENIED")
                 budget.ensure_round_available_conn(conn, sid, session)
                 store.record_round(conn, sid,
                                    burst_no=session["current_burst"],

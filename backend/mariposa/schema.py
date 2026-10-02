@@ -1350,6 +1350,14 @@ CREATE TABLE recall_raw_continuations(
 ALTER TABLE recall_round1_receipts
   ADD COLUMN completed INTEGER NOT NULL DEFAULT 0;
 """),
+    (9, """
+-- ===== 复审（2026-10-01）：raw-per-burst 唯一不变量 =====
+-- 并发 Round2 的最后防线（进程锁 + 事务内复查之外的 DB 层不变量）：
+-- 每 (session, burst) 至多一条 kind='raw' 轮。若存量数据违反（历史
+-- 并发脏数据）建索引失败即迁移失败——fail fast，不静默取舍。
+CREATE UNIQUE INDEX idx_recall_rounds_raw_per_burst
+  ON recall_rounds(session_id, burst_no) WHERE kind='raw';
+"""),
 ]
 
 

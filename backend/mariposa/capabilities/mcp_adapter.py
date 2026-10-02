@@ -87,10 +87,19 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     if clen and int(clen) > _BODY_MAX_BYTES:
         return _rpc_error(None, -32600,
                           f"request body too large (> {_BODY_MAX_BYTES})")
-    raw = await request.body()
-    if len(raw) > _BODY_MAX_BYTES:
-        return _rpc_error(None, -32600,
-                          f"request body too large (> {_BODY_MAX_BYTES})")
+    # 复审（2026-10-01）：流式累计 + 即时截停（chunked 无 CL 同样护住）
+    total = 0
+    chunks: list[bytes] = []
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _BODY_MAX_BYTES:
+            return _rpc_error(None, -32600,
+                              f"request body too large"
+                              f" (> {_BODY_MAX_BYTES})")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     try:
         body = json.loads(raw)
     except (json.JSONDecodeError, ValueError):

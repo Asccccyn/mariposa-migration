@@ -393,15 +393,32 @@ class TypeSafeJevJudge(base.JudgeProvider):
             else:
                 ev_text, ev_tr = match_snippet, match_trunc
             add("event_text", ["event_evidence"], ev_text, ev_tr)
-            # 复审反例：真 title-only 时正文不含查询词，词面锚必落空、
-            # 头窗是盲选——长正文补尾部事实窗（事件事实高发区），
-            # Jev 才能看到后段真实内容
-            if ev_tr and not any(
+            # 复审（2026-10-01）：真 title-only 时正文不含查询词、词面
+            # 锚必落空——标题只是"找到桶"，Jev 需要足够的 event_text
+            # 判断"是不是要找的事"。锚落空即全文分段覆盖窗（不赌
+            # "事实在头部/尾部"），超长文档均匀采样 ≤8 段保证覆盖面
+            if (ev_tr and event_body and not any(
                     a and a.replace(" ", "") in
-                    event_body.replace(" ", "") for a in anchors):
-                tail_w = config.RECALL_EXCERPT_CHARS // 2
-                add("event_text", ["event_evidence"],
-                    "…" + event_body[-tail_w:], True)
+                    event_body.replace(" ", "") for a in anchors)):
+                step = config.RECALL_EXCERPT_CHARS
+                n_seg = (len(event_body) + step - 1) // step
+                if n_seg <= 1:
+                    pass  # 单窗已覆盖（ev_text 即全文）
+                else:
+                    max_seg = 8
+                    if n_seg <= max_seg:
+                        starts = list(range(0, len(event_body), step))
+                    else:
+                        span = len(event_body) - step
+                        starts = [round(i * span / (max_seg - 1))
+                                  for i in range(max_seg)]
+                    for st in starts:
+                        if st == 0:
+                            continue  # 首段=已加的头窗，不重复
+                        seg = event_body[st:st + step]
+                        add("event_text", ["event_evidence"],
+                            "…" + seg + ("…" if st + step <
+                                         len(event_body) else ""), True)
         return segments
 
     def _candidate_projection(self, candidate: dict,
