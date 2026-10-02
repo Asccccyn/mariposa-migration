@@ -88,7 +88,7 @@ def test_http_parser_reads_answers_noul_and_sends_current_contract(monkeypatch):
         _candidate(ref="memory:m1", text="搬家一"),
         _candidate(ref="memory:m2", text="无关二"),
     ]
-    projections = [judge._candidate_projection(c) for c in candidates]
+    projections = [judge._candidate_projection(c, []) for c in candidates]
     items = judge._judge_batch(_plan(), candidates, projections)
 
     assert sent["payload"]["model"] == config.RECALL_JUDGE_MODEL_ID

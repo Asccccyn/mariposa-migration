@@ -78,7 +78,18 @@ def _bearer(request: Request) -> str | None:
 
 
 async def _json_body(request: Request) -> dict:
+    # 全量审计 P1-07：JSON 端点硬上限——媒体字节必须走专用 stage
+    # 端点，不允许 base64 大负载从通用通道进来
+    clen = request.headers.get("content-length")
+    if clen and int(clen) > _JSON_BODY_MAX_BYTES:
+        raise MariposaError(
+            f"request body {clen} > {_JSON_BODY_MAX_BYTES}（媒体字节走"
+            " /api/media/stage/{token}）", code="BODY_TOO_LARGE")
     raw = await request.body()
+    if len(raw) > _JSON_BODY_MAX_BYTES:
+        raise MariposaError(
+            f"request body {len(raw)} > {_JSON_BODY_MAX_BYTES}（媒体字节"
+            "走 /api/media/stage/{token}）", code="BODY_TOO_LARGE")
     if not raw:
         return {}
     try:
@@ -118,6 +129,8 @@ from fastapi.responses import FileResponse  # noqa: E402
 from . import config as _config  # noqa: E402
 from .media import service as _media  # noqa: E402
 
+_JSON_BODY_MAX_BYTES = 2 * 1024 * 1024  # P1-07：JSON 通道 2MB 硬上限
+
 
 @app.put("/api/media/stage/{token}")
 async def media_stage(token: str, request: Request):
@@ -128,14 +141,15 @@ async def media_stage(token: str, request: Request):
                             content={"ok": False, "error": {"code": e.code}})
     data = await request.body()
     try:
-        info = _media.stage_bytes(token, data)
+        info = _media.stage_bytes(principal.principal_id, token, data)
     except MariposaError as e:
         return JSONResponse(status_code=e.http_status,
                             content={"ok": False, "error": {"code": e.code,
                                                             "message": str(e)}})
     return {"ok": True, "data": {"content_hash": info["content_hash"],
-                                 "size": len(data),
-                                 "note": "字节已暂存内存；调 media.upload.finalize 落盘"}}
+                                 "size": len(data), "staged": True,
+                                 "note": "字节已落盘暂存；调"
+                                         " media.upload.finalize(token)"}}
 
 
 @app.get("/api/media/object/{content_hash}")

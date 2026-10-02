@@ -39,7 +39,6 @@ class TypeSafeJevJudge(base.JudgeProvider):
         self._allowed_data_raw = os.environ.get(
             "MARIPOSA_RECALL_JUDGE_ALLOWED_DATA", "").strip()
         self.model_id = config.RECALL_JUDGE_MODEL_ID
-        self._current_terms: list[str] = []
         base_url = (
             os.environ.get("MARIPOSA_TYPESAFE_BASE_URL", "").strip()
             or os.environ.get("TYPESAFE_BASE_URL", "").strip()
@@ -62,6 +61,11 @@ class TypeSafeJevJudge(base.JudgeProvider):
 
     def judge(self, query_plan: dict, candidates: list[dict],
               execution_context: dict) -> base.JudgeBatchResult:
+        # P1-06：query anchors 从当次 query_plan 派生（缓存路径与
+        # _payload 同源同语义）
+        anchors = [t for t in ((query_plan.get("lexical_terms") or [])
+                               + (query_plan.get("exact_phrases") or []))
+                   if isinstance(t, str) and t]
         if getattr(self, "_disabled_reason", None):
             return base.JudgeBatchResult(
                 provider_status="unavailable",
@@ -79,7 +83,8 @@ class TypeSafeJevJudge(base.JudgeProvider):
         cache_hits = 0
 
         for candidate in candidates[:config.RECALL_JUDGE_CANDIDATE_CAP]:
-            candidate_projection = self._candidate_projection(candidate)
+            candidate_projection = self._candidate_projection(
+                candidate, anchors)
             # 闭环复审 P1-5：必要证据段全空（profile 剥空/无来源）→
             # 不发送该候选、标 unavailable——没有证据就没有有效判断
             if not candidate_projection["segments"]:
@@ -292,7 +297,8 @@ class TypeSafeJevJudge(base.JudgeProvider):
             return True  # 非文本段（结构化）不占外发文本许可
         return grant in (self._data_profile or frozenset())
 
-    def _candidate_segments(self, candidate: dict) -> list[dict]:
+    def _candidate_segments(self, candidate: dict,
+                             anchors: list[str]) -> list[dict]:
         """r2 S09：多角色证据段（candidate-envelope-v2）。
 
         - match_evidence：真实命中片段（标题命中给标题、话语命中给
@@ -307,7 +313,6 @@ class TypeSafeJevJudge(base.JudgeProvider):
           matched_fields 不含，且非命中字段不附段）。
         """
         from ...retrieval.evidence import excerpt as _excerpt
-        anchors = [t for t in (self._current_terms or []) if t]
         segments: list[dict] = []
         fields = candidate.get("matched_fields") or []
         row = candidate.get("_row") or {}
@@ -384,14 +389,15 @@ class TypeSafeJevJudge(base.JudgeProvider):
             add("event_text", ["event_evidence"], ev_text, match_trunc)
         return segments
 
-    def _candidate_projection(self, candidate: dict) -> dict:
+    def _candidate_projection(self, candidate: dict,
+                                anchors: list[str]) -> dict:
         """r2：CandidateEnvelope v2 投影（segments+roles+metadata）。
 
         闭环复审 P1-5：structured_metadata 无许可时元数据字段
         不外发（null）；必要证据段全空 → segments 为空列表，
         调用方（judge）据此把该候选标 unavailable，不产生有效判断。
         """
-        segments = self._candidate_segments(candidate)
+        segments = self._candidate_segments(candidate, anchors)
         meta_grant = "structured_metadata" in (
             self._data_profile or frozenset())
         return {
@@ -414,7 +420,15 @@ class TypeSafeJevJudge(base.JudgeProvider):
         }
 
     def _payload(self, query_plan: dict, candidates: list[dict]) -> dict:
-        projections = [self._candidate_projection(c) for c in candidates]
+        # 全量审计 P1-06：query anchors 从当次 query_plan 显式派生
+        #（lexical_terms + exact_phrases），不再依赖 provider 可变
+        # 状态——title-only 候选的长正文 event_evidence 围绕本次查询
+        # 的真实锚词取窗，不退正文头部；provider 单例并发也不串 query
+        anchors = [t for t in ((query_plan.get("lexical_terms") or [])
+                               + (query_plan.get("exact_phrases") or []))
+                   if isinstance(t, str) and t]
+        projections = [self._candidate_projection(c, anchors)
+                       for c in candidates]
         return self._payload_from_projections(query_plan, projections)
 
     def _payload_from_projections(self, query_plan: dict,
