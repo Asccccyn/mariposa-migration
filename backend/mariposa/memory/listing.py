@@ -86,6 +86,52 @@ def by_tag(namespace: str, tag: str, whose: str | None = None) -> dict:
             "matched_by": "tag"}
 
 
+def tags_add(principal_id: str, memory_id: str, tags: list[str]) -> dict:
+    """RA-010（2026-10-02 复审 P2）：现行 tags 写入——此前 handler 引用
+    不存在的 content 模块（NameError）。namespace 固定 free/whose 按
+    主体；幂等（OR IGNORE）。"""
+    if not tags:
+        raise Forbidden("tags must be a non-empty list")
+    whose = "jiaming" if principal_id == "jiaming" else "qiaosheng"
+    now = _now()
+    with db.formal() as conn:
+        if not conn.execute(
+                "SELECT 1 FROM memories WHERE memory_id=?",
+                (memory_id,)).fetchone():
+            raise NotFound("memory not found", memory_id=memory_id)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for t in tags:
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_tags(memory_id,"
+                    " namespace, tag, whose, confidence, created_by)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (memory_id, "free", str(t), whose, "human",
+                     principal_id))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"memory_id": memory_id, "added": len(tags)}
+
+
+def by_emotion(tag: str, whose: str | None = None) -> dict:
+    """RA-010：按心情标签查（现行 memory_mood_tags 表）。"""
+    q = ("SELECT t.memory_id, m.compression_state,"
+         " m.current_version_no FROM memory_mood_tags t"
+         " JOIN memories m ON m.memory_id=t.memory_id"
+         " WHERE t.tag=? AND m.visibility='active'")
+    params: list = [tag]
+    if whose:
+        if whose not in ("jiaming", "qiaosheng"):
+            raise Forbidden("whose must be jiaming or qiaosheng")
+        q += " AND t.whose IS NOT NULL AND t.whose != ''"
+    with db.formal() as conn:
+        rows = conn.execute(q, params).fetchall()
+    return {"tag": tag, "items": [dict(r) for r in rows],
+            "matched_by": "mood_tag"}
+
+
 # ---------------- meaning ----------------
 
 

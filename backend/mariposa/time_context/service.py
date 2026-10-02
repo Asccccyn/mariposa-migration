@@ -23,8 +23,10 @@ def _now() -> datetime:
 
 
 def local_date(now: datetime | None = None) -> str:
+    # RA-009（2026-10-02 复审 P2）：返回 ISO 字符串——date 对象会让
+    # MCP 输出序列化直接 500
     tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
-    return (now or _now()).astimezone(tz).date()
+    return (now or _now()).astimezone(tz).date().isoformat()
 
 
 def _latest_activity(conn, kinds: list[str]) -> str | None:
