@@ -188,6 +188,14 @@ class TestP14WordsIdentityAndEnvelope:
                 [0.0, 1.0] + [0.0] * 2558, dtype=np.float32)
                 for t in texts]
         monkeypatch.setattr(words_semantic, "embed", fake)
+        # CB-054：provider=qwen3e4b 时文档/查询侧走 qwen_embed（结构
+        # 测试同样注入假 2560 维，不 import 真实 ML）
+        from mariposa.retrieval import qwen_embed
+        monkeypatch.setattr(qwen_embed, "embed", fake)
+        monkeypatch.setattr(
+            qwen_embed, "embed_query",
+            lambda q: np.asarray([1.0, 0.0] + [0.0] * 2558,
+                                 dtype=np.float32))
         _hold_word(actors["jiaming"], "晚风吹过窗边", kind="verbatim")
         p = recall_service.words_recall(actors["jiaming"], {
             "query": "晚风", "semantic_query": "晚风吹过窗边"})
