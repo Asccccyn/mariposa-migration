@@ -181,7 +181,14 @@ async def media_stage(token: str, request: Request):
     # 复审（2026-10-01）：流式累计 + 即时截停（chunked 同样护住）；
     # 精确 size 校验仍由 stage_bytes 按声明 size 执行
     clen = request.headers.get("content-length")
-    if clen and int(clen) > _media._MAX_SIZE:
+    # RA-008：坏 Content-Length → 400（此前 ValueError 500）
+    try:
+        clen_n = int(clen) if clen else None
+    except ValueError:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": {"code": "INVALID_HEADER",
+                                   "message": "bad Content-Length"}})
+    if clen_n is not None and clen_n > _media._MAX_SIZE:
         return JSONResponse(status_code=413,
                             content={"ok": False,
                                      "error": {"code": "BODY_TOO_LARGE"}})
