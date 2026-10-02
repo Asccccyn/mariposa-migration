@@ -96,7 +96,11 @@ class TestAroundSeqBounded:
                 "SELECT id FROM source_conversations WHERE"
                 " provider_conversation_id='c-normal'").fetchone()["id"]
         out = query.get_conversation(conv_id, around_seq=3, limit=3)
-        assert [m["sequence"] for m in out["messages"]] == [2, 3, 4]
+        seqs = [m["sequence"] for m in out["messages"]]
+        # RA-022：复合序连续窗——包含锚、总条数 ≤limit、成员连续
+        assert len(seqs) <= 3
+        assert 3 in seqs
+        assert seqs == sorted(seqs) and seqs == list(range(seqs[0], seqs[0] + len(seqs))),             f"窗口必须连续：{seqs}"
 
 
 # ---------------------------------------------------------------- CB-022
