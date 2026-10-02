@@ -936,6 +936,22 @@ CREATE TABLE deletion_requests_v2(
 CREATE INDEX idx_deletion_resource_v2 ON deletion_requests_v2(memory_id);
 CREATE INDEX idx_deletion_status_v2
   ON deletion_requests_v2(status, submitted_local_date);
+-- CB-004（2026-10-02 审计 P1）：升级不得无条件清空现存申请历史。
+-- memory/delete 申请与现行表语义一致，逐列映射保留（人类理由、拒绝
+-- 理由=旧 ai_reason、配额依据 local_date、created_at=submitted_at）；
+-- 退役产品记录（letter、memory/archive）分离保留到 legacy 专表——
+-- 历史可考、不进现行表、不计现行配额。
+INSERT INTO deletion_requests_v2(request_id, memory_id, human_reason,
+  status, rejection_reason, submitted_by, submitted_local_date,
+  decided_at, created_at)
+SELECT id, resource_id, human_reason, status,
+  CASE WHEN status='rejected' THEN NULLIF(ai_reason, '') ELSE NULL END,
+  submitted_by, local_date, decided_at, submitted_at
+FROM deletion_requests
+WHERE resource_kind='memory' AND action='delete';
+CREATE TABLE deletion_requests_legacy AS
+SELECT * FROM deletion_requests
+WHERE NOT (resource_kind='memory' AND action='delete');
 DROP TABLE deletion_requests;
 ALTER TABLE deletion_requests_v2 RENAME TO deletion_requests;
 
