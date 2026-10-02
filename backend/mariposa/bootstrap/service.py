@@ -323,63 +323,77 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
     if section not in ("memory_days", "plans"):
         raise Forbidden(f"unknown section: {section}（v2 开窗无 raw 段）")
+    # P1 复审（2026-10-02 接续）：校验 state_hash 与取页在同一读事务
+    # ——此前校验连接先关、取页/Plan 各自重开连接，交错窗口内旧
+    # snapshot 可拿到新数据
     with db.formal() as conn:
-        snap = conn.execute(
-            "SELECT * FROM bootstrap_snapshots WHERE snapshot_id=?",
-            (snapshot_id,)).fetchone()
-        if snap is None:
-            raise SnapshotStale("snapshot unknown; re-fetch bootstrap")
-        if snap["state_hash"] != _state_hash(conn):
-            raise SnapshotStale("underlying resources changed; re-fetch",
-                                snapshot_id=snapshot_id)
+        conn.execute("BEGIN")
+        try:
+            snap = conn.execute(
+                "SELECT * FROM bootstrap_snapshots WHERE snapshot_id=?",
+                (snapshot_id,)).fetchone()
+            if snap is None:
+                raise SnapshotStale("snapshot unknown; re-fetch bootstrap")
+            if snap["state_hash"] != _state_hash(conn):
+                raise SnapshotStale(
+                    "underlying resources changed; re-fetch",
+                    snapshot_id=snapshot_id)
+            tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
+            from datetime import datetime, timezone
+            today = datetime.now(timezone.utc).astimezone(tz).date()
+            snap_day = (snap["business_date"]
+                        if "business_date" in snap.keys() else None)
+            if snap_day and snap_day != today.isoformat():
+                raise SnapshotStale(
+                    "crossed business day; re-fetch bootstrap for the new"
+                    " window", snapshot_id=snapshot_id,
+                    snapshot_day=snap_day, current_day=today.isoformat())
+            three_days = [(today - timedelta(days=i)).isoformat()
+                          for i in range(BOOT_MEMORY_DAYS)]
 
-    tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).astimezone(tz).date()
-    snap_day = snap["business_date"] if "business_date" in snap.keys() else None
-    if snap_day and snap_day != today.isoformat():
-        # BOOT-05/07：跨业务日不得续页——旧快照的窗口是前一天的三个自然日
-        raise SnapshotStale(
-            "crossed business day; re-fetch bootstrap for the new window",
-            snapshot_id=snapshot_id, snapshot_day=snap_day,
-            current_day=today.isoformat())
-    three_days = [(today - timedelta(days=i)).isoformat()
-                  for i in range(BOOT_MEMORY_DAYS)]
+            if section == "memory_days":
+                before_date = (cursor or {}).get("memory_before_date")
+                last_id = (cursor or {}).get("memory_last_id")
+                if not before_date:
+                    raise Forbidden("cursor.memory_before_date required")
+                rows = conn.execute(
+                    "SELECT memory_id, memory_date FROM memories WHERE"
+                    " visibility='active' AND memory_date IN (?,?,?)"
+                    " AND (memory_date < ? OR (memory_date = ? AND"
+                    " memory_id > ?))"
+                    " ORDER BY memory_date DESC, memory_id LIMIT ?",
+                    tuple(three_days) + (before_date, before_date,
+                                         last_id or "",
+                                         BOOT_SECTION_LIMIT)).fetchall()
+                items = [_memory_slim(conn, r["memory_id"]) for r in rows]
+                total = conn.execute(
+                    "SELECT COUNT(*) AS c FROM memories WHERE"
+                    " visibility='active' AND memory_date IN (?,?,?)",
+                    tuple(three_days)).fetchone()["c"]
+                nxt = None
+                if len(items) >= BOOT_SECTION_LIMIT:
+                    last = rows[-1]
+                    nxt = {"memory_before_date": last["memory_date"],
+                           "memory_last_id": last["memory_id"]}
+                return {"snapshot_id": snapshot_id,
+                        "section": "memory_days",
+                        "items": items, "count": len(items),
+                        "total_in_window": total, "next_cursor": nxt}
 
-    if section == "memory_days":
-        before_date = (cursor or {}).get("memory_before_date")
-        last_id = (cursor or {}).get("memory_last_id")
-        if not before_date:
-            raise Forbidden("cursor.memory_before_date required")
-        with db.formal() as conn:
-            rows = conn.execute(
-                "SELECT memory_id, memory_date FROM memories WHERE"
-                " visibility='active' AND memory_date IN (?,?,?)"
-                " AND (memory_date < ? OR (memory_date = ? AND memory_id > ?))"
-                " ORDER BY memory_date DESC, memory_id LIMIT ?",
-                tuple(three_days) + (before_date, before_date, last_id or "",
-                                     BOOT_SECTION_LIMIT)).fetchall()
-            items = [_memory_slim(conn, r["memory_id"]) for r in rows]
-            total = conn.execute(
-                "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
-                " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
-        nxt = None
-        if len(items) >= BOOT_SECTION_LIMIT:  # 不足一页 = 到底
-            last = rows[-1]
-            nxt = {"memory_before_date": last["memory_date"],
-                   "memory_last_id": last["memory_id"]}
-        return {"snapshot_id": snapshot_id, "section": "memory_days",
-                "items": items, "count": len(items),
-                "total_in_window": total, "next_cursor": nxt}
-
-    # plans：offset 游标
-    offset = int((cursor or {}).get("plans_offset") or 0)
-    all_plans = plans.bootstrap_plans(today, BOOT_UPCOMING_DAYS)
-    page = all_plans[offset:offset + BOOT_SECTION_LIMIT]
-    nxt = offset + BOOT_SECTION_LIMIT if offset + BOOT_SECTION_LIMIT < len(all_plans) else None
-    return {"snapshot_id": snapshot_id, "section": "plans",
-            "items": page, "count": len(page), "total": len(all_plans),
-            "next_cursor": {"plans_offset": nxt}}
+            # plans：offset 游标（同事务经 conn 装配）
+            offset = int((cursor or {}).get("plans_offset") or 0)
+            all_plans = plans.bootstrap_plans(
+                today, BOOT_UPCOMING_DAYS, conn=conn)
+            page = all_plans[offset:offset + BOOT_SECTION_LIMIT]
+            nxt = (offset + BOOT_SECTION_LIMIT
+                   if offset + BOOT_SECTION_LIMIT < len(all_plans)
+                   else None)
+            return {"snapshot_id": snapshot_id, "section": "plans",
+                    "items": page, "count": len(page),
+                    "total": len(all_plans),
+                    "next_cursor": {"plans_offset": nxt}}
+        finally:
+            conn.execute("COMMIT")
 
 
 def _estimate_budget(result: dict) -> None:
