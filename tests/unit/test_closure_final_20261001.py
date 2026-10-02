@@ -106,7 +106,11 @@ class TestRound2ConcurrentSingleWinner:
             t2 = threading.Thread(target=call, args=("b",))
             t1.start(); t2.start(); t1.join(); t2.join()
             assert out.count("ok") == 1, out
-            assert out.count("ROUND2_GATE_DENIED") == 1, out
+            # CB-011 后输家更早被租约拒绝（RAW_ROUND_IN_PROGRESS，
+            # 零昂贵调用）；TTL 抢占窗口下才会到事务复查的
+            # ROUND2_GATE_DENIED——两者都是结构化拒绝
+            assert out.count("ROUND2_GATE_DENIED") + \
+                out.count("RAW_ROUND_IN_PROGRESS") == 1, out
             with db.recall_runtime() as conn:
                 raw_n = conn.execute(
                     "SELECT COUNT(*) c FROM recall_rounds WHERE"
