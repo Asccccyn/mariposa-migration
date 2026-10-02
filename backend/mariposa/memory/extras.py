@@ -20,13 +20,21 @@ def set_flag(principal_id: str, memory_id: str, flag: str, value: bool) -> dict:
     if col is None:
         raise Forbidden(f"unknown flag: {flag}")
     with db.formal() as conn:
-        if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
-                            (memory_id,)).fetchone():
-            raise NotFound("memory not found", memory_id=memory_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(f"UPDATE memories SET {col}=?, updated_at=? WHERE memory_id=?",
-                         (int(value), _now(), memory_id))
+            # P1-4（2026-10-02 接续复审）：检查与 UPDATE 同锁——且
+            # rowcount==0 不得写 audit/返回成功（对已删桶"置顶成功"
+            # 是假回执）
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
+            cur = conn.execute(
+                f"UPDATE memories SET {col}=?, updated_at=? WHERE"
+                " memory_id=?",
+                (int(value), _now(), memory_id))
+            if cur.rowcount != 1:
+                raise NotFound("memory not found", memory_id=memory_id)
             audit.record(conn, f"memory.{flag}{'_set' if value else '_unset'}",
                          principal_id, resource_id=memory_id)
             conn.execute("COMMIT")

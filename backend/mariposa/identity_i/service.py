@@ -496,12 +496,20 @@ def suggest(principal_id: str, content: str) -> dict:
                         code="INVALID_ARGUMENT")
     sid = f"isg_{uuid.uuid4().hex[:10]}"
     with db.formal() as conn:
-        conn.execute(
-            "INSERT INTO i_suggestions(suggestion_id, suggested_by, content,"
-             " created_at) VALUES(?,?,?,?)",
-            (sid, principal_id, str(content), _now()))
-        audit.record(conn, "i.suggestion.filed", principal_id,
-                     resource_id=sid, payload={"bytes": len(content)})
+        # P3 清理（2026-10-02 接续复审）：suggestion 写入与审计/outbox
+        # 同一显式事务——异常窗口下不再出现业务记录与审计不原子
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT INTO i_suggestions(suggestion_id, suggested_by,"
+                " content, created_at) VALUES(?,?,?,?)",
+                (sid, principal_id, str(content), _now()))
+            audit.record(conn, "i.suggestion.filed", principal_id,
+                         resource_id=sid, payload={"bytes": len(content)})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"suggestion_id": sid, "status": "open",
             "note": "建议已登记；是否落笔由周家明决定"}
 

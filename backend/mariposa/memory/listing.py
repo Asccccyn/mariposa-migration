@@ -95,12 +95,13 @@ def tags_add(principal_id: str, memory_id: str, tags: list[str]) -> dict:
     whose = "jiaming" if principal_id == "jiaming" else "qiaosheng"
     now = _now()
     with db.formal() as conn:
-        if not conn.execute(
-                "SELECT 1 FROM memories WHERE memory_id=?",
-                (memory_id,)).fetchone():
-            raise NotFound("memory not found", memory_id=memory_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # P1-4：存在性检查在写锁内
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
             for t in tags:
                 conn.execute(
                     "INSERT OR IGNORE INTO memory_tags(memory_id,"
@@ -125,7 +126,11 @@ def by_emotion(tag: str, whose: str | None = None) -> dict:
     if whose:
         if whose not in ("jiaming", "qiaosheng"):
             raise Forbidden("whose must be jiaming or qiaosheng")
-        q += " AND t.whose IS NOT NULL AND t.whose != ''"
+        # P2-6（2026-10-02 接续复审）：mood_tags 表无 whose 列——
+        # 按正式 mood 作者（memory_moods.author）join 过滤
+        q += (" AND EXISTS(SELECT 1 FROM memory_moods mm"
+              " WHERE mm.memory_id=t.memory_id AND mm.author=?)")
+        params.append(whose)
     with db.formal() as conn:
         rows = conn.execute(q, params).fetchall()
     return {"tag": tag, "items": [dict(r) for r in rows],

@@ -7,7 +7,8 @@
       "transport_name": "mariposa_activity_list",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -393,7 +394,8 @@
       "transport_name": "mariposa_jobs_status",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -503,7 +505,8 @@
       "transport_name": "mariposa_maintenance_activity_list",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -514,7 +517,8 @@
       "transport_name": "mariposa_maintenance_idempotency_reconcile",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": true,
       "idempotent": false,
@@ -525,7 +529,8 @@
       "transport_name": "mariposa_maintenance_jobs_status",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -536,7 +541,8 @@
       "transport_name": "mariposa_maintenance_outbox_drain",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": true,
       "idempotent": false,
@@ -547,7 +553,8 @@
       "transport_name": "mariposa_maintenance_outbox_status",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -558,7 +565,8 @@
       "transport_name": "mariposa_maintenance_rebuild_index",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": true,
       "idempotent": false,
@@ -569,7 +577,8 @@
       "transport_name": "mariposa_maintenance_semantic_warmup",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": true,
       "idempotent": false,
@@ -580,7 +589,8 @@
       "transport_name": "mariposa_maintenance_settings_get",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
@@ -591,7 +601,8 @@
       "transport_name": "mariposa_maintenance_source_cleanup",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": true,
       "idempotent": false,
@@ -1347,7 +1358,8 @@
       "transport_name": "mariposa_settings_get",
       "allowed_principals": [
         "jiaming",
-        "qiaosheng"
+        "qiaosheng",
+        "worker"
       ],
       "write": false,
       "idempotent": false,
