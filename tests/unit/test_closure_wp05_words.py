@@ -133,13 +133,13 @@ class TestUnifiedEntries:
                                          {"query": "梧桐"})
         # 2) find_words（registry）
         p2 = registry.invoke(actors["jiaming"], "memory.find_words",
-                             {"query": "梧桐",
+                             { "operation_id": "op-auto-test_c-0","query": "梧桐",
                               "original_request": "找梧桐话语"}, None)
         # 3) session words（start channels=words）
         p3 = recall_service.start(actors["jiaming"], {"query_plan": {
             "original_request": "找梧桐话语", "channels": ["words"],
             "lexical_terms": ["梧桐"]}})
-        for out in (p1, p2["data"], p3):
+        for out in (p1, p2["data"]["data"], p3):
             assert out["candidates"], "入口应有命中"
             assert len(out["candidates"]) <= 3
             assert out["delivery_action"] == "needs_validation"

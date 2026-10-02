@@ -54,12 +54,11 @@ class TestForbiddenSourcesNeverRecall:
                 assert not rsearch.recall(conn, probe)["hits"], \
                     f"memory.recall 命中禁检来源：{probe}"
             r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                                {"query_plan": {
+                                { "operation_id": f"op-mood-{probe}","query_plan": {
                                     "original_request": probe,
                                     "channels": ["event"],
                                     "lexical_terms": [probe]}}, None)
-            cands = r["data"]["candidates"] if "candidates" in r["data"] \
-                else r["data"]["data"]["candidates"]
+            cands = r["data"]["data"]["candidates"]
             assert all(c.get("memory_id") != mid for c in cands), \
                 f"recall 主链命中禁检来源：{probe}"
 
@@ -85,12 +84,12 @@ class TestForbiddenSourcesNeverRecall:
         mlisting.meanings_append(actors["jiaming"].principal_id, mid,
                                  "含义层里的雾隐词")
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_v-0","query_plan": {
                                 "original_request": "找雾隐",
                                 "channels": ["event"],
                                 "semantic_query": "雾隐",
                                 "lexical_terms": ["zzz不存在"]}}, None)
-        cands = r["data"]["candidates"]
+        cands = r["data"]["data"]["candidates"]
         assert all(c.get("memory_id") != mid for c in cands), \
             "dense 经禁检来源（meaning）召回"
 

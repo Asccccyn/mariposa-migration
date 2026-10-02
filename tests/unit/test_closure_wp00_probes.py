@@ -115,7 +115,7 @@ class TestProviderFailureNoBodyLeak:
                   creation_mode="contemporaneous", raw_pending=False)
         # judge provider 未配置（默认 DisabledJudge → unavailable）
         r = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-0","query_plan": {
                                 "original_request": "海雾鸥影",
                                 "channels": ["event"],
                                 "lexical_terms": ["海雾鸥影"]}}, None)

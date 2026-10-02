@@ -131,11 +131,18 @@ def reindex_word(conn, word_id: str, text: str, speaker, expression_kind,
 
 def words_semantic_search(conn, query: str, limit: int = 20,
                           extra_where: list[str] | None = None,
-                          extra_params: list | None = None) -> list[dict]:
+                          extra_params: list[str] | None = None) -> dict:
     """可见 words 上余弦检索。候选定位复用 words_search_docs 池
-    （speaker/日期等条件由调用方 SQL 前置），返回 word 命中卡。"""
+    （speaker/日期等条件由调用方 SQL 前置），返回 word 命中卡。
+
+    全量审计 P1-04：不再用裸 list 表达"结果"与"运行状态"两种语义
+    ——返回 {"hits", "pending_vectors", "provider_active"}：
+    provider_active=True + 0 hits = 正常搜完零命中（complete）；
+    provider_active=False = provider 未配置（unavailable）；
+    pending_vectors>0 = 部分向量未就绪（partial）。"""
     if not _provider_active() or not (query or "").strip():
-        return []
+        return {"hits": [], "pending_vectors": 0,
+                "provider_active": False}
     ensure_schema(conn)
     scope = list(extra_where or [])
     sp = list(extra_params or [])
@@ -149,7 +156,8 @@ def words_semantic_search(conn, query: str, limit: int = 20,
         pool_sql += " AND " + " AND ".join(scope)
     rows = conn.execute(pool_sql, sp).fetchall()
     if not rows:
-        return []
+        return {"hits": [], "pending_vectors": 0,
+                "provider_active": True}
     budget = WORDS_REINDEX_BUDGET
     pending = 0
     for r in rows:
@@ -195,10 +203,8 @@ def words_semantic_search(conn, query: str, limit: int = 20,
                 "score": round(score, 4),
             })
     scored.sort(key=lambda x: -x["score"])
-    out = scored[:limit]
-    if pending:
-        out = out + [{"__pending_vectors__": pending}]
-    return out
+    return {"hits": scored[:limit], "pending_vectors": pending,
+            "provider_active": True}
 
 
 def warmup_words(conn) -> dict:

@@ -33,20 +33,20 @@ class TestBurstRealCounting:
         1 轮时，burst2 仍有完整轮数（公式推断会虚增已用）。"""
         from mariposa import config as cfg
         p = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-6","query_plan": {
                                 "original_request": "查",
                                 "channels": ["event"],
                                 "lexical_terms": ["灯火"]}}, None)
-        sid = p["data"]["recall_session_id"]
+        sid = p["data"]["data"]["recall_session_id"]
         # 显式 continue 开新 burst（burst1 仅 1 轮）
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
-                             {"session_id": sid,
+                             { "operation_id": "op-auto-test_c-5","session_id": sid,
                               "continue_request_ref": "msg-1",
                               "query_plan": {
                                   "original_request": "再查",
                                   "channels": ["event"],
                                   "lexical_terms": ["灯火"]}}, None)
-        assert r2["data"]["revision"] == 2
+        assert r2["data"]["data"]["revision"] == 2
         session = store.require_session(sid)
         assert session["current_burst"] == 2
         with db.recall_runtime() as conn:
@@ -65,26 +65,26 @@ class TestBurstRealCounting:
         monkeypatch.setattr(cfg, "RECALL_BURST_ROUNDS", 2)
         hold(actors["jiaming"], "验收场景正文台灯")
         p = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-4","query_plan": {
                                 "original_request": "查台灯",
                                 "channels": ["event"],
                                 "lexical_terms": ["台灯"]}}, None)
-        sid = p["data"]["recall_session_id"]
+        sid = p["data"]["data"]["recall_session_id"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
-                             {"session_id": sid,
+                             { "operation_id": "op-auto-test_c-3","session_id": sid,
                               "query_plan": {
                                   "original_request": "再查",
                                   "channels": ["event"],
                                   "lexical_terms": ["台灯"]}}, None)
-        assert r2["data"]["status"] != "BUDGET_EXHAUSTED"
+        assert r2["data"]["data"]["status"] != "BUDGET_EXHAUSTED"
         # burst2（上限 2）已用 2 轮：第三次 refine 无 continue → 拒
         r3 = registry.invoke(actors["jiaming"], "memory.recall.refine",
-                             {"session_id": sid,
+                             { "operation_id": "op-auto-test_c-2","session_id": sid,
                               "query_plan": {
                                   "original_request": "三查",
                                   "channels": ["event"],
                                   "lexical_terms": ["台灯"]}}, None)
-        assert r3["data"]["status"] == "BUDGET_EXHAUSTED"
+        assert r3["data"]["data"]["status"] == "BUDGET_EXHAUSTED"
 
 
 class TestOutputBudget:
@@ -93,11 +93,11 @@ class TestOutputBudget:
         import json
         hold(actors["jiaming"], "预算" * 900)  # 长正文
         p = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-1","query_plan": {
                                 "original_request": "查预算",
                                 "channels": ["event"],
                                 "lexical_terms": ["预算"]}}, None)
-        packet = p["data"]
+        packet = p["data"]["data"]
         blob = json.dumps(packet, ensure_ascii=False).encode("utf-8")
         assert len(blob) <= 24576, \
             f"S16：packet 序列化超限 {len(blob)}"
@@ -107,11 +107,11 @@ class TestOutputBudget:
     def test_snippet_window_600(self, actors):
         hold(actors["jiaming"], "长文" * 500 + "结尾标记词" + "尾" * 50)
         p = registry.invoke(actors["jiaming"], "memory.recall.start",
-                            {"query_plan": {
+                            { "operation_id": "op-auto-test_c-0","query_plan": {
                                 "original_request": "查长文",
                                 "channels": ["event"],
                                 "lexical_terms": ["长文"]}}, None)
-        for c in p["data"]["candidates"]:
+        for c in p["data"]["data"]["candidates"]:
             for ev in c.get("evidence") or []:
                 if isinstance(ev.get("snippet"), str):
                     assert len(ev["snippet"]) <= 600, \

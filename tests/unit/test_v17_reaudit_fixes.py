@@ -813,12 +813,12 @@ class TestP102DenseWiring:
                 "UPDATE memories SET held_at='2026-01-01T00:00:00+00:00'"
                 " WHERE memory_id=?", (out["memory_id"],))
         r = reg.invoke(actors["jiaming"], "memory.recall.start",
-                       {"query_plan": {
+                       { "operation_id": "op-auto-test_v-0","query_plan": {
                            "original_request": "找极光",
                            "channels": ["event"],
                            "semantic_query": "极光",
                            "lexical_terms": ["极光"]}}, None)
-        candidates = r["data"]["candidates"]
+        candidates = r["data"]["data"]["candidates"]
         assert all(c.get("memory_id") != out["memory_id"] for c in                    candidates), \
             "P1-02：CORE 记忆经 meaning 的语义相似度被 dense 拉回"
 
