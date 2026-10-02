@@ -701,34 +701,46 @@ def _enforce_output_budget(packet: dict) -> dict:
                 n += len(holder.get(key) or "")
         return n
 
-    # 单候选窗（全部载体）
+    # 单候选窗（全部载体共享单卡额度——RA-016：600 是单卡上限，
+    # 不是每载体各自 600）
     for c in packet.get("candidates") or []:
+        from ..retrieval import evidence as _em
+        room_c = OUTPUT_MAX_PER_CANDIDATE_CHARS
         over = None
         for holder, key in _carriers(c):
             val = holder.get(key)
-            if isinstance(val, str) and \
-                    len(val) > OUTPUT_MAX_PER_CANDIDATE_CHARS:
-                from ..retrieval import evidence as _em
-                cut, _tr = _em.excerpt(
-                    val, limit=OUTPUT_MAX_PER_CANDIDATE_CHARS)
+            if not isinstance(val, str) or not val:
+                continue
+            if room_c <= 0:
+                holder[key] = ""  # 单卡额度耗尽：剩余载体清空
+                over = True
+                continue
+            if len(val) > room_c:
+                cut, _tr = _em.excerpt(val, limit=room_c)
                 holder[key] = cut
                 over = True
+            room_c -= len(holder.get(key) or "")
         if over:
             c.setdefault("budget_flags", []).append("candidate_600")
     # 正文总量（全部载体）
     if total_body(packet) > OUTPUT_MAX_BODY_CHARS:
         room = OUTPUT_MAX_BODY_CHARS
+        exhausted = False
         for c in packet.get("candidates") or []:
             for holder, key in _carriers(c):
                 val = holder.get(key)
                 if not isinstance(val, str) or not val:
+                    continue
+                if exhausted:
+                    holder[key] = ""  # RA-016：额度耗尽清空剩余载体
+                    c.setdefault("budget_flags", []).append("body_4000")
                     continue
                 if len(val) > room:
                     holder[key] = val[:max(0, room)]
                     c.setdefault("budget_flags", []).append("body_4000")
                 room -= len(holder.get(key) or "")
                 if room <= 0:
-                    break
+                    exhausted = True
     # 完整 JSON 字节
     for _ in range(4):
         blob = _json.dumps(packet, ensure_ascii=False).encode("utf-8")
@@ -1169,6 +1181,10 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     "representation_version": c["representation_version"],
                     "state": "seen", "scores": {}}],
                     session["current_revision"])
+            # RA-015（2026-10-02 复审 P2）：导航包绑定查询指纹——
+            # 必须在 operation 记录前注入（存的 result 带指纹），同
+            # key 重试不再被指纹校验误判 stale
+            out["query_fingerprint"] = _query_fp(plan)
             _record_op_in_tx(conn, op_ctx, out)
             conn.execute("COMMIT")
         except Exception:
@@ -1178,11 +1194,16 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
 
 
 def _latest_anchor(session_id: str) -> str | None:
-    receipts = store.list_receipts(session_id)
-    if not receipts:
+    """RA-015（2026-10-02 复审 P2）：默认锚取本 session 最近的**真实
+    memory 候选**——此前取最后一条回执，round1:complete 等证明类伪
+    资源会得到 None，默认导航退化为同 scope 浏览。"""
+    cands = store.list_candidates(session_id)
+    mem_refs = [c["resource_ref"] for c in reversed(cands)
+                if isinstance(c.get("resource_ref"), str)
+                and c["resource_ref"].startswith("memory:")]
+    if not mem_refs:
         return None
-    ref = receipts[-1]["resource_ref"]
-    return ref[len("memory:"):] if ref.startswith("memory:") else None
+    return mem_refs[0]  # RA-015：保留 memory:<id> 公开形态
 
 
 def status(principal, a: dict) -> dict:
@@ -1491,6 +1512,23 @@ def revalidate_replayed(fn_name: str, saved: dict,
                 continue
             if ref and ref in rejected:
                 continue  # 本 session 已拒绝的资源不得重放
+            if isinstance(ref, str) and ref.startswith("our_word:"):
+                # RA-012（2026-10-02 复审 P2）：重放按当前 provenance
+                # 校验——来源撤销/换代后不再交付旧 word_verbatim
+                wrow = conn.execute(
+                    "SELECT w.expression_kind, w.source_ref,"
+                    " w.source_binding_version, m.current_version_no"
+                    " FROM memory_our_words w JOIN memories m ON"
+                    " m.memory_id=w.memory_id WHERE w.word_id=?",
+                    (ref[len("our_word:"):],)).fetchone()
+                if wrow is None:
+                    continue
+                from ..retrieval.words import _word_evidence
+                cur_ev = _word_evidence(wrow, conn)
+                card_ev = (c.get("evidence") or [{}])[0] or {}
+                if (cur_ev and cur_ev[0].get("evidence_kind")
+                        != card_ev.get("evidence_kind")):
+                    continue
             m = conn.execute(
                 "SELECT visibility, current_version_no FROM memories"
                 " WHERE memory_id=?", (mid,)).fetchone()
@@ -1813,6 +1851,18 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
     if cont_token and not config.RECALL_RAW_FALLBACK_ENABLED:
         raise _F("Raw 通道当前已关闭（MARIPOSA_RAW_FALLBACK_ENABLED）",
                  code="RAW_DISABLED")
+    # RA-018（2026-10-02 复审 P2）：翻页同样复核当前 source_excerpt
+    # 出站授权——首页 gate 的许可生命周期必须覆盖续页
+    if cont_token:
+        from ..retrieval.judges import base as _jb_r2
+        from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
+        _prov = _jb_r2.get_provider()
+        _profile_ok = (
+            isinstance(_prov, TypeSafeJevJudge)
+            and "source_excerpt" in (_prov._data_profile or frozenset()))
+        if not _profile_ok:
+            raise _F("当前 judge profile 不含 source_excerpt 许可；"
+                     "Raw 翻页拒绝", code="RAW_PROFILE_WITHDRAWN")
     with _db.recall_runtime() as conn:
         if cont_token:
             cont = store.read_raw_continuation(

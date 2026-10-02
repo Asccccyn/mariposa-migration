@@ -147,7 +147,8 @@ def words_semantic_search(conn, query: str, limit: int = 20,
     scope = list(extra_where or [])
     sp = list(extra_params or [])
     pool_sql = ("SELECT w.word_id, w.text, w.speaker,"
-                " w.expression_kind, w.source_ref, w.memory_id,"
+                " w.expression_kind, w.source_ref,"
+                " w.source_binding_version, w.memory_id,"
                 " m.current_version_no FROM memory_our_words w"
                 " JOIN memories m ON m.memory_id = w.memory_id"
                 " WHERE m.visibility='active'"
@@ -198,6 +199,8 @@ def words_semantic_search(conn, query: str, limit: int = 20,
                 "speaker": r["speaker"],
                 "expression_kind": r["expression_kind"],
                 "source_ref": r["source_ref"],
+                "source_binding_version": int(
+                    r["source_binding_version"] or 0),
                 "text": r["text"],
                 "matched_by": ["semantic"],
                 "score": round(score, 4),
