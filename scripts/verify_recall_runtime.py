@@ -95,14 +95,42 @@ def main() -> int:
                     our_words=[{"speaker": "qiaosheng",
                                 "text": "合成搬家话语", "expression_kind":
                                 "verbatim"}])
+        # RA-030：结构验证注入确定性 fake judge（不依赖真实模型；
+        # disabled judge 下 0 候选是合法结果，不再盲取 [0]）
+        from mariposa.retrieval.judges import base as _jb
+
+        class _VerifyJudge(_jb.JudgeProvider):
+            name = "verify_fake"
+
+            def judge(self, plan, candidates, ctx):
+                items = [_jb.JudgeItem(
+                    candidate_ref=c.get("candidate_ref")
+                    or c["resource_ref"],
+                    candidate_version=str(c.get("content_version") or ""),
+                    relevance_signal=0.8,
+                    evaluation_status="evaluated", model_id=self.name,
+                    prompt_version="t") for c in candidates]
+                return _jb.JudgeBatchResult(
+                    items=items, provider_status="evaluated",
+                    degraded_reason=None, cache_hits=0,
+                    cache_misses=len(candidates), request_count=0)
+
+        _jb.register_for_tests("verify_fake", _VerifyJudge())
+        import os as _os
+        _os.environ["MARIPOSA_RECALL_JUDGE_PROVIDER"] = "verify_fake"
         p = rs.start(j, {"query_plan": {
             "original_request": "找搬家", "channels": ["event"],
             "lexical_terms": ["搬家"]}})
         checks.append(("start→候选交付", len(p["candidates"]) >= 1,
                        p["search_status"]))
         sid = p["recall_session_id"]
-        rs.reject(j, {"session_id": sid,
-                      "resource_ref": p["candidates"][0]["resource_ref"]})
+        if p["candidates"]:
+            rs.reject(j, {"session_id": sid,
+                          "resource_ref":
+                          p["candidates"][0]["resource_ref"]})
+        else:
+            checks.append(("零候选（judge 环境不含 fake）", True,
+                           "skip-rc"))
         p2 = rs.refine(j, {"session_id": sid, "query_plan": {
             "original_request": "再", "channels": ["words"],
             "lexical_terms": ["搬家"]}})
