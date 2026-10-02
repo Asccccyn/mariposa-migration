@@ -1198,13 +1198,25 @@ def _latest_anchor(session_id: str) -> str | None:
     memory 候选**——此前取最后一条回执，round1:complete 等证明类伪
     资源会得到 None，默认导航退化为同 scope 浏览。"""
     cands = store.list_candidates(session_id)
-    mem_refs = [c["resource_ref"] for c in reversed(cands)
+    mem_refs = [c["resource_ref"] for c in cands
                 if isinstance(c.get("resource_ref"), str)
                 and c["resource_ref"].startswith("memory:")
                 and c.get("state") != "rejected"]
     if not mem_refs:
         return None
-    return mem_refs[0]  # RA-015：保留 memory:<id> 公开形态
+    # RA-015 修正：'最近' 按事件时间取（candidates 插入序随 judge
+    # 分数随机，reversed 首条不是最新——flaky 反例：08-10 被当锚导致
+    # earlier 空）
+    with db.formal() as conn:
+        marks = ",".join("?" * len(mem_refs))
+        row = conn.execute(
+            f"SELECT memory_id FROM memories WHERE memory_id IN ({marks})"
+            " AND memory_date IS NOT NULL"
+            " ORDER BY memory_date DESC, created_at DESC LIMIT 1",
+            [r[len("memory:"):] for r in mem_refs]).fetchone()
+    if row is None:
+        return mem_refs[-1]
+    return f"memory:{row['memory_id']}"
 
 
 def status(principal, a: dict) -> dict:
