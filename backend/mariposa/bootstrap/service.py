@@ -78,9 +78,13 @@ def _state_hash(conn) -> str:
         parts.append(part)
     # CB-046：内容级成分——心情文本/标签集合与分类集合整体入指纹
     # （单项增删改即失效，不依赖时间戳是否前移）
-    mood_note = conn.execute(
-        "SELECT COALESCE(MAX(mood_text), '') AS n FROM memory_moods"
-    ).fetchone()["n"]
+    mood_rows = conn.execute(
+        "SELECT memory_id, mood_text, author, evidence_state,"
+        " captured_at FROM memory_moods ORDER BY memory_id"
+    ).fetchall()
+    mood_content = "|".join(
+        f"{r['memory_id']}:{r['mood_text'] or ''}:{r['author']}:"
+        f"{r['evidence_state']}" for r in mood_rows)
     tags = "|".join(sorted(r["memory_id"] + ":" + r["tag"] for r in
                            conn.execute(
                                "SELECT memory_id, tag FROM"
@@ -89,7 +93,7 @@ def _state_hash(conn) -> str:
                            conn.execute(
                                "SELECT memory_id, category FROM"
                                " memory_categories")))
-    parts.append(f"mood_note:{mood_note}")
+    parts.append(f"mood_rows:{mood_content}")
     parts.append(f"mood_tags:{tags}")
     parts.append(f"categories:{cats}")
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
@@ -135,9 +139,16 @@ def _memory_slim(conn, memory_id: str) -> dict:
     return item
 
 
-def _anniversaries_upcoming(today, days: int) -> list[dict]:
+def _anniversaries_upcoming(today, days: int, conn=None) -> list[dict]:
     horizon = (today + timedelta(days=days)).isoformat()
-    with db.formal() as conn:
+    if conn is not None:
+        return _anniv_rows(conn, horizon, today, days)
+    with db.formal() as c:
+        return _anniv_rows(c, horizon, today, days)
+
+
+def _anniv_rows(conn, horizon, today, days: int) -> list[dict]:
+    if True:
         rows = conn.execute(
             "SELECT d.definition_id, d.title, o.occurrence_date,"
             " d.memory_id FROM anniversary_occurrences o"
@@ -226,10 +237,18 @@ def get(principal_id: str, entry_source: str, profile: str,
             tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
             today, three_days = _three_day_window(tz)
             md = _memory_section(conn, three_days)
+            # RA-006（2026-10-02 复审 P2）：I/Plan/纪念日与 state hash
+            # 同一读事务装配——此前 COMMIT 在这些读取之前，包内容与其
+            # 指纹可来自不同快照（审计反例 bootstrap_mixed_snapshot）
+            from ..identity_i import service as _i_svc
+            i_doc = _i_svc.get(conn=conn)
+            plan_items = plans.bootstrap_plans(
+                today, BOOT_UPCOMING_DAYS, conn=conn)
+            anniv = _anniversaries_upcoming(today, BOOT_UPCOMING_DAYS,
+                                            conn=conn)
         finally:
             conn.execute("COMMIT")
 
-    plan_items = plans.bootstrap_plans(today, BOOT_UPCOMING_DAYS)
     active_plans = [p for p in plan_items if p["state"] in plans.OPEN_STATES]
     upcoming_plans = [p for p in plan_items if p["state"] == "planned"]
     plan_page = plan_items[:BOOT_SECTION_LIMIT]
@@ -250,7 +269,14 @@ def get(principal_id: str, entry_source: str, profile: str,
                        "categories"],
             "note": "三天桶只出标题+心情；事件正文须明确打开该桶",
         },
-        "i": _i_section(),
+        "i": {"content": i_doc["content"], "version": i_doc["version"],
+              "items": i_doc.get("items", []),
+              "history_policy": "旧 revision 默认不注入；has_history="
+                               "true 时可按需调用 i.item.history",
+              "source": ("i_documents"
+                         if i_doc["content"] is not None else None),
+              "note": None if i_doc["content"] is not None else
+                      "I 尚未落笔（无旧Self自动映射，V2-I-03）"},
         "plans": {
             "items": plan_page, "count": len(plan_page),
             "total": len(plan_items),
@@ -263,7 +289,7 @@ def get(principal_id: str, entry_source: str, profile: str,
             "note": "进行中/需执行/逾期未完成单列不消失；plan 查看不续期",
         },
         "anniversaries": {
-            "items": _anniversaries_upcoming(today, BOOT_UPCOMING_DAYS),
+            "items": anniv,
             "upcoming_days": BOOT_UPCOMING_DAYS,
         },
         "policy": {
