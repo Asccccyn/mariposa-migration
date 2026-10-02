@@ -157,34 +157,6 @@ class TestEvidenceKinds:
                  for e in c["evidence"]]
         assert "word_verbatim" not in kinds
 
-    def test_evid03_verbatim_source_invalid_downgrades(self, actors):
-        """EVID-03：来源版本变化后不再返回 verified word_verbatim。"""
-        from mariposa.raw import service as raw
-        raw.import_payload(actors["jiaming"].principal_id, {
-            "source_channel": "claude_chat", "external_id": "ext-1",
-            "messages": [{
-                "source_message_id": "m1", "role": "user",
-                "body": "原话：搬家选窗帘",
-                "occurred_at": "2026-08-19T10:00:00"}]})
-        with db.formal() as conn:
-            msg = conn.execute(
-                "SELECT id FROM raw_messages ORDER BY id LIMIT 1").fetchone()
-        hold(actors, text="搬家事件",
-             our_words=[{"speaker": "qiaosheng", "text": "搬家选窗帘",
-                         "expression_kind": "verbatim",
-                         "source_ref": f"raw_msg:{msg['id']}"}])
-        out1 = words_recall(actors, query="窗帘")
-        kinds = [e["evidence_kind"] for h in out1["candidates"] for e in h["evidence"]]
-        assert "word_verbatim" in kinds
-        # 来源失效（消息删除）
-        with db.formal() as conn:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.execute("DELETE FROM raw_messages WHERE id=?",
-                         (msg["id"],))
-            conn.execute("PRAGMA foreign_keys=ON")
-        out2 = words_recall(actors, query="窗帘")
-        kinds = [e["evidence_kind"] for h in out2["candidates"] for e in h["evidence"]]
-        assert "word_unverified" in kinds
 
     def test_pack07_word_unverified_neither_paraphrase_nor_verbatim(
             self, actors):

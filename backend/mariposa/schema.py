@@ -108,54 +108,9 @@ CREATE TABLE events_outbox(
 );
 """),
     (2, """
-CREATE TABLE raw_conversations(
-  id TEXT PRIMARY KEY,
-  source_channel TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  started_at TEXT,
-  ended_at TEXT,
-  coverage TEXT NOT NULL DEFAULT 'partial',
-  created_at TEXT NOT NULL,
-  UNIQUE(source_channel, external_id)
-);
 
-CREATE TABLE raw_messages(
-  id TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES raw_conversations(id),
-  source_message_id TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')),
-  speaker_id TEXT,
-  body TEXT NOT NULL,
-  occurred_at TEXT NOT NULL,
-  sequence INTEGER NOT NULL,
-  provenance TEXT NOT NULL DEFAULT 'import',
-  UNIQUE(conversation_id, source_message_id)
-);
-CREATE INDEX idx_raw_messages_time ON raw_messages(occurred_at, sequence);
 
-CREATE TABLE quotes(
-  id TEXT PRIMARY KEY,
-  current_version_no INTEGER NOT NULL,
-  said_at TEXT,
-  said_at_confidence TEXT NOT NULL DEFAULT 'unknown'
-    CHECK(said_at_confidence IN ('exact','inferred','unknown')),
-  kept_by TEXT NOT NULL,
-  withdrawn INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
 
-CREATE TABLE quote_versions(
-  quote_id TEXT NOT NULL REFERENCES quotes(id),
-  version_no INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  semantic_status TEXT NOT NULL DEFAULT 'no_source'
-    CHECK(semantic_status IN ('equivalent','material_conflict','uncertain','no_source')),
-  raw_ref TEXT,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(quote_id, version_no)
-);
 
 CREATE TABLE handoffs(
   id TEXT PRIMARY KEY,
@@ -252,67 +207,11 @@ CREATE INDEX idx_deletion_resource ON deletion_requests(resource_id);
 CREATE INDEX idx_deletion_status ON deletion_requests(status, local_date);
 """),
     (4, """
-CREATE TABLE home(
-  id INTEGER PRIMARY KEY CHECK(id = 1),
-  current_version_no INTEGER NOT NULL,
-  updated_at TEXT NOT NULL
-);
 
-CREATE TABLE home_versions(
-  home_id INTEGER NOT NULL REFERENCES home(id),
-  version_no INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  edited_by TEXT NOT NULL,
-  payload_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(home_id, version_no)
-);
 
-CREATE TABLE self_entries(
-  id TEXT PRIMARY KEY,
-  aspect TEXT NOT NULL DEFAULT '',
-  current_version_no INTEGER NOT NULL,
-  review_state TEXT NOT NULL DEFAULT 'pending'
-    CHECK(review_state IN ('pending','reviewed','retired')),
-  written_at TEXT NOT NULL,
-  review_available_on TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
 
-CREATE TABLE self_versions(
-  self_id TEXT NOT NULL REFERENCES self_entries(id),
-  version_no INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  written_by TEXT NOT NULL,
-  payload_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(self_id, version_no)
-);
 
-CREATE TABLE diary_entries(
-  id TEXT PRIMARY KEY,
-  current_version_no INTEGER NOT NULL,
-  author TEXT NOT NULL,
-  covers_from TEXT,
-  covers_to TEXT,
-  hidden INTEGER NOT NULL DEFAULT 0,
-  archived INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_diary_covers ON diary_entries(covers_from, covers_to);
 
-CREATE TABLE diary_versions(
-  diary_id TEXT NOT NULL REFERENCES diary_entries(id),
-  version_no INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  edited_by TEXT NOT NULL,
-  payload_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(diary_id, version_no)
-);
 
 CREATE TABLE memory_tags(
   memory_id TEXT NOT NULL REFERENCES memories(memory_id),
@@ -347,41 +246,8 @@ CREATE TABLE memory_relations(
   PRIMARY KEY(from_memory, to_memory, relation_type)
 );
 
-CREATE TABLE memory_raw_refs(
-  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
-  conversation_id TEXT NOT NULL,
-  message_from TEXT NOT NULL,
-  message_to TEXT NOT NULL,
-  source_hash TEXT NOT NULL,
-  bind_confidence TEXT NOT NULL DEFAULT 'exact'
-    CHECK(bind_confidence IN ('exact','high','low','revoked')),
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(memory_id, conversation_id, message_from)
-);
 
-CREATE TABLE provisional_sources(
-  id TEXT PRIMARY KEY,
-  memory_id TEXT,
-  reported_by TEXT NOT NULL,
-  reported_at TEXT NOT NULL,
-  fragment TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'unbound'
-    CHECK(status IN ('unbound','bound','dismissed'))
-);
 
-CREATE TABLE reminders(
-  id TEXT PRIMARY KEY,
-  principal TEXT NOT NULL,
-  title TEXT NOT NULL,
-  note TEXT,
-  remind_at TEXT NOT NULL,
-  timezone TEXT,
-  status TEXT NOT NULL DEFAULT 'scheduled'
-    CHECK(status IN ('scheduled','fired','cancelled')),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_reminders_time ON reminders(status, remind_at);
 
 CREATE TABLE media_objects(
   content_hash TEXT PRIMARY KEY,
@@ -392,25 +258,7 @@ CREATE TABLE media_objects(
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE moments(
-  id TEXT PRIMARY KEY,
-  current_version_no INTEGER NOT NULL,
-  author TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'post' CHECK(kind IN ('post','group_archive')),
-  visibility TEXT NOT NULL DEFAULT 'normal',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
 
-CREATE TABLE moment_versions(
-  moment_id TEXT NOT NULL REFERENCES moments(id),
-  version_no INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  media_hash TEXT,
-  edited_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(moment_id, version_no)
-);
 
 """),
     (6, """
@@ -418,40 +266,10 @@ ALTER TABLE memories ADD COLUMN source_state TEXT NOT NULL DEFAULT 'raw_pending'
   CHECK(source_state IN ('raw_pending','bound','conflict'));
 """),
     (7, """
-CREATE TABLE moment_comments(
-  id TEXT PRIMARY KEY,
-  moment_id TEXT NOT NULL REFERENCES moments(id),
-  author TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX idx_moment_comments ON moment_comments(moment_id);
 
-CREATE TABLE moment_reactions(
-  moment_id TEXT NOT NULL REFERENCES moments(id),
-  principal TEXT NOT NULL,
-  reaction TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(moment_id, principal)
-);
 """),
     (8, """
-CREATE TABLE memory_meanings(
-  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
-  layer_no INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  written_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(memory_id, layer_no)
-);
 
-CREATE TABLE stickers(
-  content_hash TEXT PRIMARY KEY,
-  label TEXT NOT NULL,
-  mime TEXT NOT NULL,
-  storage_key TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL
-);
 
 CREATE TABLE import_jobs(
   id TEXT PRIMARY KEY,
@@ -948,7 +766,35 @@ ALTER TABLE source_import_batches ADD COLUMN lease_token TEXT;
 DROP TABLE IF EXISTS letter_versions;
 DROP TABLE IF EXISTS letters;
 """),
-]
+    (25, """
+-- ===== 旧模块退役（2026-10-01，legacy-removal D02-D13）=====
+-- 生产库取证：下列表 row_count 全部为 0（2026-10-01 只读 COUNT），
+-- 按 §7 规则安全 DROP；fresh 库已不再创建（基础 DDL 同批移除）。
+DROP TABLE IF EXISTS moment_reactions;
+DROP TABLE IF EXISTS moment_comments;
+DROP TABLE IF EXISTS moment_versions;
+DROP TABLE IF EXISTS moments;
+DROP TABLE IF EXISTS stickers;
+DROP TABLE IF EXISTS quote_versions;
+DROP TABLE IF EXISTS quotes;
+DROP TABLE IF EXISTS memory_meanings;
+DROP TABLE IF EXISTS diary_versions;
+DROP TABLE IF EXISTS diary_entries;
+DROP TABLE IF EXISTS self_versions;
+DROP TABLE IF EXISTS self_entries;
+DROP TABLE IF EXISTS home_versions;
+DROP TABLE IF EXISTS home;
+DROP TABLE IF EXISTS reminders;
+DROP TABLE IF EXISTS memory_raw_refs;
+DROP TABLE IF EXISTS provisional_sources;
+DROP TABLE IF EXISTS raw_messages;
+DROP TABLE IF EXISTS raw_conversations;
+-- 旧审批体系残留（当前 schema 无 CREATE，部署库可能存在）
+DROP TABLE IF EXISTS proposal_envelopes;
+DROP TABLE IF EXISTS proposal_resolutions;
+DROP TABLE IF EXISTS review_delegations;
+DROP TABLE IF EXISTS rejection_suppression;
+""")]
 
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
@@ -968,37 +814,8 @@ CREATE TABLE IF NOT EXISTS workspace_task_leases(
 CREATE INDEX IF NOT EXISTS idx_task_leases ON workspace_task_leases(task_key, released);
 """),
     (1, """
-CREATE TABLE work_items(
-  item_id TEXT PRIMARY KEY,
-  item_type TEXT NOT NULL,
-  target_memory_id TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state IN
-    ('draft','submitted','approved_and_applied','rejected','withdrawn','stale','deferred')),
-  current_revision INTEGER NOT NULL,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  resolution_note TEXT
-);
 
-CREATE TABLE proposal_versions(
-  proposal_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  payload TEXT NOT NULL,
-  payload_hash TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  submitted_at TEXT,
-  PRIMARY KEY(proposal_id, revision)
-);
 
-CREATE TABLE worker_runs(
-  run_id TEXT PRIMARY KEY,
-  run_type TEXT NOT NULL,
-  started_by TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  stats TEXT
-);
 
 CREATE TABLE recall_query_revisions(
   session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
@@ -1066,6 +883,13 @@ CREATE TABLE recall_operation_keys(
   created_at TEXT NOT NULL,
   PRIMARY KEY(principal_id, operation_key)
 );
+"""),
+    (6, """
+-- ===== 旧审批/工具人体系退役（2026-10-01，D09/D12）=====
+DROP TABLE IF EXISTS worker_runs;
+DROP TABLE IF EXISTS proposal_versions;
+DROP TABLE IF EXISTS work_items;
+DROP TABLE IF EXISTS workspace_task_leases;
 """),
 ]
 

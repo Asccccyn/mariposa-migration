@@ -16,7 +16,6 @@ from mariposa.bootstrap import service as bootstrap
 from mariposa.errors import Forbidden, SnapshotStale
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.raw import service as raw
 from tests.conftest import reset_all
 
 
@@ -41,11 +40,6 @@ def test_no_raw_in_default_package_boot03(actors):
     first = bootstrap.get("jiaming", "claude_chat", "claude_chat")
     assert "raw" not in first
     assert first["coverage"]["raw"] == "not_in_default_package"
-    # 显式取源仍可分页（raw.list_recent before 游标）
-    msgs = raw.list_recent(30)
-    assert len(msgs) == 30
-    older = raw.list_recent(30, before=msgs[0]["occurred_at"])
-    assert older and older[0]["occurred_at"] < msgs[0]["occurred_at"]
 
 
 def test_memory_days_pagination_no_silent_truncation(actors):
@@ -99,14 +93,21 @@ def test_small_dataset_no_cursor(actors):
 
 
 def _import(n):
+    """D13：legacy raw 导入退役——用现行 Source importer 铺数据。"""
+    import json as _json
+    import tempfile, pathlib as _pl
+    from mariposa.source import importer
     base = datetime(2026, 9, 18, 8, 0, tzinfo=timezone.utc)
-    raw.import_payload("worker", {
-        "source_channel": "claude_export",
-        "external_id": f"ex_{uuid.uuid4().hex[:8]}",
-        "messages": [
-            {"source_message_id": f"m{i:04d}",
-             "role": "user" if i % 2 == 0 else "assistant",
-             "body": f"分页测试消息 {i}", "occurred_at":
-             (base + timedelta(minutes=i)).isoformat(), "sequence": i}
-            for i in range(n)],
-    })
+    tmp = _pl.Path(tempfile.mkdtemp())
+    convs = [{"uuid": f"c_{uuid.uuid4().hex[:6]}",
+              "chat_messages": [
+                  {"uuid": f"m{i:04d}", "sender":
+                   "human" if i % 2 == 0 else "assistant",
+                   "created_at": (base + timedelta(minutes=i))
+                   .isoformat().replace("+00:00", "Z"),
+                   "content": [{"type": "text",
+                                "text": f"分页测试消息 {i}"}]}
+                  for i in range(n)]}]
+    f = tmp / "s.json"
+    f.write_text(_json.dumps(convs, ensure_ascii=False), encoding="utf-8")
+    importer.import_file("jiaming", str(f))

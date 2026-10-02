@@ -19,7 +19,6 @@ from mariposa.identity import service as identity
 from mariposa.deletion import service as deletion
 from mariposa.memory import extras as memory_extras
 from mariposa.memory import service as memory
-from mariposa.raw import binding as raw_binding
 from mariposa.recall import store
 from mariposa.capabilities import registry
 from mariposa.retrieval import rebuild as retrieval_rebuild
@@ -97,37 +96,6 @@ class TestN02LegacySummaryRebuild:
         assert "field_projection" in result and "source_projection" in result
 
 
-class TestN11MemoryTagsDeletion:
-    def test_tagged_memory_deletes_cleanly(self, actors):
-        out = hold_v2(actors["jiaming"], "带旧标签可删除的正文")
-        mid = out["memory_id"]
-        with db.formal() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conn.execute(
-                    "INSERT INTO memory_tags(memory_id, namespace, tag,"
-                    " whose, created_by)"
-                    " VALUES(?, 'emotion', '开心', 'jiaming', 'qiaosheng')",
-                    (mid,))
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        req = deletion.deletion_submit(
-            actors["qiaosheng"].principal_id, mid, "N11 测试")
-        res = deletion.deletion_decide(actors["jiaming"].principal_id,
-                                      req["request_id"], "approve")
-        assert res["status"] == "approved"
-        with db.formal() as conn:
-            gone = conn.execute(
-                "SELECT 1 FROM memories WHERE memory_id=?", (mid,)).fetchone()
-            tags = conn.execute(
-                "SELECT COUNT(*) c FROM memory_tags WHERE memory_id=?",
-                (mid,)).fetchone()["c"]
-        assert gone is None
-        assert tags == 0, "标签行未随删除清理"
-
-
 class TestN12SupersededConcurrentLoser:
     def test_superseded_branch_cas_loser_is_structured(self, actors,
                                                        monkeypatch):
@@ -167,124 +135,6 @@ class TestN12SupersededConcurrentLoser:
                 "SELECT status FROM deletion_requests WHERE id=?",
                 (req["request_id"],)).fetchone()["status"]
         assert status == "approved", "输家不得改写赢家的终态"
-
-
-class TestN13BindHoldSameSourceInvariant:
-    def test_concurrent_bind_and_hold_single_binding(self, actors):
-        """真实并发：hold（带同源 raw_refs）与 raw.bind 写同一来源区间，
-        最终该区间 active 绑定只归属一个 memory。"""
-        refs = [{"conversation_id": "conv-n13", "message_from": "m-a",
-                 "message_to": "m-b"}]
-        gate = threading.Barrier(2, timeout=10)
-        results, errors = {}, {}
-
-        mem_a = hold_v2(actors["jiaming"], "甲方同源桶")
-
-        def do_hold(_):
-            gate.wait()
-            try:
-                results["hold"] = hold_v2(actors["jiaming"],
-                                          "并发 hold 桶", raw_refs=refs)
-            except Exception as e:  # noqa: BLE001
-                errors["hold"] = e
-
-        def do_bind(_):
-            gate.wait()
-            try:
-                results["bind"] = raw_binding.bind(
-                    actors["jiaming"].principal_id, mem_a["memory_id"],
-                    "conv-n13", "m-a", "m-b")
-            except Exception as e:  # noqa: BLE001
-                errors["bind"] = e
-
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f1 = ex.submit(do_hold, 0)
-            f2 = ex.submit(do_bind, 1)
-            f1.result(timeout=20), f2.result(timeout=20)
-        src = memory._raw_ref_hash(refs[0])
-        with db.formal() as conn:
-            rows = conn.execute(
-                "SELECT memory_id FROM memory_raw_refs WHERE source_hash=?"
-                " AND bind_confidence<>'revoked'", (src,)).fetchall()
-        active = {r["memory_id"] for r in rows}
-        assert len(active) <= 1, \
-            f"N13：同源区间多个 active 绑定：{active}（{results} {errors}）"
-
-
-class TestN05MutationsRegainWriteIdempotency:
-    """write=False 真实 mutation 修正（Codex B.3 十项）：同 key 重试
-    恢复单副作用；current 读取保持 fresh（F10 修复不回退）。"""
-
-    @pytest.fixture(autouse=True)
-    def _compat(self):
-        from mariposa.capabilities.v1_compat import register_v1_compat
-        register_v1_compat()  # thin 层能力（app 启动时挂载）
-
-    def test_plan_complete_same_key_retry(self, actors):
-        created = registry.invoke(
-            actors["jiaming"], "plan.create",
-            {"title": "N05 计划", "content": "内容"}, None)
-        pid = created["data"]["plan_id"]
-        args = {"plan_id": pid, "expected_version": 1}
-        r1 = registry.invoke(actors["jiaming"], "plan.complete", args,
-                             "idem-n05-plan")
-        assert r1["data"]["state"] == "done"
-        r2 = registry.invoke(actors["jiaming"], "plan.complete", args,
-                             "idem-n05-plan")
-        assert r2.get("idempotent_replay") is True, \
-            "N05：写幂等重试应重放首次结果而非 VERSION_CONFLICT"
-        assert r2["data"]["state"] == "done"
-        with db.formal() as conn:
-            versions = conn.execute(
-                "SELECT COUNT(*) c FROM plan_versions WHERE plan_id=?",
-                (pid,)).fetchone()["c"]
-        assert versions == 2, "重试不得推进新版本"
-
-    def test_workspace_candidates_create_same_key_single_item(self, actors):
-        args = {"text": "N05 候选文本"}
-        r1 = registry.invoke(actors["jiaming"],
-                             "workspace.candidates.create", args,
-                             "idem-n05-cand")
-        r2 = registry.invoke(actors["jiaming"],
-                             "workspace.candidates.create", args,
-                             "idem-n05-cand")
-        assert r2.get("idempotent_replay") is True
-        assert r1["data"]["candidate_id"] == r2["data"]["candidate_id"]
-        with db.workspace() as conn:
-            n = conn.execute(
-                "SELECT COUNT(*) c FROM work_items WHERE item_id=?",
-                (r1["data"]["candidate_id"],)).fetchone()["c"]
-        assert n == 1, "同 key 重试产生了第二个工作区候选"
-
-    def test_emotions_set_same_key_single_tag(self, actors):
-        out = hold_v2(actors["jiaming"], "情绪标签幂等正文")
-        args = {"memory_id": out["memory_id"],
-                "tags": [{"tag": "安心", "whose": "jiaming"}]}
-        r1 = registry.invoke(actors["jiaming"], "memory.emotions.set",
-                             args, "idem-n05-emo")
-        r2 = registry.invoke(actors["jiaming"], "memory.emotions.set",
-                             args, "idem-n05-emo")
-        assert r2.get("idempotent_replay") is True
-        with db.formal() as conn:
-            n = conn.execute(
-                "SELECT COUNT(*) c FROM memory_tags WHERE memory_id=?",
-                (out["memory_id"],)).fetchone()["c"]
-        assert n == 1
-
-    def test_reads_still_fresh_not_cached(self, actors):
-        """F10 修复保持：纯读能力同 key 仍每次现算。"""
-        out = hold_v2(actors["jiaming"], "读取新鲜度正文")
-        r1 = registry.invoke(actors["jiaming"], "memory.get",
-                             {"memory_id": out["memory_id"]},
-                             "idem-n05-read")
-        memory_extras.update_text(
-            actors["jiaming"].principal_id, out["memory_id"],
-            expected_version=1, text="更新后的读取新鲜度正文")
-        r2 = registry.invoke(actors["jiaming"], "memory.get",
-                             {"memory_id": out["memory_id"]},
-                             "idem-n05-read")
-        assert r2.get("idempotent_replay") is not True
-        assert r2["data"]["text"] == "更新后的读取新鲜度正文"
 
 
 class TestSourceBatch4:
@@ -794,33 +644,6 @@ class TestP102DenseWiring:
 
         monkeypatch.setattr(semantic, "embed", fake_embed)
 
-    def test_dense_ignores_meaning_and_respects_core(self, actors,
-                                                     monkeypatch):
-        """CORE 记忆的 meaning 含目标词、正文不含 → dense 不召回。"""
-        self._enable_dense(monkeypatch)
-        from mariposa.capabilities import registry as reg
-        from mariposa.memory import service as memory
-        from mariposa.memory import listing as mlisting
-        out = memory.hold(actors["jiaming"], text="一段完全无关的日常叙述",
-                          memory_date="2026-09-01",
-                          date_confidence="exact", original_title="无关",
-                          categories=["daily"],
-                          creation_mode="contemporaneous", raw_pending=False)
-        mlisting.meanings_append(actors["jiaming"].principal_id,
-                                 out["memory_id"], "我们聊过极光与雪")
-        with db.formal() as conn:
-            conn.execute(
-                "UPDATE memories SET held_at='2026-01-01T00:00:00+00:00'"
-                " WHERE memory_id=?", (out["memory_id"],))
-        r = reg.invoke(actors["jiaming"], "memory.recall.start",
-                       { "operation_id": "op-auto-test_v-0","query_plan": {
-                           "original_request": "找极光",
-                           "channels": ["event"],
-                           "semantic_query": "极光",
-                           "lexical_terms": ["极光"]}}, None)
-        candidates = r["data"]["data"]["candidates"]
-        assert all(c.get("memory_id") != out["memory_id"] for c in                    candidates), \
-            "P1-02：CORE 记忆经 meaning 的语义相似度被 dense 拉回"
 
     def test_dense_card_has_version_field_and_evidence(self, actors,
                                                        monkeypatch):

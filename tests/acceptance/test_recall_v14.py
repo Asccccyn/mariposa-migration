@@ -15,7 +15,6 @@ from mariposa.recall import budget, service as recall_service, store
 from mariposa.retrieval import fusion, query_plan as qp, selection
 from mariposa.retrieval import evidence as em
 from mariposa.retrieval.judges import base as jb
-from mariposa.raw import recall as raw_recall
 from mariposa.errors import Forbidden
 from tests.conftest import reset_all
 
@@ -289,18 +288,6 @@ class TestPack:
             {"delivery_limit": 3}, set(), has_conflict=True)
         assert "m1" in out["conflicts"]
 
-    def test_pack05(self):
-        from mariposa.raw import service as raw
-        raw.import_payload("jiaming", {
-            "source_channel": "cc", "external_id": "e",
-            "messages": [{"source_message_id": f"m{i}", "role": "user",
-                          "body": "正文", "occurred_at":
-                          f"2026-08-01T10:00:{i:02d}"} for i in range(10)]})
-        scope = raw_recall.resolve_scope({}, actors_stub())
-        res = raw_recall.scoped_search(["正文"], scope, limit=3,
-                                       max_batches=1)
-        assert res["coverage"] in ("complete_within_scope", "partial")
-        assert len(res["hits"]) <= 3
 
     def test_pack06(self):
         snippet, truncated = em.excerpt("内容。" * 500, limit=100)
@@ -314,100 +301,6 @@ class TestPack:
 
 def actors_stub():
     return identity.Principal("jiaming", "周", "agent", "cc", "b")
-
-
-class TestRawx:
-    def _raw(self, n, target_i=None, body="目标词咕咕"):
-        from mariposa.raw import service as raw
-        msgs = [{"source_message_id": f"m{i}", "role": "user",
-                 "body": body if i == target_i else f"普通{i}",
-                 "occurred_at": f"2026-08-01T10:00:{i:02d}"}
-                for i in range(n)]
-        raw.import_payload("jiaming", {
-            "source_channel": "cc", "external_id": "er", "messages": msgs})
-
-    def test_rawx01(self, actors):
-        self._raw(5, target_i=2)
-        hold(actors, "事件", "2026-08-10",
-             our_words=[{"speaker": "qiaosheng", "text": "复述目标词",
-                         "expression_kind": "paraphrase"}])
-        p = recall_service.start(actors["jiaming"], {"query_plan": {
-            "original_request": "原话", "channels": ["words"],
-            "lexical_terms": ["目标词"],
-            "evidence_requirement": "verbatim_required",
-            "raw_fallback": "when_evidence_insufficient"}})
-        # 闭环复审 P1-2：第一轮不查 raw——升级唯一通路是 round2 门禁
-        assert p["coverage"].get("raw") == "round2_only"
-        assert not any(c["channel"] == "raw" for c in p["candidates"])
-        assert p["continuation"]["action"] == "round2_raw"
-
-    def test_rawx02(self):
-        self._raw(600, target_i=30)
-        scope = raw_recall.resolve_scope({}, actors_stub())
-        res = raw_recall.scoped_search(["咕咕"], scope, limit=20,
-                                       max_batches=1)
-        assert res["coverage"] == "partial"
-        assert res["continuation"]
-        res2 = raw_recall.scoped_search(
-            ["咕咕"], scope, cursor=tuple(res["continuation"]["cursor"]),
-            max_batches=3)
-        assert res2["hits"]
-
-    def test_rawx03(self):
-        scope = raw_recall.resolve_scope({}, actors_stub())
-        res = raw_recall.scoped_search(["x"], scope, limit=2)
-        assert len(res["hits"]) <= 2
-
-    def test_rawx04(self, actors):
-        self._raw(5, target_i=1)
-        p = start(actors, lexical_terms=["咕咕"])
-        assert p["candidates"] == []
-        assert p["coverage"].get("raw", "not_executed") == "not_executed"
-
-    def test_rawx05(self, actors):
-        m = hold(actors, "事件", "2026-08-10",
-                 our_words=[{"speaker": "qiaosheng", "text": "搬家话语",
-                             "expression_kind": "verbatim"}])
-        with db.formal() as conn:
-            conn.execute("UPDATE memories SET compression_state="
-                         "'forgotten_summary' WHERE memory_id=?",
-                         (m["memory_id"],))
-        out = recall_service.words_recall(actors["jiaming"],
-                                          {"query": "搬家"})
-        assert out["candidates"] == []
-
-    def test_rawx06(self):
-        self._raw(3, target_i=0)
-        res = raw_recall.scoped_search(
-            ["咕咕"], raw_recall.resolve_scope({}, actors_stub()))
-        assert res["hits"] and res["hits"][0]["speaker"] is None
-
-    def test_rawx07(self, actors):
-        from mariposa.raw import service as raw
-        raw.import_payload("jiaming", {
-            "source_channel": "cc", "external_id": "e7",
-            "messages": [{"source_message_id": "s1", "role": "user",
-                          "body": "原话内容", "occurred_at":
-                          "2026-08-19T10:00:00"}]})
-        with db.formal() as conn:
-            mid = conn.execute("SELECT id FROM raw_messages").fetchone()["id"]
-        hold(actors, "事件", "2026-08-19",
-             our_words=[{"speaker": "qiaosheng", "text": "原话内容",
-                         "expression_kind": "verbatim",
-                         "source_ref": f"raw_msg:{mid}"}])
-        out = recall_service.words_recall(actors["jiaming"], {"query": "原话"})
-        kinds1 = [e["evidence_kind"] for h in out["candidates"]
-                  for e in h["evidence"]]
-        assert "word_verbatim" in kinds1
-        with db.formal() as conn:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.execute("DELETE FROM raw_messages")
-            conn.execute("PRAGMA foreign_keys=ON")
-        out2 = recall_service.words_recall(actors["jiaming"],
-                                           {"query": "原话"})
-        kinds2 = [e["evidence_kind"] for h in out2["candidates"]
-                  for e in h["evidence"]]
-        assert "word_unverified" in kinds2
 
 
 class TestRuntime:

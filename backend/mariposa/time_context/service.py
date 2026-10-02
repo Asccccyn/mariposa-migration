@@ -36,8 +36,11 @@ def _latest_activity(conn, kinds: list[str]) -> str | None:
 
 
 def _latest_raw_user(conn) -> str | None:
+    # D13（2026-10-01）：legacy raw_messages 退役——最近用户消息改查
+    # 现行 Source 层（normalized_sender='human'）
     row = conn.execute(
-        "SELECT MAX(occurred_at) AS m FROM raw_messages WHERE role='user'").fetchone()
+        "SELECT MAX(m.created_at) AS m FROM source_messages m"
+        " WHERE m.normalized_sender='human'").fetchone()
     return row["m"] if row and row["m"] else None
 
 
