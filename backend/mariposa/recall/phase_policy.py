@@ -254,6 +254,9 @@ def facts_of(memory_id: str) -> dict:
         keeps = [r["owner"] for r in conn.execute(
             "SELECT owner FROM memory_keeps WHERE memory_id=?"
             " AND revoked_at IS NULL", (memory_id,))]
+        plan_states = [r["state"] for r in conn.execute(
+            "SELECT p.state FROM plan_memory_links l JOIN plans p"
+            " ON p.id=l.plan_id WHERE l.memory_id=?", (memory_id,))]
     held = m["held_at"]
     opened = m["last_explicit_open_at"]
 
@@ -265,10 +268,13 @@ def facts_of(memory_id: str) -> dict:
             dt = dt.replace(tzinfo=ZoneInfo("UTC"))
         return dt
 
+    # 全量审计 P1-08：plan 分类的桶由链接的 plan 资源状态自管——
+    # 事实装载带出 plan 绑定与开合状态（任一链接 plan 开着 = open）
     return {"first_held_at": _dt(held),
             "last_explicit_open_at": _dt(opened),
             "categories": cats,
-            "active_keep_owners": keeps}
+            "active_keep_owners": keeps,
+            "plan_states": plan_states}
 
 
 def phase_of(memory_id: str, *, now: datetime | None = None,
@@ -277,6 +283,13 @@ def phase_of(memory_id: str, *, now: datetime | None = None,
     """便捷入口：装载事实并计算阶段。"""
     from datetime import timezone as _tzmod
     facts = facts_of(memory_id)
+    # P1-08：有 plan 绑定的桶按 plan 资源计算（open→WIDE / 终态→CORE），
+    # 事件 H 不参与；显式 resource_kind="plan" 的调用保持原语义
+    plan_states = facts.get("plan_states") or []
+    if plan_states and resource_kind == "memory":
+        resource_kind = "plan"
+        plan_status = ("active" if any(st in PLAN_OPEN
+                                       for st in plan_states) else "done")
     return compute_phase(
         now=now or datetime.now(_tzmod.utc),
         first_held_at=facts["first_held_at"],
@@ -294,7 +307,8 @@ def facts_for_many(conn, memory_ids: list[str]) -> dict[str, dict]:
     marks = ",".join("?" * len(memory_ids))
     facts: dict[str, dict] = {mid: {
         "first_held_at": None, "last_explicit_open_at": None,
-        "categories": [], "active_keep_owners": []} for mid in memory_ids}
+        "categories": [], "active_keep_owners": [],
+        "plan_states": []} for mid in memory_ids}
 
     def _dt(raw):
         if not raw:
@@ -323,12 +337,34 @@ def facts_for_many(conn, memory_ids: list[str]) -> dict[str, dict]:
         f = facts.get(r["memory_id"])
         if f:
             f["active_keep_owners"].append(r["owner"])
+    # P1-08：批量装载 plan 绑定状态（与 facts_of 同语义）
+    for r in conn.execute(
+            f"SELECT l.memory_id, p.state FROM plan_memory_links l"
+            f" JOIN plans p ON p.id=l.plan_id"
+            f" WHERE l.memory_id IN ({marks})", memory_ids):
+        f = facts.get(r["memory_id"])
+        if f:
+            f["plan_states"].append(r["state"])
     return facts
 
 
 def phase_from_facts(facts: dict, *, now: datetime,
                      **kw) -> PhaseResult:
     """用 facts_for_many 的结果直接计算阶段。"""
+    plan_states = facts.get("plan_states") or []
+    if plan_states:
+        # P1-08：plan 绑定桶按 plan 资源自管（open→WIDE / 终态→CORE）
+        return compute_phase(now=now,
+                             first_held_at=facts["first_held_at"],
+                             categories=facts["categories"],
+                             last_explicit_open_at=facts[
+                                 "last_explicit_open_at"],
+                             active_keep_owners=facts["active_keep_owners"],
+                             resource_kind="plan",
+                             plan_status=("active" if any(
+                                 st in PLAN_OPEN for st in plan_states)
+                                 else "done"),
+                             **kw)
     return compute_phase(now=now,
                          first_held_at=facts["first_held_at"],
                          categories=facts["categories"],

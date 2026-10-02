@@ -157,7 +157,9 @@ class TestStickersAndTwoPhaseImport:
         from mariposa.media import service as media
         png = b"\x89PNG\r\n\x1a\n" + b"S" * 40
         prep = media.upload_prepare("qiaosheng", "image/png", len(png))
-        out = media.upload_finalize("qiaosheng", prep["upload_token"], png)
+        assert media.stage_bytes("qiaosheng", prep["upload_token"],
+                                  png)["staged"]
+        out = media.upload_finalize("qiaosheng", prep["upload_token"])
         from mariposa.capabilities import registry
         registry.invoke(actors["qiaosheng"], "sticker.add",
                         {"label": "开心猫", "content_hash": out["content_hash"]},

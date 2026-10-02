@@ -248,6 +248,7 @@ def hold(
     raw_pending: bool = True,
     original_title: str | None = None,
     categories: list[str] | None = None,
+    plan_ids: list[str] | None = None,
     mood: dict | None = None,
     our_words: list[dict] | None = None,
     creation_mode: str | None = None,
@@ -268,6 +269,13 @@ def hold(
                  allowed=sorted(("daily", "milestone", "sad", "sweet", "date",
                                  "plan", "sex", "anniversary", "reloplay")))
     cats = categories_mod.validate(categories)
+    # 全量审计 P1-08：plan 分类必须显式绑定 plan 资源——无绑定的
+    # plan 桶在召回时会静默退出普通检索（PLAN_MAPPING_GAP），把
+    # 静默失效前移为写入时结构化拒绝
+    if "plan" in cats and not plan_ids:
+        raise _F("plan 分类必须绑定 plan 资源：plan_ids 非空且指向"
+                 "存在的 plan（全量审计 P1-08）",
+                 code="PLAN_BINDING_REQUIRED")
     mode = creation_mode or ("contemporaneous" if v2 else None)
     if mode is not None and mode not in ("contemporaneous", "retrospective"):
         raise Forbidden("creation_mode must be contemporaneous/retrospective",
@@ -292,6 +300,18 @@ def hold(
                 date_confidence=date_confidence, mode=mode,
                 original_title=original_title, v2=v2, now=now,
                 occurred_start=occurred_start, occurred_end=occurred_end)
+            # plan 绑定先于分层写入（categories.add 的 PLAN 绑定守卫
+            # 依赖链接已存在——同事务内顺序保证）
+            if "plan" in cats:
+                for pid in dict.fromkeys(plan_ids):
+                    if not conn.execute(
+                            "SELECT 1 FROM plans WHERE id=?",
+                            (pid,)).fetchone():
+                        raise NotFound("plan not found", plan_id=pid)
+                for pid in dict.fromkeys(plan_ids):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO plan_memory_links(plan_id,"
+                        " memory_id) VALUES(?,?)", (pid, memory_id))
             _insert_layers(
                 conn, memory_id=memory_id, principal_id=principal.principal_id,
                 cats=cats, mood_data=mood_data, our_words=our_words,

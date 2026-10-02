@@ -51,6 +51,17 @@ def _now() -> str:
 def replace(conn, memory_id: str, categories: list[str], added_by: str) -> None:
     """整组替换（hold 时写入；必须在正式库事务内调用）。"""
     cats = validate(categories)
+    if "plan" in cats:
+        # 全量审计 P1-08：事后改分类加 plan 同样要求已有 plan 绑定
+        # （绑定只能在 hold 时以 plan_ids 显式建立）
+        if not conn.execute(
+                "SELECT 1 FROM plan_memory_links WHERE memory_id=?",
+                (memory_id,)).fetchone():
+            raise Forbidden(
+                "plan 分类要求该桶已绑定 plan 资源（hold 时以 plan_ids"
+                " 建立）；categories 变更不能凭空造绑定（P1-08）",
+                code="PLAN_BINDING_REQUIRED")
+
     conn.execute("DELETE FROM memory_categories WHERE memory_id=?", (memory_id,))
     now = _now()
     for c in cats:
@@ -63,6 +74,17 @@ def replace(conn, memory_id: str, categories: list[str], added_by: str) -> None:
 def add(conn, memory_id: str, categories: list[str], added_by: str) -> None:
     """追加分类（不删除已有；桶内同分类只存一次）。"""
     cats = validate(categories)
+    if "plan" in cats:
+        # 全量审计 P1-08：事后改分类加 plan 同样要求已有 plan 绑定
+        # （绑定只能在 hold 时以 plan_ids 显式建立）
+        if not conn.execute(
+                "SELECT 1 FROM plan_memory_links WHERE memory_id=?",
+                (memory_id,)).fetchone():
+            raise Forbidden(
+                "plan 分类要求该桶已绑定 plan 资源（hold 时以 plan_ids"
+                " 建立）；categories 变更不能凭空造绑定（P1-08）",
+                code="PLAN_BINDING_REQUIRED")
+
     now = _now()
     for c in cats:
         conn.execute(

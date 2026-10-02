@@ -285,7 +285,7 @@ class TestP15JevProfileFailClosed:
                 "excerpt": "正文", "memory_id": "mem_x",
                 "memory_date": "2026-09-01",
                 "_row": {"whitelist_body": "正文"}}
-        proj = j._candidate_projection(cand)
+        proj = j._candidate_projection(cand, ['测试锚词'])
         assert proj["metadata"]["memory_id"] is None
         assert proj["metadata"]["speaker"] is None
 
