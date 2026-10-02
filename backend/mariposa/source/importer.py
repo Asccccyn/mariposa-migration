@@ -151,8 +151,12 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     batch_id, reused, lease = _claim_batch(provider, sha256, staged,
                                            principal_id, original_name)
     if batch_id is None:  # already_imported
+        # CB-028：幂等短路不留完整 staging 副本——重试不得每次多一份
+        # 同等大小的 .part（正常路径归档/清理，短路分支同样释放）
+        staged.unlink(missing_ok=True)
         return _already_result(provider, sha256)
     if batch_id is False:  # 新鲜 running 冲突
+        staged.unlink(missing_ok=True)
         raise MariposaError(
             "同源导入正在进行（running 批次租约内）；请稍后重试或等待"
             "租约过期", code="SOURCE_IMPORT_IN_PROGRESS", sha256=sha256)
@@ -254,6 +258,23 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                 if publish_mismatch:
                     stats["publish_skipped_content_mismatch"] = \
                         publish_mismatch
+                # CB-027：会话聚合与发布同一事务——聚合只数 published，
+                # 此前预刷发生在发布前（全 0），成功发布后不再刷新，
+                # conversation.get 显示 0 条而 messages 有 N 条
+                conn.execute(
+                    "UPDATE source_conversations SET"
+                    " message_count=(SELECT COUNT(*) FROM source_messages m"
+                    "  WHERE m.conversation_id=source_conversations.id"
+                    "  AND m.published=1),"
+                    " first_message_at=(SELECT MIN(created_at) FROM"
+                    "  source_messages m WHERE"
+                    " m.conversation_id=source_conversations.id"
+                    " AND m.published=1),"
+                    " last_message_at=(SELECT MAX(created_at) FROM"
+                    "  source_messages m WHERE"
+                    " m.conversation_id=source_conversations.id"
+                    " AND m.published=1)"
+                    " WHERE last_import_batch_id=?", (batch_id,))
                 conn.execute(
                     "UPDATE source_import_batches SET status='completed',"
                     " import_finished_at=?, stats=?, error=NULL"
