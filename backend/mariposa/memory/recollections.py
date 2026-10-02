@@ -56,6 +56,22 @@ def append(principal, memory_id: str, receipt_id: str, text: str,
                 raise ViewReceiptInvalid(
                     "view not confirmed yet; confirm before writing",
                     receipt_id=receipt_id)
+            # P1-3（2026-10-02 接续复审）：票据版本必须仍是当前 Memory
+            # 表示版本——看过 v1 确认后 Memory 改成 v2，v1 票据不得
+            # 给 v2 写回忆或据此 keep_wide（receipt 表本来就存了
+            # representation_version，view.confirm 也有同款校验）
+            cur_v = conn.execute(
+                "SELECT current_version_no FROM memories WHERE"
+                " memory_id=?", (memory_id,)).fetchone()
+            if cur_v is None or str(r["representation_version"]) != str(
+                    cur_v["current_version_no"]):
+                raise ViewReceiptInvalid(
+                    "view receipt 的表示版本已过期（Memory 已更新）；"
+                    "请重新 open+confirm 当前版本",
+                    receipt_id=receipt_id,
+                    receipt_version=str(r["representation_version"]),
+                    current_version=(str(cur_v["current_version_no"])
+                                     if cur_v else None))
             conn.execute(
                 "INSERT INTO memory_recollections(recollection_id, memory_id,"
                 " author, text, view_receipt, version, written_at)"
@@ -103,6 +119,16 @@ def revise(principal, recollection_id: str, text: str) -> dict:
             if old["author"] != author:
                 raise Forbidden("recollections can only be revised by author",
                                 recollection_id=recollection_id)
+            # P2-7（2026-10-02 接续复审）：只允许修订当前 leaf——对已被
+            # supersede 的历史版本再修会分叉出两个"当前回忆"
+            superseded = conn.execute(
+                "SELECT 1 FROM memory_recollections WHERE supersedes=?"
+                " LIMIT 1", (recollection_id,)).fetchone()
+            if superseded is not None:
+                raise Forbidden(
+                    "该 recollection 已被后续修订取代；只能修订当前"
+                    "版本（leaf）", code="SUPERSEDED",
+                    recollection_id=recollection_id)
             conn.execute(
                 "INSERT INTO memory_recollections(recollection_id, memory_id,"
                 " author, text, view_receipt, supersedes, version, written_at)"

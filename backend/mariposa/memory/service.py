@@ -457,11 +457,14 @@ def mood_write(principal_id: str, memory_id: str,
             clean_tags.append(t)
     now = _now()
     with db.formal() as conn:
-        if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
-                            (memory_id,)).fetchone():
-            raise NotFound("memory not found", memory_id=memory_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # P1-4（2026-10-02 接续复审）：存在性检查在写锁内——
+            # 锁外旧快照遇并发删除会变未结构化 FK 异常
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
             old = conn.execute(
                 "SELECT mood_text FROM memory_moods WHERE memory_id=?",
                 (memory_id,)).fetchone()
