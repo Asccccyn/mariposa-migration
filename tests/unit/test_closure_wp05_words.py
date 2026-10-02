@@ -61,6 +61,13 @@ class TestWordsDense:
         from mariposa.retrieval import words_semantic
         import numpy as np
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "local_bge_zh")
+        # CB-054：结构测试不加载真实模型——文档/查询两侧都走假
+        # 512 维向量（与 provider 维度一致）
+        monkeypatch.setattr(
+            words_semantic, "embed",
+            lambda texts: [np.asarray([1.0, 0.0] + [0.0] * 510,
+                                      dtype=np.float32)
+                           for _ in texts])
         # 触发一次 words dense 建表建向量
         hold_words(actors["jiaming"], [
             {"speaker": "qiaosheng", "text": "空间身份测试话语",

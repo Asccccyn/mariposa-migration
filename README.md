@@ -29,14 +29,22 @@ scripts/start-dev.ps1
   - `identity/` 主体与绑定（token -> principal，服务端解析，参数不能自报）
   - `capabilities/registry.py` 统一能力注册表：HTTP / MCP / CC 共用同一 handler
   - `memory/` 正式桶、版本、遗忘审批应用、恢复
-  - `workspace/` 独立工作区（草稿/提案/审批协调，跨库提交信封协议）
+  - `relations/` 五域关系（memory/I/source/plan/word）+ 纠错历史与
+    领域原子写；`deletion/` 删除申请两条路径（江乔生申请/周家明直删）
+  - `recall/` 召回运行时（Session/预算/Round2/Raw 深搜）；
+    `bootstrap/` 开窗装配；`source/` 原文层（导入/绑定/区间）
   - `retrieval/` 可检索投影 + FTS5（中文预分词）+ 查询安全编译
-- `runtime/formal/mariposa.sqlite3` 正式库；`runtime/workspace/workspace.sqlite3` 工作区库
-- 遗忘闭环：候选扫描 -> 工作区草稿 -> 提交（hash 冻结）-> 乔生/周家明任一方审批
-  -> 正式库单事务切换版本+投影+FTS -> 可恢复
+- `runtime/formal/mariposa.sqlite3` 正式库；
+  `runtime/recall/recall.sqlite3` 召回运行库（workspace 已随
+  Workspace Tasks/Lease 退役移除）
+- 删除闭环（v2.0）：江乔生申请（配额：lifetime 5/日 10）-> 周家明
+  approve 物理删除 / 周家明 memory.delete 直删；五域关系硬门拦截
 
 ## 边界
 
 - 旧 Ombre（`D:\Ombre-Brain-*`）只读、不共写、不复制私人内容到本仓库
 - 语义检索：provider 未配置时显式 `degraded: semantic_unavailable`，不伪造向量
-- letters/物理删除：等待现场行为核验，标 `blocked: legacy_contract_unverified`
+- 退役业务（letters/Home/Self/Diary/Calendar/Reminder/Moments/
+  Quotes/Review/Candidate/Proposal/Workspace Tasks/Legacy Raw/
+  Memory archive）不再恢复；能力合同见 contracts/capabilities.v1.json
+  （与 Registry 同源生成，`scripts/export_contracts.py` 刷新）
