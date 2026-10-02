@@ -79,8 +79,14 @@ class AllowedScope:
         filters: dict = {}
         if ec.get("categories"):
             filters["categories"] = ec["categories"]
+            # CB-040（2026-10-02 审计 P2）：match 模式必须随维度进入
+            # 统一 scope——此前只复制列表，all 被静默按 any 执行
+            if ec.get("category_match"):
+                filters["category_match"] = ec["category_match"]
         if ec.get("mood_tags"):
             filters["mood_tags"] = ec["mood_tags"]
+            if ec.get("mood_match"):
+                filters["mood_match"] = ec["mood_match"]
         if ec.get("event_date"):
             filters["event_date"] = ec["event_date"]
         where, params = search_mod._pool_where(filters)
