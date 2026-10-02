@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .. import db
-from ..errors import Forbidden, IdempotencyConflict, MariposaError, NotFound, OutcomeUnknown
+from ..errors import (Forbidden, IdempotencyConflict, MariposaError,
+                      NotFound, OutcomeUnknown, StaleOperation)
 from ..identity import Principal
 from ..identity import service as identity
 from ..memory import service as memory
@@ -428,6 +429,43 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
     return {"ok": True, "data": result}
 
 
+def _revalidate_replayed_response(principal: Principal, capability: str,
+                                  replay: dict) -> None:
+    """CB-016（2026-10-02 审计 P1）：幂等缓存的重放前资源重验。
+
+    write 回执缓存的是完整响应——写幂等的"同 key 同结果"不等于
+    "当前资源仍处于该状态"。memory.open 的缓存响应带完整正文与票据：
+    memory 已更新/物理删除、票据行已消失或归属他人时，重放必须返回
+    结构化 stale，不得重发旧正文或已失效票据（物理删除 ≠ 出站不可
+    再取）。其他能力按需登记。
+    """
+    if capability != "memory.open":
+        return
+    mid = replay.get("memory_id")
+    if not mid:
+        return
+    with db.formal() as conn:
+        m = conn.execute(
+            "SELECT visibility, current_version_no FROM memories"
+            " WHERE memory_id=?", (mid,)).fetchone()
+        rid = replay.get("view_receipt")
+        r = (conn.execute(
+            "SELECT principal_id, binding_id FROM memory_view_receipts"
+            " WHERE receipt_id=?", (rid,)).fetchone() if rid else None)
+    if m is None or m["visibility"] != "active":
+        raise StaleOperation(
+            "memory 已删除/不可见，旧 open 响应拒绝重放", memory_id=mid)
+    if str(replay.get("version")) != str(m["current_version_no"]):
+        raise StaleOperation(
+            "memory 已更新到新版本，旧 open 响应拒绝重放",
+            memory_id=mid, current_version=m["current_version_no"])
+    if (r is None or r["principal_id"] != principal.principal_id
+            or r["binding_id"] != principal.binding_id):
+        raise StaleOperation(
+            "查看票据已失效或不属于当前身份，旧 open 响应拒绝重放",
+            memory_id=mid)
+
+
 def _await_completion(principal: Principal, cap: Capability, key: str,
                       ph: str) -> dict | None:
     """占位失败方：等待占位方终态。
@@ -447,7 +485,10 @@ def _await_completion(principal: Principal, cap: Capability, key: str,
                 "same key with different payload",
                 capability=cap.name, key=key)
         if row["status"] == "completed":
-            return json.loads(row["result_ref"])
+            replay = json.loads(row["result_ref"])
+            # CB-016：重放的完整响应先过资源重验，失效结构化拒绝
+            _revalidate_replayed_response(principal, cap.name, replay)
+            return replay
     row = _read_idempotency(principal.principal_id, cap.name, key)
     if row is not None and row["status"] == "running":
         if _idempotency_stale(row):

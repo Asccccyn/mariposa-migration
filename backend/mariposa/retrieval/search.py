@@ -284,7 +284,12 @@ def search(conn, query: str, limit: int = 20,
         if isinstance(sh, dict) and "__pending_vectors__" in sh:
             continue
         if sh["memory_id"] not in seen:
-            hits.append(sh)
+            # CB-017（2026-10-02 审计 P1）：兼容检索入口不得附送未判断
+            # 的 dense 正文——whitelist_body 只进 Recall 的 judge 管线
+            #（S10 出站硬门），此处仅返回未交付候选元数据（要正文走
+            # memory.open / Recall 正规链路）
+            hits.append({k: v for k, v in sh.items()
+                         if k != "whitelist_body"})
 
     result: dict = {"hits": hits, "query": query, "mode": mode}
     if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS:
