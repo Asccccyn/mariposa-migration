@@ -102,11 +102,19 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     raw = b"".join(chunks)
     try:
         body = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
         return _rpc_error(None, -32700, "Parse error")
-
+    # CB-048（2026-10-02 审计 P2）：合法 JSON 不等于合法 RPC envelope
+    # ——body=[]/null/数值、method 非字符串、params/arguments 非
+    # object 都是结构化 -32600，不是未处理 500
+    if not isinstance(body, dict):
+        return _rpc_error(None, -32600,
+                          "invalid request: body must be an object")
     msg_id = body.get("id")
     method = body.get("method", "")
+    if not isinstance(method, str):
+        return _rpc_error(msg_id, -32600,
+                          "invalid request: method must be a string")
 
     allowed = PROFILE_PRINCIPALS[profile]
     if principal.principal_id not in allowed:
@@ -130,8 +138,14 @@ async def handle(request: Request, profile: str) -> JSONResponse:
 
     if method == "tools/call":
         params = body.get("params") or {}
+        if not isinstance(params, dict):
+            return _rpc_error(msg_id, -32600,
+                              "invalid params: must be an object")
         name = str(params.get("name", ""))
         arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return _rpc_error(msg_id, -32600,
+                              "invalid params: arguments must be an object")
         canonical = _canonical_name(name)
         try:
             out = registry.invoke(principal, canonical, arguments,
