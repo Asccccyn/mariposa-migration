@@ -20,7 +20,7 @@ from mariposa import db
 from mariposa.errors import AlreadyDecided, DeleteBlocked, NotFound
 from mariposa.identity import service as identity
 from mariposa.identity_i import service as i_service
-from mariposa.letters import service as letters
+from mariposa.deletion import service as deletion
 from mariposa.memory import service as memory
 from tests.conftest import reset_all
 
@@ -45,7 +45,7 @@ def hold_v2(actors, text):
 
 
 def submit_delete(actors, mid):
-    return letters.deletion_submit(actors["qiaosheng"].principal_id, mid,
+    return deletion.deletion_submit(actors["qiaosheng"].principal_id, mid,
                                    "审计测试", action="delete")
 
 
@@ -67,7 +67,7 @@ class TestF38ApproveRejectConcurrency:
         def run(name, decision):
             gate.wait()
             try:
-                results[name] = letters.deletion_decide(
+                results[name] = deletion.deletion_decide(
                     actors["jiaming"].principal_id,
                     req["request_id"], decision)
             except Exception as e:  # noqa: BLE001
@@ -101,11 +101,11 @@ class TestF38ApproveRejectConcurrency:
         out = hold_v2(actors, "顺序审批场景的正文")
         mid = out["memory_id"]
         req = submit_delete(actors, mid)
-        letters.deletion_decide(actors["jiaming"].principal_id,
+        deletion.deletion_decide(actors["jiaming"].principal_id,
                                     req["request_id"],
                                 "reject")
         with pytest.raises(NotFound):
-            letters.deletion_decide(actors["jiaming"].principal_id,
+            deletion.deletion_decide(actors["jiaming"].principal_id,
                                     req["request_id"],
                                     "approve")
 
@@ -113,7 +113,7 @@ class TestF38ApproveRejectConcurrency:
         out = hold_v2(actors, "无引用可正常删除的正文")
         mid = out["memory_id"]
         req = submit_delete(actors, mid)
-        res = letters.deletion_decide(actors["jiaming"].principal_id,
+        res = deletion.deletion_decide(actors["jiaming"].principal_id,
                                       req["request_id"], "approve")
         assert res["status"] == "approved"
         assert not memory_exists(mid)
@@ -133,7 +133,7 @@ class TestF34ReferentialIntegrity:
             relations=[{"memory_id": mid, "relation_type": "related"}])
         req = submit_delete(actors, mid)
         with pytest.raises(DeleteBlocked) as ei:
-            letters.deletion_decide(actors["jiaming"].principal_id,
+            deletion.deletion_decide(actors["jiaming"].principal_id,
                                     req["request_id"],
                                     "approve")
         assert ei.value.http_status == 409
@@ -181,7 +181,7 @@ class TestF34ReferentialIntegrity:
                 raise
         req = submit_delete(actors, mid)
         with pytest.raises(DeleteBlocked) as ei:
-            letters.deletion_decide(actors["jiaming"].principal_id,
+            deletion.deletion_decide(actors["jiaming"].principal_id,
                                     req["request_id"],
                                     "approve")
         assert ei.value.detail["references"].get("source_bindings") == 1
@@ -226,7 +226,7 @@ class TestF34ReferentialIntegrity:
                 raise
         req = submit_delete(actors, mid)
         with pytest.raises(DeleteBlocked) as ei:
-            letters.deletion_decide(actors["jiaming"].principal_id,
+            deletion.deletion_decide(actors["jiaming"].principal_id,
                                     req["request_id"],
                                     "approve")
         refs = ei.value.detail["references"]
@@ -241,9 +241,9 @@ class TestF34ReferentialIntegrity:
         i_service.item_create(
             "jiaming", "归档引用 I",
             relations=[{"memory_id": mid, "relation_type": "related"}])
-        req = letters.deletion_submit(actors["qiaosheng"].principal_id, mid,
+        req = deletion.deletion_submit(actors["qiaosheng"].principal_id, mid,
                                       "审计测试归档", action="archive")
-        res = letters.deletion_decide(actors["jiaming"].principal_id,
+        res = deletion.deletion_decide(actors["jiaming"].principal_id,
                                       req["request_id"], "approve")
         assert res["status"] == "approved"
         assert memory_exists(mid)

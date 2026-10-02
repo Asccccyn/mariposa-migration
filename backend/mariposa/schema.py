@@ -942,6 +942,12 @@ SELECT 'i_main', v.version_no, v.content, v.authored_by,
 -- 成功证据。
 ALTER TABLE source_import_batches ADD COLUMN lease_token TEXT;
 """),
+    (24, """
+-- ===== 信件拆分（2026-10-01）：letters 移出 mariposa（独立项目另行开发）=====
+-- 旧库中的信件行随表移除；如将来独立信件项目需要旧数据，从备份迁移。
+DROP TABLE IF EXISTS letter_versions;
+DROP TABLE IF EXISTS letters;
+"""),
 ]
 
 

@@ -2,6 +2,31 @@
 
 > 会话中断后从本文件与 NEXT.md 续接；每阶段末更新。
 
+## 2026-10-01 · 信件拆出 mariposa（letters 全量移除）
+
+乔生裁定：信件不属于 mariposa，拆分为独立项目另行专门开发；本仓当日
+移除 letters 全部代码，删除申请流保留并迁出为独立模块。
+
+- **letters 模块全删**：`backend/mariposa/letters/`（写/读/列表/编辑/
+  锁语义）、`letter.*` 四个能力注册与 handler、v1_compat 的
+  `letter.lock_update` 别名、conftest 表清理项、Web 删除申请页占位文案。
+- **deletion 独立模块**：`backend/mariposa/deletion/service.py`（自
+  letters/service.py 迁出），收窄为 memory-only；`memory.deletion.*`
+  四能力与 v1_compat 引用不变语义、改指向新模块。
+- **schema v24**：DROP `letters` / `letter_versions`（旧库信件行随表
+  移除；独立信件项目如需旧数据从备份迁移）。
+- **迁移工具去 letters**：`_TYPE_TARGET` 移除 letter 映射（真实迁移
+  落 UNMAPPED、无正文无哈希）；合成 dry-run 里 letter 标记
+  `out_of_scope` 且正文不进报告；apply 跳过 out_of_scope；inventory
+  去锁信计数。信件 fixture 样本删除。
+- **测试**：`test_letters_deletion.py` 拆分为 `test_deletion.py`
+  （TestDeletion 12 用例，memory-only）；两个 v17 审计测试 import 改
+  指新模块；两个 migration 测试按 out_of_scope 语义改写并新增
+  "信件正文不进报告"防护用例。
+- **契约/验收映射再生成**：contracts/capabilities.v1.json（212 能力，
+  0 letter）；验收映射 T-LEG-04 改 REMOVED（105 PASS/12 BLOCKED/
+  1 REMOVED）。
+
 ## 2026-09-26 · 召回运行时 v1.3/v1.4 全量落地（P0–P6）
 
 依据 Mariposa_记忆运行语义正本_v1.3 + 分层混合召回实现路径_v1.4

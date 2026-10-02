@@ -40,7 +40,6 @@ _ALIASES = {
     "jobs.status": "maintenance.jobs.status",
     "presence.handoff.latest": "handoff.latest",
     "presence.handoff.write": "handoff.write",
-    "letter.lock_update": "letter.edit",
     "settings.get": "maintenance.settings.get",
 }
 
@@ -220,9 +219,9 @@ def _register_thin() -> int:
     add("self.read", _self_read)
 
     def _deletion_get(p, a):
-        from ..letters import service as letters
+        from ..deletion import service as deletion
         rid = str(a.get("request_id", ""))
-        for r in letters.deletion_list():
+        for r in deletion.deletion_list():
             if r["id"] == rid:
                 return r
         raise NotFound("deletion request not found", request_id=rid)
@@ -324,8 +323,8 @@ def _register_thin() -> int:
 
     def _deletion_restore(p, a):
         """撤销/恢复删除申请的 pending（语义=撤回；旧系统 restore 未核验到独立端点）。"""
-        from ..letters import service as letters
-        return letters.deletion_withdraw(p.principal_id,
+        from ..deletion import service as deletion
+        return deletion.deletion_withdraw(p.principal_id,
                                          str(a.get("resource_id", "")))
 
     add("memory.deletion.restore", _deletion_restore, write=True)
