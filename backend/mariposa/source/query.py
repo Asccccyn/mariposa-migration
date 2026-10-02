@@ -115,6 +115,8 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
     return {"hits": hits, "has_more": has_more, "limit": limit,
             "offset": offset, "senders": sender_filter,
             "source": "source_layer",
+            "content_role": "retrieved_memory",
+            "instruction_authority": "none",
             "boundary": "原文专项检索；不参与普通 Recall，不代表记忆结论；"
                         "默认只含已发布（成功批次）数据"}
 
@@ -160,6 +162,8 @@ def get_message(message_id: str | None = None,
         "conversation": _conv_summary(conv),
         "published": bool(pub),
         "source": "source_layer",
+        "content_role": "retrieved_memory",
+        "instruction_authority": "none",
     }
 
 
@@ -177,6 +181,18 @@ def open_range(conversation_id: str, start_message_id: str,
 
     pubflt = "" if include_unpublished else " AND published=1"
     with db.formal() as conn:
+        # CB-029（2026-10-02 审计 P2）：先计数后取行——巨大候选区间在
+        # 拒绝前不再全量载入内存
+        n_rows = conn.execute(
+            f"SELECT COUNT(*) AS c FROM source_messages WHERE"
+            f" conversation_id=? AND sequence>=? AND sequence<=?{pubflt}",
+            (start["conversation_id"], start["sequence"],
+             end["sequence"])).fetchone()["c"]
+        if n_rows > config.SOURCE_RANGE_MAX_MESSAGES:
+            raise Forbidden(
+                f"区间消息数超限（{n_rows} > "
+                f"{config.SOURCE_RANGE_MAX_MESSAGES}）；请缩小范围或分页",
+                code="SOURCE_RANGE_TOO_LARGE")
         rows = conn.execute(
             f"SELECT {_COLS}, content_json FROM source_messages WHERE"
             f" conversation_id=?"
@@ -184,12 +200,10 @@ def open_range(conversation_id: str, start_message_id: str,
             " ORDER BY sequence ASC",
             (start["conversation_id"], start["sequence"],
              end["sequence"])).fetchall()
-    if len(rows) > config.SOURCE_RANGE_MAX_MESSAGES:
-        raise Forbidden(
-            f"区间消息数超限（{len(rows)} > "
-            f"{config.SOURCE_RANGE_MAX_MESSAGES}）；请缩小范围或分页",
-            code="SOURCE_RANGE_TOO_LARGE")
-    text_budget = sum(len(r["text"] or "") for r in rows)
+    # CB-029：字节预算按 UTF-8 实际编码计——预算名义单位是字节，
+    # len(str) 按 code point 计数会让中文/emoji 输出达 3/4 倍预算
+    #（char offset 口径不变，仍是 code point 半开区间）
+    text_budget = sum(len((r["text"] or "").encode("utf-8")) for r in rows)
     if text_budget > config.SOURCE_RANGE_MAX_TEXT_BYTES:
         raise Forbidden("区间正文字节超限；请缩小范围或分页",
                         code="SOURCE_RANGE_TOO_LARGE")
@@ -223,6 +237,8 @@ def open_range(conversation_id: str, start_message_id: str,
         "off_path_messages": off_path,
         "include_content": include_content,
         "source": "source_layer",
+        "content_role": "retrieved_memory",
+        "instruction_authority": "none",
     }
 
 
@@ -352,22 +368,37 @@ def get_conversation(conversation_id: str, after_seq=None,
                            conversation_id=conversation_id)
         pub = " AND published=1"
         if around_seq is not None:
+            # CB-020（2026-10-02 审计 P2）：around 窗口总条数硬约束 ≤
+            # limit——exact 组（同 sequence 多行）此前无 LIMIT，可随
+            # 合法增量导入增长突破请求页大小（审计反例 limit=1 返 7
+            # 条）。两侧 half+1 探测 has_more；exact 用剩余槽位，被截
+            # 断时续页经复合游标可达。
             half = limit // 2
             before_rows = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
                 f" AND sequence<?{pub} ORDER BY sequence DESC, id DESC"
                 " LIMIT ?",
-                (conv["id"], int(around_seq), half)).fetchall()
-            exact = conn.execute(
-                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-                f" AND sequence=?{pub} ORDER BY id",
-                (conv["id"], int(around_seq))).fetchall()
+                (conv["id"], int(around_seq), half + 1)).fetchall()
+            more_before = len(before_rows) > half
+            before_rows = before_rows[:half]
             after = conn.execute(
                 f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
                 f" AND sequence>?{pub} ORDER BY sequence ASC, id ASC LIMIT ?",
-                (conv["id"], int(around_seq), half)).fetchall()
+                (conv["id"], int(around_seq), half + 1)).fetchall()
+            more_after = len(after) > half
+            after = after[:half]
+            room = max(1, limit - len(before_rows) - len(after))
+            exact = conn.execute(
+                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
+                f" AND sequence=?{pub} ORDER BY id LIMIT ?",
+                (conv["id"], int(around_seq), room)).fetchall()
+            exact_total = conn.execute(
+                "SELECT COUNT(*) AS c FROM source_messages WHERE"
+                f" conversation_id=? AND sequence=?{pub}",
+                (conv["id"], int(around_seq))).fetchone()["c"]
             msgs = list(reversed(before_rows)) + list(exact) + list(after)
-            has_more = bool(after)
+            has_more = (more_before or more_after
+                        or exact_total > len(exact))
         elif before_cur is not None:
             if before_cur[0] == "cmp":
                 cond = " AND (sequence<? OR (sequence=? AND id<?))"
@@ -417,6 +448,8 @@ def get_conversation(conversation_id: str, after_seq=None,
         "has_more": has_more,
         "published_total": total,
         "source": "source_layer",
+        "content_role": "retrieved_memory",
+        "instruction_authority": "none",
     }
 
 
@@ -666,11 +699,28 @@ def _find_message_any(conn, id_or_uuid: str, pubflt: str = "",
 
 
 def _find_conversation(conn, conversation_id: str):
-    return conn.execute(
+    """CB-022（2026-10-02 审计 P2）：内部行 ID 精确优先；外部会话 ID
+    命中多个 provider = 身份歧义，明确拒绝——fetchone 静默选行会在
+    多源存量下取错会话（range/binding 复用此 resolver）。"""
+    row = conn.execute(
         "SELECT id, provider, provider_conversation_id, title, created_at,"
         " updated_at, message_count, first_message_at, last_message_at"
-        " FROM source_conversations WHERE id=? OR provider_conversation_id=?",
-        (conversation_id, conversation_id)).fetchone()
+        " FROM source_conversations WHERE id=?",
+        (conversation_id,)).fetchone()
+    if row is not None:
+        return row
+    rows = conn.execute(
+        "SELECT id, provider, provider_conversation_id, title, created_at,"
+        " updated_at, message_count, first_message_at, last_message_at"
+        " FROM source_conversations WHERE provider_conversation_id=?",
+        (conversation_id,)).fetchall()
+    if len(rows) > 1:
+        raise Forbidden(
+            "外部会话 ID 命中多个 provider（身份歧义）：请使用内部"
+            " conversation id 消歧",
+            code="AMBIGUOUS_CONVERSATION_ID", conversation_id=conversation_id,
+            providers=sorted({r["provider"] for r in rows}))
+    return rows[0] if rows else None
 
 
 def _conv_summary(conv) -> dict:
@@ -769,6 +819,10 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "occurred_date": row["occurred_date"],
         "text": text,
         "excerpt": "",
+        # CB-030（2026-10-02 审计 P2）：检索内容统一无指令权——与
+        # memory.get/Recall 的资料身份约定一致（retrieval/evidence）
+        "content_role": "retrieved_memory",
+        "instruction_authority": "none",
         # 占位——真实值在下方统一装配（P2-05：locator 状态外显）
         "excerpt_locator": "ok",
         "attachments": json.loads(row["attachments"] or "[]"),

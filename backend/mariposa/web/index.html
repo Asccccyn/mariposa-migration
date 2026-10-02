@@ -237,14 +237,19 @@ $('saveToken').onclick = () => {
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
 $('newHoldBtn').onclick = async () => {
-  const text = prompt('记忆正文（合成测试数据）', '');
+  const text = prompt('记忆正文', '');
   if (!text) return;
+  // CB-053（2026-10-02 审计 P3）：正式写入不再伪造固定 40 天前的
+  // exact 事件日期（旧实现把合成测试夹具当默认行为）。日期由用户
+  // 提供或显式 unknown；示例数据仅在 console 提示。
+  const dateStr = prompt('发生日期（YYYY-MM-DD，留空=不确定）', '');
+  const trimmed = dateStr ? dateStr.trim() : '';
   try {
     const d = await api('memory.hold', {
       categories: [document.getElementById('holdCat').value],
-      text, why_remember: '测试用途',
-      memory_date: new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10),
-      date_confidence: 'exact',
+      text, why_remember: null,
+      memory_date: trimmed || null,
+      date_confidence: trimmed ? 'exact' : 'unknown',
     });
     setStatus('已写入 ' + d.memory_id + ' v' + d.version);
     searchMemories('');
@@ -520,24 +525,27 @@ function renderSourceConv(d, jump) {
   html += d.messages.map(srcMsgHtml).join('');
   box.innerHTML = html;
   $('srcConvBack').onclick = () => { box.innerHTML = ''; loadSourceConvs(); };
-  if (d.has_more) wireSrcMore(d.prev_before_seq);
+  // CB-023：首屏是升序最早一页，"加载更多"应向后（更晚）翻——此前
+  // 接成 before_seq（向前翻且整数 seq 游标覆盖不了同序号组），第
+  // 101 条永远看不到。续页统一用服务端复合游标。
+  if (d.has_more) wireSrcMore(d.next_after_cursor);
 }
 
-function wireSrcMore(prevSeq) {
+function wireSrcMore(cursor) {
   const box = $('srcConvView');
   const row = document.createElement('div');
   row.className = 'row';
   const btn = document.createElement('button');
-  btn.textContent = '加载更早消息 ↓';
+  btn.textContent = '加载更多消息 ↓';
   row.appendChild(btn); box.appendChild(row);
   btn.onclick = async () => {
     btn.disabled = true;
     try {
       const d2 = await api('source.conversation.get', {
-        conversation_id: srcState.conv, before_seq: prevSeq, limit: 100 });
+        conversation_id: srcState.conv, after_cursor: cursor, limit: 100 });
       row.remove();
       box.insertAdjacentHTML('beforeend', d2.messages.map(srcMsgHtml).join(''));
-      if (d2.has_more) wireSrcMore(d2.prev_before_seq);
+      if (d2.has_more) wireSrcMore(d2.next_after_cursor);
     } catch (e) { btn.disabled = false; setStatus(e.message, true); }
   };
 }
