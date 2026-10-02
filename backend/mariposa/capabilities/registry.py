@@ -803,12 +803,15 @@ def _find_words_core(principal: Principal, a: dict,
     #（此前留空 → validate_query_plan 报"original_request 必填"）
     plan.setdefault("original_request",
                     a.get("original_request") or a.get("query") or "")
+    # RA-014（2026-10-02 复审 P2）：顶层 lexical_terms 是字符串数组，
+    # 直接使用（此前被包成嵌套列表致 INVALID_ARGUMENT）
     if not plan.get("lexical_terms"):
-        plan["lexical_terms"] = ([a.get("lexical_terms")]
-                                 if isinstance(a.get("lexical_terms"), list)
-                                 and a.get("lexical_terms")
-                                 else [a.get("query", "") or
-                                       a.get("original_request", "")])
+        top_terms = a.get("lexical_terms")
+        if isinstance(top_terms, list) and top_terms:
+            plan["lexical_terms"] = [str(t) for t in top_terms]
+        else:
+            plan["lexical_terms"] = [a.get("query", "") or
+                                     a.get("original_request", "")]
     # CB-047（2026-10-02 审计 P2）：schema 接受的顶层参数全部进入统一
     # plan——query_plan 内显式字段优先，顶层仅回填缺失（此前
     # exact_phrases/semantic_query/正负 constraints 被静默丢弃，
@@ -820,15 +823,15 @@ def _find_words_core(principal: Principal, a: dict,
     if not plan.get("delivery_limit") and a.get("limit"):
         plan["delivery_limit"] = a["limit"]
     ec = dict(plan.get("explicit_constraints") or {})
-    for k in ("categories", "mood_tags", "event_date",
-              "category_match", "mood_match"):
+    for k in ("categories", "mood_tags", "event_date", "source_date",
+              "speaker", "category_match", "mood_match"):
         if k in (a.get("explicit_constraints") or {}) and k not in ec:
             ec[k] = a["explicit_constraints"][k]
     if ec:
         plan["explicit_constraints"] = ec
     neg = dict(plan.get("explicit_negative_constraints") or {})
-    for k in ("event_date_excluded", "speakers_excluded",
-              "date_ranges_excluded"):
+    for k in ("event_date_excluded", "speaker_excluded",
+              "source_date_excluded"):
         if k in (a.get("explicit_negative_constraints") or {}) \
                 and k not in neg:
             neg[k] = a["explicit_negative_constraints"][k]

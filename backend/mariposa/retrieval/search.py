@@ -244,7 +244,7 @@ def search(conn, query: str, limit: int = 20,
         # 2026-09-30 裁定 + 全量审计 P2-01：接口兼容（名称/参数/返回
         # 结构），底座=Runtime scoped BM25——阶段字段过滤在 Top-K
         # 之前；why/meaning 等禁检来源不参与
-        ordered, _pool_trunc = _stage_scoped_hits(
+        ordered, pool_trunc = _stage_scoped_hits(
             conn, query, ["m.visibility='active'"], [])
         for mid, eff in ordered[:limit]:
             m = conn.execute(
@@ -301,6 +301,10 @@ def search(conn, query: str, limit: int = 20,
                          if k != "whitelist_body"})
 
     result: dict = {"hits": hits, "query": query, "mode": mode}
+    # RA-017（2026-10-02 复审 P2）：池安全阀截断状态贯穿兼容入口
+    if phrase and pool_trunc:
+        result["coverage"] = "partial_pool_cap"
+        result["pool_truncated"] = True
     if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS:
         result["semantic"] = config.SEMANTIC_PROVIDER
     else:
