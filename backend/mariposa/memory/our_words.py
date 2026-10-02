@@ -109,3 +109,83 @@ def has_shared_expression(rows: list[dict]) -> list[dict]:
                           "normalized": text[:40],
                           "speakers": sorted(speakers)})
     return hints
+
+
+def source_of(word_id: str) -> str | None:
+    """话语当前来源引用（routing 反查用）。"""
+    from .. import db
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT source_ref FROM memory_our_words WHERE word_id=?",
+            (word_id,)).fetchone()
+    return (row["source_ref"] or None) if row else None
+
+
+def correct_source(principal_id: str, word_id: str,
+                   expected_source_ref: str | None,
+                   correction_action: str, replacement: dict | None = None,
+                   note: str | None = None, conn=None) -> dict:
+    """话语来源纠错（§P-R02/§5.5 Word）。
+
+    预期来源指纹（expected_source_ref）必须与当前值一致——防并发
+    改错对象；撤销=置空来源（旧 verified 证据/指纹随之失效），
+    改绑=新来源经现行 Source 身份校验。不可经普通正文更新绕开。
+    """
+    from .. import db as _db
+    from ..errors import Forbidden, NotFound
+    from ..relations.corrections import record_correction
+
+    def _do(conn):
+        row = conn.execute(
+            "SELECT * FROM memory_our_words WHERE word_id=?",
+            (word_id,)).fetchone()
+        if row is None:
+            raise NotFound("word not found", word_id=word_id)
+        cur = row["source_ref"] or None
+        if (expected_source_ref or None) != cur:
+            raise Forbidden(
+                "expected_source_ref 与当前来源不一致（并发保护）",
+                code="CONFLICT", current=cur)
+        new_ref = None
+        replacement_word_id = None
+        if replacement and replacement.get("source_ref"):
+            new_ref = str(replacement["source_ref"])
+            if not new_ref.startswith("source_msg:"):
+                raise Forbidden(
+                    "来源必须是现行 source_msg:<id> 身份（旧 raw 前缀"
+                    "已退役）", code="INVALID_ARGUMENT")
+            msg_id = new_ref[len("source_msg:"):]
+            if not conn.execute(
+                    "SELECT 1 FROM source_messages WHERE id=? OR"
+                    " provider_message_id=?", (msg_id, msg_id)).fetchone():
+                raise NotFound("source message not found", ref=new_ref)
+        cid = record_correction(
+            conn, domain="word_source",
+            original_instance_id=f"word:{word_id}",
+            endpoint_a=row["memory_id"], endpoint_b=cur or "",
+            original_meta={"source_ref": cur,
+                           "expression_kind": row["expression_kind"]},
+            original_created_by=row["created_by"],
+            original_created_at=row["created_at"],
+            corrected_by=principal_id, note=note,
+            replacement_instance_id=(f"word:{word_id}:{new_ref}"
+                                     if new_ref else None))
+        conn.execute(
+            "UPDATE memory_our_words SET source_ref=? WHERE word_id=?",
+            (new_ref, word_id))
+        # 证据指纹失效：word 向量/证据按指纹重算（retrieval 侧消费）
+        return {"correction_id": cid, "word_id": word_id,
+                "removed_source_ref": cur, "new_source_ref": new_ref,
+                "action": correction_action}
+
+    if conn is not None:
+        return _do(conn)
+    with _db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            out = _do(c)
+            c.execute("COMMIT")
+            return out
+        except Exception:
+            c.execute("ROLLBACK")
+            raise

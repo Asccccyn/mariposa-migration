@@ -23,67 +23,181 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
          start_message_id: str, end_message_id: str,
          start_char_offset: int | None = None,
          end_char_offset: int | None = None,
-         confidence: str = "exact") -> dict:
-    """把 memory 绑定到一个连续消息区间（可重复调用叠加多个 range）。"""
+         confidence: str = "exact", conn=None) -> dict:
+    """把 memory 绑定到一个连续消息区间（可重复调用叠加多个 range）。
+
+    conn 由纠错改绑传入：插入与纠错同事务（§5.4 原子操作）。
+    """
     if confidence not in ("exact", "high", "low"):
         raise Forbidden("confidence must be exact/high/low")
-    with db.formal() as conn:
+
+    def _insert(conn):
         if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
                             (memory_id,)).fetchone():
             raise NotFound("memory not found", memory_id=memory_id)
+        # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
+        resolved = source_query.validate_range(
+            conversation_id, start_message_id, end_message_id,
+            start_char_offset, end_char_offset)
+        binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
+        conn.execute(
+            "INSERT INTO memory_source_bindings(binding_id, memory_id,"
+            " conversation_id, start_message_id, end_message_id,"
+            " start_char_offset, end_char_offset, bind_confidence,"
+            " start_content_hash, end_content_hash, created_by,"
+            " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (binding_id, memory_id, resolved["conversation"]["id"],
+             resolved["start"]["id"], resolved["end"]["id"],
+             start_char_offset, end_char_offset, confidence,
+             resolved["start_content_hash"],
+             resolved["end_content_hash"], principal_id, _now()))
+        audit.record(conn, "source.bound", principal_id,
+                     resource_id=memory_id,
+                     payload={"binding_id": binding_id,
+                              "conversation_id":
+                                  resolved["conversation"]["id"],
+                              "start": resolved["start"]["id"],
+                              "end": resolved["end"]["id"],
+                              "confidence": confidence,
+                              "offset_convention":
+                                  source_query.OFFSET_CONVENTION})
+        return {"binding_id": binding_id, "memory_id": memory_id,
+                "conversation_id": resolved["conversation"]["id"],
+                "start_message_id": resolved["start"]["id"],
+                "end_message_id": resolved["end"]["id"],
+                "start_content_hash": resolved["start_content_hash"],
+                "end_content_hash": resolved["end_content_hash"],
+                "offset_convention": source_query.OFFSET_CONVENTION,
+                "confidence": confidence}
 
-    # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
-    resolved = source_query.validate_range(
-        conversation_id, start_message_id, end_message_id,
-        start_char_offset, end_char_offset)
-
-    binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    if conn is not None:
+        return _insert(conn)
+    with db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "INSERT INTO memory_source_bindings(binding_id, memory_id,"
-                " conversation_id, start_message_id, end_message_id,"
-                " start_char_offset, end_char_offset, bind_confidence,"
-                " start_content_hash, end_content_hash, created_by,"
-                " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (binding_id, memory_id, resolved["conversation"]["id"],
-                 resolved["start"]["id"], resolved["end"]["id"],
-                 start_char_offset, end_char_offset, confidence,
-                 resolved["start_content_hash"],
-                 resolved["end_content_hash"], principal_id, _now()))
-            audit.record(conn, "source.bound", principal_id,
-                         resource_id=memory_id,
-                         payload={"binding_id": binding_id,
-                                  "conversation_id":
-                                      resolved["conversation"]["id"],
-                                  "start": resolved["start"]["id"],
-                                  "end": resolved["end"]["id"],
-                                  "confidence": confidence,
-                                  "offset_convention":
-                                      source_query.OFFSET_CONVENTION})
-            conn.execute("COMMIT")
+            out = _insert(c)
+            c.execute("COMMIT")
+            return out
         except Exception:
-            conn.execute("ROLLBACK")
+            c.execute("ROLLBACK")
             raise
-    return {"binding_id": binding_id, "memory_id": memory_id,
-            "conversation_id": resolved["conversation"]["id"],
-            "start_message_id": resolved["start"]["id"],
-            "end_message_id": resolved["end"]["id"],
-            "start_content_hash": resolved["start_content_hash"],
-            "end_content_hash": resolved["end_content_hash"],
-            "offset_convention": source_query.OFFSET_CONVENTION,
-            "confidence": confidence}
 
 
 def ranges_of(memory_id: str) -> list[dict]:
-    """memory 的全部有效绑定（revoked 留库不返回）。"""
+    """memory 的全部有效绑定（全部行均有效——纠错历史在别处，§5.2）。"""
     with db.formal() as conn:
         rows = conn.execute(
-            "SELECT * FROM memory_source_bindings WHERE memory_id=? AND"
-            " bind_confidence<>'revoked' ORDER BY created_at",
+            "SELECT * FROM memory_source_bindings WHERE memory_id=?"
+            " ORDER BY created_at",
             (memory_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def memories_referencing(message_id: str) -> list[dict]:
+    """§6.1 Source 反查：这段原文消息被哪些绑定区间实际覆盖。
+
+    精确判定按消息序范围（start..end 区间含该消息），不把"同
+    conversation"当"同一段"；返回绑定身份与范围供两端继续追查。
+    """
+    with db.formal() as conn:
+        msg = conn.execute(
+            "SELECT conversation_id, sequence, provider FROM"
+            " source_messages WHERE id=? OR provider_message_id=?",
+            (message_id, message_id)).fetchone()
+        if msg is None:
+            return []
+        seqs = conn.execute(
+            "SELECT sequence FROM source_messages WHERE conversation_id=?"
+            " AND (id=? OR provider_message_id=?)",
+            (msg["conversation_id"], message_id, message_id)).fetchall()
+        seq_set = {r["sequence"] for r in seqs}
+        rows = conn.execute(
+            "SELECT b.*, s.sequence AS start_seq, e.sequence AS end_seq"
+            " FROM memory_source_bindings b"
+            " JOIN source_messages s ON s.id=b.start_message_id"
+            " JOIN source_messages e ON e.id=b.end_message_id"
+            " WHERE b.conversation_id=?", (msg["conversation_id"],)).fetchall()
+    out = []
+    for r in rows:
+        # 同 sequence 组按稳定消息身份精确分辨（§6.1）
+        if any(r["start_seq"] <= q <= r["end_seq"] for q in seq_set):
+            d = dict(r)
+            d.pop("start_seq", None)
+            d.pop("end_seq", None)
+            out.append(d)
+    return out
+
+
+def correct(principal_id: str, binding_id: str,
+            correction_action: str, note: str | None = None,
+            replacement: dict | None = None, conn=None) -> dict:
+    """§P-R02 纠错：撤销/改绑错误区间绑定（替代旧 revoke）。
+
+    同一事务：登记纠错历史→删该条有效绑定→（改绑）经完整区间校验
+    创建新绑定。不删除/改写原文母本或消息（§5.5 Source）。
+    """
+    from ..relations.corrections import record_correction
+    if correction_action not in ("remove_wrong_binding",
+                                 "replace_wrong_binding"):
+        raise Forbidden("correction_action must be remove_wrong_binding/"
+                        "replace_wrong_binding")
+    def _do(conn):
+        row = conn.execute(
+            "SELECT * FROM memory_source_bindings WHERE binding_id=?",
+            (binding_id,)).fetchone()
+        if row is None:
+            raise NotFound("source binding not found",
+                           binding_id=binding_id)
+        replacement_id = None
+        if replacement:
+            rep = bind(principal_id,
+                       replacement.get("memory_id", row["memory_id"]),
+                       replacement.get("conversation_id", ""),
+                       replacement.get("start_message_id", ""),
+                       replacement.get("end_message_id", ""),
+                       start_char_offset=replacement.get(
+                           "start_char_offset"),
+                       end_char_offset=replacement.get(
+                           "end_char_offset"),
+                       confidence=replacement.get("confidence", "exact"),
+                       conn=conn)
+            replacement_id = rep.get("binding_id", binding_id)
+        cid = record_correction(
+            conn, domain="source_binding",
+            original_instance_id=binding_id,
+            endpoint_a=row["memory_id"],
+            endpoint_b=row["conversation_id"],
+            original_meta={
+                "start_message_id": row["start_message_id"],
+                "end_message_id": row["end_message_id"],
+                "start_char_offset": row["start_char_offset"],
+                "end_char_offset": row["end_char_offset"],
+                "bind_confidence": row["bind_confidence"]},
+            original_created_by=row["created_by"],
+            original_created_at=row["created_at"],
+            corrected_by=principal_id, note=note,
+            replacement_instance_id=replacement_id)
+        conn.execute(
+            "DELETE FROM memory_source_bindings WHERE binding_id=?",
+            (binding_id,))
+        audit.record(conn, "source.binding.corrected", principal_id,
+                     resource_id=binding_id,
+                     payload={"correction_id": cid})
+        return {"correction_id": cid, "removed_binding_id": binding_id,
+                "replacement_binding_id": replacement_id,
+                "action": correction_action}
+
+    if conn is not None:
+        return _do(conn)
+    with db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            out = _do(c)
+            c.execute("COMMIT")
+            return out
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
 
 
 def open_for_memory(memory_id: str, include_content: bool = False) -> dict:
@@ -133,27 +247,6 @@ def _current_hash(conversation_row_id: str, provider_message_id: str):
             " AND provider_message_id=?",
             (conversation_row_id, provider_message_id)).fetchone()
     return row["content_hash"] if row else None
-
-
-def revoke(principal_id: str, binding_id: str) -> dict:
-    """撤销绑定：行保留（bind_confidence=revoked），留历史。"""
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = conn.execute(
-                "UPDATE memory_source_bindings SET bind_confidence='revoked'"
-                " WHERE binding_id=? AND bind_confidence<>'revoked'",
-                (binding_id,))
-            if cur.rowcount == 0:
-                raise NotFound("active source binding not found",
-                               binding_id=binding_id)
-            audit.record(conn, "source.binding.revoked", principal_id,
-                         resource_id=binding_id)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"binding_id": binding_id, "status": "revoked"}
 
 
 def reindex_search_docs(batch: int = 500) -> dict:

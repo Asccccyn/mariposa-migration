@@ -310,8 +310,9 @@ def hold(
                         raise NotFound("plan not found", plan_id=pid)
                 for pid in dict.fromkeys(plan_ids):
                     conn.execute(
-                        "INSERT OR IGNORE INTO plan_memory_links(plan_id,"
-                        " memory_id) VALUES(?,?)", (pid, memory_id))
+                        "INSERT OR IGNORE INTO plan_memory_links(link_id,"
+                        " plan_id, memory_id) VALUES(?,?,?)",
+                        (f"pml_{uuid.uuid4().hex[:16]}", pid, memory_id))
             _insert_layers(
                 conn, memory_id=memory_id, principal_id=principal.principal_id,
                 cats=cats, mood_data=mood_data, our_words=our_words,

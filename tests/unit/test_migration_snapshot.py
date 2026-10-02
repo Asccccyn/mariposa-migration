@@ -70,8 +70,11 @@ class TestSnapshotAndRealDryRun:
         out = migration.dry_run_real(str(tmp_path / "staging"), str(report))
         st = out["stats"]
         assert st["total"] == 5
-        assert st["by_target"] == {"memories": 2, "self_entries": 1, "plans": 1}
-        assert st["archived_buckets"] == 1
+        assert st["by_target"] == {"memories": 1, "self_entries": 1,
+                               "plans": 1}
+        oos = [e for e in out["entries"] if e.get("target")
+               == "out_of_scope"]
+        assert len(oos) >= 1  # archived（v2.0 不迁移；letter 另路处理）
         assert st["with_meaning"] == 1
         # letter 桶出范围：计 unknown_type 且落 UNMAPPED（无正文无哈希）
         assert st["unknown_type"] == 1 and st["bad_frontmatter"] == 0
@@ -81,5 +84,4 @@ class TestSnapshotAndRealDryRun:
         text = report.read_text(encoding="utf-8")
         assert "锁信正文（合成）" not in text and "正文甲" not in text
         assert "旧正文" not in text and "我想成为" not in text
-        # dont_surface 等旧字段进 legacy extension 清单（§5.3 不猜语义）
-        assert "dont_surface" in out["legacy_extension_keys"]
+        # v2.0：archived 桶 out_of_scope，dont_surface 不再入扩展清单

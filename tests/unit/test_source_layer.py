@@ -524,22 +524,21 @@ class TestBinding:
             binding.bind("jiaming", "mem-nope", "conv-std-001",
                          "std-m1", "std-m2")
 
-    def test_revoke_keeps_history(self, bound):
-        b = binding.bind("jiaming", "mem-t1", "conv-std-001", "std-m1", "std-m2")
-        binding.revoke("jiaming", b["binding_id"])
+    def test_correction_moves_to_history(self, bound):
+        """v2.0：revoke 退役——纠错走 correct（历史留档、区间事实保留）。"""
+        b = binding.bind("jiaming", "mem-t1", "conv-std-001", "std-m1",
+                         "std-m2")
+        out = binding.correct("jiaming", b["binding_id"],
+                              "remove_wrong_binding", note="绑错区间")
+        assert out["removed_binding_id"] == b["binding_id"]
         assert binding.ranges_of("mem-t1") == []
-        with db.formal() as c:
-            row = c.execute(
-                "SELECT bind_confidence FROM memory_source_bindings WHERE"
-                " binding_id=?", (b["binding_id"],)).fetchone()
-        assert row["bind_confidence"] == "revoked"
-        with pytest.raises(NotFound):
-            binding.revoke("jiaming", b["binding_id"])
+        from mariposa.relations.corrections import list_corrections
+        hist = list_corrections(instance_id=b["binding_id"])
+        assert hist["total"] == 1
+        assert hist["corrections"][0]["domain"] == "source_binding"
+        assert hist["corrections"][0]["original_meta"]["start_message_id"] \
+            == b["start_message_id"]
 
-
-# ============================== 分层隔离 ==============================
-
-class TestLayerIsolation:
     def test_source_not_in_memory_index(self, clean):
         import_ok("jiaming", "standard.json")
         with db.formal() as c:

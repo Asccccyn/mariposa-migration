@@ -98,9 +98,29 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
         # 不进新检索，§20.3）；archive 目录内的其他类型同样按目录证据判归档
         is_archived_dir = rel.startswith("archive/")
         if btype == "archived":
-            btype, archived_flag = "dynamic", True
-        else:
-            archived_flag = is_archived_dir
+            # v2.0 P-A01：Memory archive 退役——旧归档桶不迁移
+            # （正文/哈希不进报告），数据处置待用户单独裁定
+            entries.append({
+                "legacy_id": f.name,
+                "target": "out_of_scope",
+                "payload_hash": hashlib.sha256(
+                    f.read_text(encoding="utf-8").strip().encode()
+                ).hexdigest(),
+                "content_bytes": len(f.read_text(encoding="utf-8")
+                                     .encode()),
+            })
+            continue
+        if is_archived_dir:
+            # v2.0 P-A01：目录证据的归档桶同样不迁移（处置待裁定）
+            entries.append({
+                "legacy_id": f.name,
+                "target": "out_of_scope",
+                "payload_hash": hashlib.sha256(
+                    body.strip().encode("utf-8")).hexdigest(),
+                "content_bytes": len(body.encode("utf-8")),
+            })
+            stats["archived_buckets"] = stats.get("archived_buckets", 0) + 1
+            continue
         target = _TYPE_TARGET.get(btype)
         if target is None:
             if btype:
@@ -115,13 +135,10 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
             stats["no_date"] += 1
         entry: dict = {"path": rel, "legacy_id": legacy_id, "type": btype,
                        "target": target,
-                       "migrate_as_archived": archived_flag,
                        "memory_date": date if date[:4].isdigit() else None,
                        "payload_sha256": hashlib.sha256(
                            body.strip().encode("utf-8")).hexdigest(),
                        "content_bytes": len(body.encode("utf-8"))}
-        if archived_flag:
-            stats["archived_buckets"] += 1
         if str(meta.get("pinned", "")).lower() in ("true", "1"):
             entry["pinned"] = True
             stats["pinned"] += 1
@@ -410,16 +427,15 @@ def apply_from_report(report_path: str) -> dict:
                 if e["mapping"].get("pinned"):
                     conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
                                  (mid,))
-                if e.get("migrate_as_archived"):
-                    conn.execute("UPDATE memories SET visibility='archived',"
-                                 " updated_at=? WHERE memory_id=?",
-                                 (_dt.utcnow().isoformat(), mid))
+                # v2.0 P-A01：archived 应用分支退役；旧归档桶在
+                # inventory 阶段已标 out_of_scope（见上方 archived 处理），
+                # 不再创建 archived/hidden 桶
                 if e.get("migrate_as_hidden"):
                     conn.execute("UPDATE memories SET visibility='hidden',"
                                  " updated_at=? WHERE memory_id=?",
                                  (_dt.utcnow().isoformat(), mid))
-                if e.get("migrate_as_archived") or e.get("migrate_as_hidden"):
-                    _pj.remove(conn, mid)  # 隐藏/归档不进新检索（§20.3）
+                if e.get("migrate_as_hidden"):
+                    _pj.remove(conn, mid)  # 隐藏不进新检索（§20.3）
                 if e.get("needs_migration_review"):
                     conn.execute(
                         "INSERT OR IGNORE INTO memory_tags(memory_id, namespace,"

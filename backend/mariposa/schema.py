@@ -31,7 +31,7 @@ CREATE TABLE memories(
   date_confidence TEXT NOT NULL DEFAULT 'unknown'
     CHECK(date_confidence IN ('exact','inferred','unknown')),
   visibility TEXT NOT NULL DEFAULT 'active'
-    CHECK(visibility IN ('active','hidden','archived')),
+    CHECK(visibility IN ('active','hidden')),
   compression_state TEXT NOT NULL DEFAULT 'full'
     CHECK(compression_state IN ('full','forgotten_summary')),
   pinned INTEGER NOT NULL DEFAULT 0,
@@ -794,7 +794,155 @@ DROP TABLE IF EXISTS proposal_envelopes;
 DROP TABLE IF EXISTS proposal_resolutions;
 DROP TABLE IF EXISTS review_delegations;
 DROP TABLE IF EXISTS rejection_suppression;
-""")]
+"""),
+(26, """
+-- ===== Relation/Deletion 语义收口（2026-10-01，规格 v2.0）=====
+-- 表重建涉及被 FK 引用的母表：事务内延迟 FK 校验至提交点
+PRAGMA defer_foreign_keys=ON;
+-- ① 关系实例身份 + 软删/无效字段退役（历史迁 relation_corrections）
+CREATE TABLE relation_corrections(
+  correction_id TEXT PRIMARY KEY,
+  domain TEXT NOT NULL CHECK(domain IN
+    ('memory_relation','i_revision_relation','source_binding',
+     'plan_link','word_source')),
+  original_instance_id TEXT NOT NULL,
+  endpoint_a TEXT NOT NULL,
+  endpoint_b TEXT,
+  original_meta TEXT,
+  original_created_by TEXT,
+  original_created_at TEXT,
+  corrected_by TEXT NOT NULL,
+  corrected_at TEXT NOT NULL,
+  reason_code TEXT NOT NULL DEFAULT 'binding_error',
+  note TEXT,
+  replacement_instance_id TEXT
+);
+
+CREATE TABLE memory_relations_v2(
+  relation_id TEXT PRIMARY KEY,
+  from_memory TEXT NOT NULL REFERENCES memories(memory_id),
+  to_memory TEXT NOT NULL REFERENCES memories(memory_id),
+  relation_type TEXT NOT NULL,
+  custom_label TEXT,
+  reverse_label TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(from_memory, to_memory, relation_type)
+);
+INSERT INTO memory_relations_v2(relation_id, from_memory, to_memory,
+  relation_type, custom_label, reverse_label, created_by, created_at)
+SELECT 'rel_' || lower(hex(randomblob(12))), from_memory, to_memory,
+  relation_type, custom_label, reverse_label, created_by, created_at
+  FROM memory_relations WHERE active=1;
+INSERT INTO relation_corrections(correction_id, domain,
+  original_instance_id, endpoint_a, endpoint_b, original_meta,
+  original_created_by, original_created_at, corrected_by, corrected_at,
+  reason_code, note)
+SELECT 'corr_' || lower(hex(randomblob(12))), 'memory_relation',
+  'legacy:' || from_memory || '>' || to_memory || ':' || relation_type,
+  from_memory, to_memory,
+  json_object('relation_type', relation_type, 'legacy_soft_delete', 1),
+  created_by, created_at, 'legacy_migration', datetime('now'),
+  'binding_error', 'legacy 未记录纠错人（迁移保留未知）'
+  FROM memory_relations WHERE active=0;
+DROP TABLE memory_relations;
+ALTER TABLE memory_relations_v2 RENAME TO memory_relations;
+
+-- ② I 修订关系：实例身份 + related→related_to（表重建换 CHECK）
+CREATE TABLE i_revision_memory_relations_v2(
+  relation_id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  relation_type TEXT NOT NULL CHECK(relation_type IN
+    ('changed_because_of','clarified_by','informed_by','related_to')),
+  created_at TEXT NOT NULL,
+  UNIQUE(item_id, revision, memory_id, relation_type),
+  FOREIGN KEY(item_id, revision) REFERENCES i_item_revisions(item_id, revision)
+);
+INSERT INTO i_revision_memory_relations_v2(relation_id, item_id, revision,
+  memory_id, relation_type, created_at)
+SELECT 'irr_' || lower(hex(randomblob(12))), item_id, revision, memory_id,
+  CASE WHEN relation_type='related' THEN 'related_to' ELSE relation_type END,
+  created_at FROM i_revision_memory_relations;
+DROP TABLE i_revision_memory_relations;
+ALTER TABLE i_revision_memory_relations_v2
+  RENAME TO i_revision_memory_relations;
+CREATE INDEX idx_i_revision_memory
+  ON i_revision_memory_relations(memory_id, item_id, revision);
+
+-- ③ plan 链接：实例身份
+CREATE TABLE plan_memory_links_v2(
+  link_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL REFERENCES plans(id),
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  UNIQUE(plan_id, memory_id)
+);
+INSERT INTO plan_memory_links_v2(link_id, plan_id, memory_id)
+SELECT 'pml_' || lower(hex(randomblob(12))), plan_id, memory_id
+  FROM plan_memory_links;
+DROP TABLE plan_memory_links;
+ALTER TABLE plan_memory_links_v2 RENAME TO plan_memory_links;
+
+-- ④ Source 绑定：revoked 行迁纠错历史，CHECK 收口
+CREATE TABLE memory_source_bindings_v2(
+  binding_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  conversation_id TEXT NOT NULL REFERENCES source_conversations(id),
+  start_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  end_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  start_char_offset INTEGER,
+  end_char_offset INTEGER,
+  bind_confidence TEXT NOT NULL DEFAULT 'exact'
+    CHECK(bind_confidence IN ('exact','high','low')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  start_content_hash TEXT,
+  end_content_hash TEXT
+);
+INSERT INTO memory_source_bindings_v2 SELECT * FROM memory_source_bindings
+  WHERE bind_confidence <> 'revoked';
+INSERT INTO relation_corrections(correction_id, domain,
+  original_instance_id, endpoint_a, endpoint_b, original_meta,
+  original_created_by, original_created_at, corrected_by, corrected_at,
+  reason_code, note)
+SELECT 'corr_' || lower(hex(randomblob(12))), 'source_binding',
+  binding_id, memory_id, conversation_id,
+  json_object('start_message_id', start_message_id,
+              'end_message_id', end_message_id,
+              'legacy_revoked', 1),
+  created_by, created_at, 'legacy_migration', datetime('now'),
+  'binding_error', 'legacy 未记录纠错人（迁移保留未知）'
+  FROM memory_source_bindings WHERE bind_confidence='revoked';
+DROP TABLE memory_source_bindings;
+ALTER TABLE memory_source_bindings_v2 RENAME TO memory_source_bindings;
+CREATE INDEX idx_msb_memory ON memory_source_bindings(memory_id, bind_confidence);
+CREATE INDEX idx_msb_conv ON memory_source_bindings(conversation_id);
+
+-- ⑤ 删除申请表：Memory-only 重定义
+CREATE TABLE deletion_requests_v2(
+  request_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL,
+  human_reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK(status IN ('pending','approved','rejected','withdrawn','superseded')),
+  rejection_reason TEXT,
+  submitted_by TEXT NOT NULL,
+  submitted_local_date TEXT NOT NULL,
+  decided_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_deletion_resource_v2 ON deletion_requests_v2(memory_id);
+CREATE INDEX idx_deletion_status_v2
+  ON deletion_requests_v2(status, submitted_local_date);
+DROP TABLE deletion_requests;
+ALTER TABLE deletion_requests_v2 RENAME TO deletion_requests;
+
+-- ⑥ visibility：fresh 基础 DDL 已不含 archived；已部署库的 CHECK 字符串
+--    保留（母表重建与全库 FK 网冲突，风险大于收益），全部写路径在
+--    服务层退役——部署库功能语义与本规范一致，报告如实申报该偏差
+"""),
+]
 
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [

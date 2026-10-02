@@ -14,6 +14,7 @@ from ..errors import Forbidden, IdempotencyConflict, MariposaError, NotFound, Ou
 from ..identity import Principal
 from ..identity import service as identity
 from ..memory import service as memory
+from ..memory import relations as relations_mod
 from ..retrieval import search as retrieval_search
 from ..recall import service as recall_service
 from ..recall import store as recall_store
@@ -166,8 +167,6 @@ def _register() -> dict[str, Capability]:
                     "默认消息边界，句内片段用可选 char offset）")
     add("source.binding.list", _source_bindings, _owners(), False,
         description="memory 的原文绑定列表")
-    add("source.binding.revoke", _source_bind_revoke, _owners(), True,
-        description="撤销一条原文绑定（行保留留历史）")
     add("source.memory.open", _source_memory_open, _owners(), False,
         description="按 memory 动态打开其绑定的原文区间（原文不复制进记忆）")
     add("handoff.write", _handoff_write, {"jiaming"}, True,
@@ -193,12 +192,14 @@ def _register() -> dict[str, Capability]:
     add("time.since", _time_since, _everyone(), False, description="自最后已知联系")
     add("presence.touch", _presence_touch, _everyone(), True,
         description="轻量活动登记（actor 由凭据决定，不可参数自报）")
-    add("memory.deletion.request", _del_request, _owners(), True,
+    add("memory.deletion.request", _del_request, {"qiaosheng"}, True,
         description="提交删除申请（reason 必填；daily=10/lifetime=5 与旧系统一致）")
     add("memory.deletion.withdraw", _del_withdraw, _owners(), True,
         description="撤回 pending 删除申请")
     add("memory.deletion.decide", _del_decide, {"jiaming"}, True,
         description="审批删除申请（仅周家明；approve 才执行 archive/delete）")
+    add("memory.deletion.get", _del_get, _owners(), False,
+        description="读删除申请（含人类/拒绝理由；桶删除后仍可查）")
     add("memory.deletion.list", _del_list, _owners(), False,
         description="删除申请列表")
     add("memory.tags.add", _tags_add, _owners(), True,
@@ -221,9 +222,26 @@ def _register() -> dict[str, Capability]:
         description="版本列表（不含正文；正文走 versions.read）")
     add("memory.relations.link", _rel_link, _owners(), True,
         description="建立关联（单向存储，显式反向查询）")
-    add("memory.relations.detach", _rel_detach, _owners(), True,
-        description="断开关联（留历史）")
     add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
+    # ===== 规格 v2.0：纠错 + 直删 + 反查路由（§5.4/§6.2/§7.1）=====
+    add("memory.relations.correct", _rel_correct, _owners(), True,
+        description="纠错桶间关系（binding_error；remove/replace_wrong_binding）")
+    add("i.item.relations.correct", _i_rel_correct, {"jiaming"}, True,
+        description="纠错 I 修订与桶的错误关系（不改 I 正文）")
+    add("source.binding.correct", _source_bind_correct, _owners(), True,
+        description="纠错原文区间绑定（remove/replace_wrong_binding）")
+    add("plan.memory.correct", _plan_link_correct, _owners(), True,
+        description="纠错 Plan↔Memory 成员链接（Plan 状态变化不解绑）")
+    add("memory.our_words.source.correct", _word_source_correct, _owners(), True,
+        description="纠错话语来源引用（旧证据/指纹随之失效）")
+    add("memory.delete", _memory_delete, {"jiaming"}, True,
+        description="周家明直删（无申请/理由/配额；有效关系一律挡住）")
+    add("relations.list", _relations_list, _owners(), False,
+        description="跨域有效关系正/反查（方向语义不颠倒）")
+    add("relations.trace", _relations_trace, _owners(), False,
+        description="沿关系继续追链（有界、披露截断）")
+    add("relations.corrections.list", _corrections_list, _owners(), False,
+        description="关系纠错历史（只读；目标已删返回原始身份）")
     add("memory.relations.trace", _rel_trace, _owners(), False,
         description="沿 continuation_of 追事件链")
     add("maintenance.outbox.drain", _outbox_drain, _owners(), True,
@@ -848,9 +866,7 @@ def _source_bindings(principal: Principal, a: dict) -> dict:
     return {"bindings": source_binding.ranges_of(str(a.get("memory_id", "")))}
 
 
-def _source_bind_revoke(principal: Principal, a: dict) -> dict:
-    return source_binding.revoke(principal.principal_id,
-                                 str(a.get("binding_id", "")))
+
 
 
 def _source_memory_open(principal: Principal, a: dict) -> dict:
@@ -941,25 +957,33 @@ def _presence_touch(principal: Principal, a: dict) -> dict:
 
 
 def _del_request(principal: Principal, a: dict) -> dict:
-    return deletion.deletion_submit(
-        principal.principal_id, str(a.get("resource_id", "")),
-        str(a.get("reason", "")), str(a.get("action", "delete")))
+    # v2.0：人类申请仅 qiaosheng、Memory-only（action/resource_kind 退役）
+    return deletion.deletion_request(
+        principal.principal_id, str(a.get("memory_id", "")),
+        str(a.get("reason", "")),
+        operation_key=str(a.get("operation_id") or ""))
 
 
 def _del_withdraw(principal: Principal, a: dict) -> dict:
     return deletion.deletion_withdraw(principal.principal_id,
-                                      str(a.get("resource_id", "")))
+                                      str(a.get("request_id", "")))
 
 
 def _del_decide(principal: Principal, a: dict) -> dict:
+    # v2.0：reject 必填拒绝理由（rejection_reason）；approve 无理由
     return deletion.deletion_decide(
         principal.principal_id, str(a.get("request_id", "")),
-        str(a.get("decision", "")), str(a.get("ai_reason", "")),
-        str(a.get("expected_resource_id", "")))
+        str(a.get("decision", "")),
+        rejection_reason=a.get("rejection_reason"))
 
 
 def _del_list(principal: Principal, a: dict) -> dict:
-    return {"requests": deletion.deletion_list(a.get("status"))}
+    return {"requests": deletion.deletion_list(
+        a.get("status"), memory_id=a.get("memory_id"))}
+
+
+def _del_get(principal: Principal, a: dict) -> dict:
+    return deletion.deletion_get(str(a.get("request_id", "")))
 
 
 
@@ -997,10 +1021,7 @@ def _rel_link(principal: Principal, a: dict) -> dict:
                           a.get("custom_label"), a.get("reverse_label"))
 
 
-def _rel_detach(principal: Principal, a: dict) -> dict:
-    return relations.detach(principal.principal_id,
-                            str(a.get("from_memory", "")), str(a.get("to_memory", "")),
-                            str(a.get("relation_type", "")))
+
 
 
 def _rel_list(principal: Principal, a: dict) -> dict:
@@ -1015,6 +1036,130 @@ def _rel_trace(principal: Principal, a: dict) -> dict:
 
 
 
+
+
+
+def _rel_correct(principal: Principal, a: dict) -> dict:
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填（纠错为有状态写）",
+                        code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "memory.relations.correct", op,
+        {"relation_id": a.get("relation_id"),
+         "correction_action": a.get("correction_action"),
+         "replacement": a.get("replacement"), "note": a.get("note")},
+        lambda conn: relations_mod.correct(
+            principal.principal_id, str(a.get("relation_id", "")),
+            str(a.get("correction_action", "")),
+            note=a.get("note"), replacement=a.get("replacement"),
+            conn=conn))
+
+
+def _i_rel_correct(principal: Principal, a: dict) -> dict:
+    from ..identity_i import service as i_svc
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填", code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "i.item.relations.correct", op,
+        {"relation_id": a.get("relation_id"),
+         "correction_action": a.get("correction_action"),
+         "replacement": a.get("replacement"), "note": a.get("note")},
+        lambda conn: i_svc.correct_item_relation(
+            principal.principal_id, str(a.get("relation_id", "")),
+            str(a.get("correction_action", "")),
+            note=a.get("note"), replacement=a.get("replacement"),
+            conn=conn))
+
+
+def _source_bind_correct(principal: Principal, a: dict) -> dict:
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填", code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "source.binding.correct", op,
+        {"binding_id": a.get("binding_id"),
+         "correction_action": a.get("correction_action"),
+         "replacement": a.get("replacement"), "note": a.get("note")},
+        lambda conn: source_binding.correct(
+            principal.principal_id, str(a.get("binding_id", "")),
+            str(a.get("correction_action", "")),
+            note=a.get("note"), replacement=a.get("replacement"),
+            conn=conn))
+
+
+def _plan_link_correct(principal: Principal, a: dict) -> dict:
+    from ..plans import service as plans_svc
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填", code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "plan.memory.correct", op,
+        {"link_id": a.get("link_id"), "correction_action":
+         a.get("correction_action"), "replacement": a.get("replacement"),
+         "note": a.get("note")},
+        lambda conn: plans_svc.correct_memory_link(
+            principal.principal_id, str(a.get("link_id", "")),
+            str(a.get("correction_action", "")),
+            note=a.get("note"), replacement=a.get("replacement"),
+            conn=conn))
+
+
+def _word_source_correct(principal: Principal, a: dict) -> dict:
+    from ..memory import our_words as words_mod
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填", code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "memory.our_words.source.correct", op,
+        {"word_id": a.get("word_id"),
+         "expected_source_ref": a.get("expected_source_ref"),
+         "correction_action": a.get("correction_action"),
+         "replacement": a.get("replacement"), "note": a.get("note")},
+        lambda conn: words_mod.correct_source(
+            principal.principal_id, str(a.get("word_id", "")),
+            a.get("expected_source_ref"),
+            str(a.get("correction_action", "")),
+            replacement=a.get("replacement"), note=a.get("note"),
+            conn=conn))
+
+
+def _memory_delete(principal: Principal, a: dict) -> dict:
+    from ..deletion import service as deletion_svc
+    from ..relations.corrections import atomic_write
+    op = str(a.get("operation_id", ""))
+    if not op:
+        raise Forbidden("operation_id 必填（技术幂等，非审批）",
+                        code="SCHEMA_VIOLATION")
+    return atomic_write(
+        principal.principal_id, "memory.delete", op,
+        {"memory_id": a.get("memory_id")},
+        lambda conn: deletion_svc.direct_delete(
+            principal.principal_id, str(a.get("memory_id", "")), conn=conn))
+
+
+def _relations_list(principal: Principal, a: dict) -> dict:
+    from .. import relations as relations_hub
+    return relations_hub.list_relations(a)
+
+
+def _relations_trace(principal: Principal, a: dict) -> dict:
+    from .. import relations as relations_hub
+    return relations_hub.trace_relations(a)
+
+
+def _corrections_list(principal: Principal, a: dict) -> dict:
+    from ..relations.corrections import list_corrections
+    return list_corrections(
+        endpoint=a.get("endpoint"), instance_id=a.get("instance_id"),
+        domain=a.get("domain"), limit=int(a.get("limit", 50)),
+        offset=int(a.get("offset", 0)))
 
 def _outbox_drain(principal: Principal, a: dict) -> dict:
     return maintenance.outbox_drain(int(a.get("limit", 100)))

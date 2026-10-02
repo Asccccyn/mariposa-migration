@@ -1,17 +1,12 @@
-"""删除申请（memory-only）：审批制删除，非直接物理删除。
+"""Memory 删除（规格 v2.0 §7 重写）。
 
-继承的旧规格（main2.5 v2.17.11 源码核验，0921 Phase 5a）：
-- 删除 = 提交删除申请（confirm 语义）：reason 必填；同资源 pending_exists(409)；
-  DAILY_LIMIT=10/天、LIFETIME_LIMIT=5/资源；withdraw 撤回；decide(approve/reject)
-  由 AI 侧审批，可带 ai_reason 与 expected_resource_id 乐观校验；目标不活跃 ->
-  superseded
-- approve + action=delete 才物理删除（审批+限额+审计门槛；旧"测试桶豁免直删"
-  通道不迁移，mariposa 不暴露无审批物理删除）
-- archive -> memory.visibility=archived（对齐旧 bucket_mgr.archive）
+两条正式路径共享同一个五域关系硬门（P-D04）：
+- 人类申请：qiaosheng 申请（理由必填；5 次/桶一生 + 10 次/上海自然日，
+  P-D03 申请口径）→ jiaming 决定（reject 必填理由；approve 不要求）。
+- 机器直删：jiaming 直接真删除，无申请/配额/理由审计（P-D02）。
 
-2026-10-01：信件功能拆出 mariposa（独立项目另行开发），本模块自
-letters/service.py 迁出并收窄为仅服务 memory（letters/letter_versions 表
-已随 schema v24 移除）。
+Memory archive 已退役（P-A01）：无 action 参数、无 archived 写路径。
+删除不级联任何有效关系——有有效跨资源关系一律结构化拒绝（P-R04）。
 """
 from __future__ import annotations
 
@@ -19,226 +14,344 @@ import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from .. import audit, config, db
+from .. import audit, db
 from ..errors import AlreadyDecided, DeleteBlocked, Forbidden, NotFound
 from ..retrieval import projection
 
-DAILY_LIMIT = 10
-LIFETIME_LIMIT = 5
+LIFETIME_PER_MEMORY = 5    # 人类申请：每桶一生成功提交数（P-D03）
+DAILY_LIMIT = 10           # 人类申请：每上海自然日提交数
+_SUB_TABLES = ("memory_categories", "memory_tags", "memory_moods",
+               "memory_mood_tags", "memory_our_words", "memory_recollections",
+               "memory_view_receipts", "memory_reengagements", "memory_keeps",
+               "field_search_docs", "field_fts", "search_fts",
+               "retrieval_documents", "memory_versions")
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def deletion_submit(principal_id: str, resource_id: str, reason: str,
-                    action: str = "delete") -> dict:
-    """人类提交删除申请。reason 必填；限额与旧系统一致。"""
-    if action not in ("archive", "delete"):
-        raise Forbidden("action must be archive or delete")
-    reason = str(reason or "").strip()
+def _iso() -> str:
+    return _now().isoformat()
+
+
+def _shanghai_date() -> str:
+    return _now().astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+
+
+# ---------------------------------------------------------------- 硬门
+
+def blocking_relations(conn, memory_id: str) -> dict[str, int]:
+    """五域有效关系硬门（§7.4）——只在写事务内调用。
+
+    ① 桶间入边/出边；② 任意 I 修订→本桶；③ 本桶有效 Source 区间绑定；
+    ④ 本桶与任意 Plan 的成员绑定（含终态 Plan）；⑤ 本桶 our_words 的
+    非空 Source 来源引用（不可解析的旧引用=需要纠错，不放行删除）。
+    """
+    out: dict[str, int] = {}
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM memory_relations"
+        " WHERE from_memory=? OR to_memory=?",
+        (memory_id, memory_id)).fetchone()["c"]
+    if n:
+        out["memory_relations"] = n
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM i_revision_memory_relations"
+        " WHERE memory_id=?", (memory_id,)).fetchone()["c"]
+    if n:
+        out["i_revision_relations"] = n
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM memory_source_bindings"
+        " WHERE memory_id=?", (memory_id,)).fetchone()["c"]
+    if n:
+        out["source_bindings"] = n
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM plan_memory_links"
+        " WHERE memory_id=?", (memory_id,)).fetchone()["c"]
+    if n:
+        out["plan_links"] = n
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM memory_our_words"
+        " WHERE memory_id=? AND source_ref IS NOT NULL"
+        " AND source_ref <> ''", (memory_id,)).fetchone()["c"]
+    if n:
+        out["word_sources"] = n
+    return out
+
+
+def _gate_or_raise(conn, memory_id: str) -> None:
+    refs = blocking_relations(conn, memory_id)
+    if refs:
+        raise DeleteBlocked(
+            "memory 存在有效跨资源关系，不能删除；请核对并纠正真正"
+            "错误的绑定后再删除", memory_id=memory_id, references=refs)
+
+
+# ---------------------------------------------------------------- 物理删除
+
+def _execute_delete(conn, memory_id: str, actor: str) -> None:
+    """真删除（关系硬门通过后）：当前资源+从属子记录+派生索引。
+    不删除申请历史/纠错历史（不随桶级联，§7.5）；不触碰其它桶、
+    Plan、I 修订正文、Source 母本与消息。
+    """
+    _gate_or_raise(conn, memory_id)
+    projection.remove(conn, memory_id)
+    for table in _SUB_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE memory_id=?", (memory_id,))
+    conn.execute("DELETE FROM memories WHERE memory_id=?", (memory_id,))
+    audit.record(conn, "memory.deleted", actor,
+                 resource_id=memory_id, resource_version=0,
+                 payload={"path": "physical_delete"})
+
+
+# ---------------------------------------------------------------- 人类申请
+
+def deletion_request(principal_id: str, memory_id: str, reason: str,
+                     operation_key: str | None = None) -> dict:
+    """人类申请（仅 qiaosheng；P-D01/P-D03）。
+
+    幂等：同 operation_key 重放返回同一申请（不重复计数）。申请与
+    配额检查在写锁内完成；失败回滚不产生申请。
+    """
+    if principal_id != "qiaosheng":
+        raise Forbidden("删除申请仅江乔生（人类路径）可用；周家明维护"
+                        "删除走 memory.delete", code="OWNER_MISMATCH")
+    reason = (reason or "").strip()
     if not reason:
-        raise Forbidden("deletion reason is required", code="reason_required")
+        raise Forbidden("申请理由必填（P-D01）", code="INVALID_ARGUMENT")
+    if operation_key:
+        row = _replay_check(principal_id, "memory.deletion.request",
+                            operation_key, memory_id)
+        if row is not None:
+            return row
     with db.formal() as conn:
-        target = conn.execute("SELECT memory_id FROM memories WHERE memory_id=?",
-                              (resource_id,)).fetchone()
-        if target is None:
-            raise NotFound("target not found", resource_id=resource_id)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            related = conn.execute(
-                "SELECT status FROM deletion_requests WHERE resource_id=?",
-                (resource_id,)).fetchall()
-            if any(r["status"] == "pending" for r in related):
-                raise Forbidden("a deletion request is already pending",
-                                code="pending_exists")
-            if len(related) >= LIFETIME_LIMIT:
-                raise Forbidden("resource lifetime deletion request limit reached",
-                                code="lifetime_limit")
-            local_date = _now().astimezone(ZoneInfo(config.RELATIONSHIP_TIMEZONE)) \
-                .date().isoformat()
-            today_count = conn.execute(
-                "SELECT COUNT(*) AS c FROM deletion_requests WHERE local_date=?",
+            if not conn.execute(
+                    "SELECT 1 FROM memories WHERE memory_id=?",
+                    (memory_id,)).fetchone():
+                raise NotFound("memory not found", memory_id=memory_id)
+            pending = conn.execute(
+                "SELECT request_id FROM deletion_requests"
+                " WHERE memory_id=? AND status='pending'",
+                (memory_id,)).fetchone()
+            if pending:
+                raise Forbidden("该桶已有 pending 申请（同桶最多一条）",
+                                code="CONFLICT", request_id=pending[0])
+            lifetime = conn.execute(
+                "SELECT COUNT(*) c FROM deletion_requests"
+                " WHERE memory_id=? AND submitted_by='qiaosheng'",
+                (memory_id,)).fetchone()["c"]
+            if lifetime >= LIFETIME_PER_MEMORY:
+                raise Forbidden(
+                    f"该桶人类删除申请已达一生上限 {LIFETIME_PER_MEMORY} 次",
+                    code="QUOTA_EXCEEDED", scope="lifetime",
+                    limit=LIFETIME_PER_MEMORY)
+            local_date = _shanghai_date()
+            daily = conn.execute(
+                "SELECT COUNT(*) c FROM deletion_requests"
+                " WHERE submitted_by='qiaosheng' AND submitted_local_date=?",
                 (local_date,)).fetchone()["c"]
-            if today_count >= DAILY_LIMIT:
-                raise Forbidden("daily deletion request limit reached",
-                                code="daily_limit")
-            rid = f"del_{uuid.uuid4().hex[:10]}"
+            if daily >= DAILY_LIMIT:
+                raise Forbidden(
+                    f"今日（上海自然日）申请已达上限 {DAILY_LIMIT} 次",
+                    code="QUOTA_EXCEEDED", scope="daily", limit=DAILY_LIMIT)
+            rid = f"dr_{uuid.uuid4().hex[:14]}"
             conn.execute(
-                "INSERT INTO deletion_requests(id, resource_id, resource_kind, action,"
-                " human_reason, ai_reason, status, submitted_by, submitted_at, local_date)"
-                " VALUES(?,?, 'memory', ?,?,'', 'pending', ?,?,?)",
-                (rid, resource_id, action, reason, principal_id,
-                 _now().isoformat(), local_date))
-            audit.record(conn, "deletion.requested", principal_id, resource_id=rid,
-                         payload={"target": resource_id, "action": action})
+                "INSERT INTO deletion_requests(request_id, memory_id,"
+                " human_reason, status, submitted_by, submitted_local_date,"
+                " created_at) VALUES(?,?,?,'pending',?,?,?)",
+                (rid, memory_id, reason, principal_id, local_date, _iso()))
+            if operation_key:
+                # 同事务存完成回执：同 key 重放返回本申请，不重复计数
+                import json as _json
+                import hashlib as _hl
+                ph = _hl.sha256(_json.dumps(
+                    {"memory_id": memory_id, "reason": reason},
+                    ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                conn.execute(
+                    "INSERT INTO idempotency_records(principal_id,"
+                    " capability, idempotency_key, payload_hash, status,"
+                    " result_ref, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (principal_id, "memory.deletion.request", operation_key,
+                     ph, "completed",
+                     _json.dumps({"memory_id": memory_id,
+                                  "request_id": rid},
+                                 ensure_ascii=False), _iso()))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"request_id": rid, "status": "pending", "action": action}
+    return deletion_get(rid)
 
 
-def deletion_withdraw(principal_id: str, resource_id: str) -> dict:
-    """撤回该资源最近一条 pending。"""
+def deletion_withdraw(principal_id: str, request_id: str) -> dict:
+    """撤回自己的 pending（不返还已提交次数，P-D03）。"""
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT * FROM deletion_requests WHERE resource_id=? AND"
-                " status='pending' ORDER BY submitted_at DESC LIMIT 1",
-                (resource_id,)).fetchone()
+                "SELECT * FROM deletion_requests WHERE request_id=?",
+                (request_id,)).fetchone()
             if row is None:
-                raise NotFound("pending deletion request not found",
-                               resource_id=resource_id)
+                raise NotFound("deletion request not found",
+                               request_id=request_id)
+            if row["submitted_by"] != principal_id:
+                raise Forbidden("只能撤回本人的申请", code="OWNER_MISMATCH")
+            if row["status"] != "pending":
+                raise AlreadyDecided("只有 pending 申请可撤回",
+                                      status=row["status"])
             conn.execute(
-                "UPDATE deletion_requests SET status='withdrawn', decided_at=?,"
-                " decided_by=? WHERE id=?",
-                (_now().isoformat(), principal_id, row["id"]))
-            audit.record(conn, "deletion.withdrawn", principal_id,
-                         resource_id=row["id"])
+                "UPDATE deletion_requests SET status='withdrawn',"
+                " decided_at=? WHERE request_id=? AND status='pending'",
+                (_iso(), request_id))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"request_id": row["id"], "status": "withdrawn"}
-
-
-def _target_active(conn, resource_id: str) -> bool:
-    r = conn.execute("SELECT visibility FROM memories WHERE memory_id=?",
-                     (resource_id,)).fetchone()
-    return bool(r) and r["visibility"] == "active"
+    return deletion_get(request_id)
 
 
 def deletion_decide(principal_id: str, request_id: str, decision: str,
-                    ai_reason: str = "", expected_resource_id: str = "") -> dict:
-    """AI 侧（周家明）审批；approve 执行 archive/delete。
-
-    审计 F38：状态迁移在写事务内以 pending 为条件做 CAS——并发的
-    approve/reject 只有一个能落定，另一个得到结构化 ALREADY_DECIDED；
-    状态更新与删除副作用同一事务提交，数据库状态与实际副作用一致。
+                    rejection_reason: str | None = None) -> dict:
+    """周家明决定（P-D01）：approve 真删除（无理由要求；关系硬门通过
+    才落 approved，被拦回滚保 pending）；reject 必填非空理由。
     """
     if principal_id != "jiaming":
-        raise Forbidden("only jiaming decides deletion requests",
-                        principal=principal_id)
+        raise Forbidden("删除决定仅周家明", code="OWNER_MISMATCH")
+    decision = (decision or "").strip().lower()
     if decision not in ("approve", "reject"):
-        raise Forbidden("decision must be approve or reject")
+        raise Forbidden("decision must be approve/reject",
+                        code="INVALID_ARGUMENT")
+    if decision == "reject" and not (rejection_reason or "").strip():
+        raise Forbidden("拒绝必须说明理由（P-D01）", code="INVALID_ARGUMENT")
     with db.formal() as conn:
-        row = conn.execute("SELECT * FROM deletion_requests WHERE id=?",
-                           (request_id,)).fetchone()
-        if row is None or row["status"] != "pending":
-            raise NotFound("pending deletion request not found", request_id=request_id)
-        if expected_resource_id and expected_resource_id != row["resource_id"]:
-            raise Forbidden("deletion request does not match resource_id",
-                            code="bucket_mismatch")
-        if not _target_active(conn, row["resource_id"]):
-            supersede_conflict = None
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                cur = conn.execute(
-                    "UPDATE deletion_requests SET status='superseded',"
-                    " decided_at=?, decided_by=? WHERE id=?"
-                    " AND status='pending'",
-                    (_now().isoformat(), principal_id, request_id))
-                if cur.rowcount != 1:
-                    # N12：CAS 输家——不在 try 内 raise（外层 except 的
-                    # ROLLBACK 会因事务已结束再炸，掩盖真实错误）
-                    supersede_conflict = AlreadyDecided(
-                        "deletion request already decided by a concurrent "
-                        "decision", request_id=request_id)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-            if supersede_conflict is not None:
-                raise supersede_conflict
-            raise Forbidden("deletion request target is no longer active",
-                            code="superseded")
         conn.execute("BEGIN IMMEDIATE")
         try:
-            status = "approved" if decision == "approve" else "rejected"
-            # CAS：只有仍处于 pending 的申请能被本次决定落定
-            cur = conn.execute(
-                "UPDATE deletion_requests SET status=?, ai_reason=?,"
-                " decided_at=?, decided_by=? WHERE id=? AND status='pending'",
-                (status, str(ai_reason or "").strip(), _now().isoformat(),
-                 principal_id, request_id))
-            if cur.rowcount != 1:
-                raise AlreadyDecided(
-                    "deletion request already decided by a concurrent "
-                    "decision", request_id=request_id)
-            if decision == "approve":
-                _execute(conn, row, principal_id)
-            audit.record(conn, f"deletion.{status}", principal_id,
-                         resource_id=request_id,
-                         payload={"target": row["resource_id"],
-                                  "action": row["action"]})
+            row = conn.execute(
+                "SELECT * FROM deletion_requests WHERE request_id=?",
+                (request_id,)).fetchone()
+            if row is None:
+                raise NotFound("deletion request not found",
+                               request_id=request_id)
+            if row["status"] != "pending":
+                raise AlreadyDecided("申请已决定", status=row["status"])
+            if decision == "reject":
+                conn.execute(
+                    "UPDATE deletion_requests SET status='rejected',"
+                    " rejection_reason=?, decided_at=? WHERE request_id=?",
+                    (rejection_reason.strip(), _iso(), request_id))
+            else:
+                # 技术拦截（关系硬门）不是主观拒绝：抛出→回滚→保 pending
+                _execute_delete(conn, row["memory_id"], principal_id)
+                conn.execute(
+                    "UPDATE deletion_requests SET status='approved',"
+                    " decided_at=? WHERE request_id=?",
+                    (_iso(), request_id))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"request_id": request_id, "decision": decision,
-            "resource_id": row["resource_id"], "status": status}
+    return deletion_get(request_id)
 
 
-def _blocking_references(conn, rid: str) -> dict[str, int]:
-    """阻止物理删除的正式跨域引用（审计 F34）。
+# ---------------------------------------------------------------- 机器直删
 
-    I revision 关系与 Source 绑定是跨域历史引用：物理删除 memory 会
-    破坏其完整性。返回 {引用类型: 行数}；空 dict = 无引用可删。
+def direct_delete(principal_id: str, memory_id: str, conn=None) -> dict:
+    """周家明直删（P-D02）：无申请/理由/配额/审批审计。
+
+    关系硬门同样生效（P-D04）；pending 人类申请置 superseded（客观
+    状态，不伪造拒绝理由）；既有拒绝决定原样保留。conn 由 atomic_write
+    注入（幂等回执与删除同事务，§8.2）。
     """
-    out: dict[str, int] = {}
-    n = conn.execute(
-        "SELECT COUNT(*) AS c FROM i_revision_memory_relations"
-        " WHERE memory_id=?", (rid,)).fetchone()["c"]
-    if n:
-        out["i_revision_relations"] = n
-    n = conn.execute(
-        "SELECT COUNT(*) AS c FROM memory_source_bindings"
-        " WHERE memory_id=?", (rid,)).fetchone()["c"]
-    if n:
-        out["source_bindings"] = n
-    return out
+    if principal_id != "jiaming":
+        raise Forbidden("直删仅周家明（认证 jiaming 主体）",
+                        code="OWNER_MISMATCH")
+
+    def _do(conn):
+        if not conn.execute(
+                "SELECT 1 FROM memories WHERE memory_id=?",
+                (memory_id,)).fetchone():
+            raise NotFound("memory not found", memory_id=memory_id)
+        _execute_delete(conn, memory_id, principal_id)
+        conn.execute(
+            "UPDATE deletion_requests SET status='superseded',"
+            " decided_at=? WHERE memory_id=? AND status='pending'",
+            (_iso(), memory_id))
+        return {"memory_id": memory_id, "deleted": True, "path": "direct"}
+
+    if conn is not None:
+        return _do(conn)
+    with db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            out = _do(c)
+            c.execute("COMMIT")
+            return out
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
 
 
-def _execute(conn, row, actor: str) -> None:
-    """approve 后执行：archive -> visibility=archived；delete -> 物理删除+清派生。"""
-    rid = row["resource_id"]
-    if row["action"] == "archive":
-        conn.execute("UPDATE memories SET visibility='archived',"
-                     " updated_at=? WHERE memory_id=?",
-                     (_now().isoformat(), rid))
-        projection.remove(conn, rid)  # 归档即无默认投影
-        return
-    # delete：物理删除（有审批+限额+审计门槛；继承旧 HumanDeleteExecutor 语义）
-    # 审计 F34：存在 I revision 关系 / Source 绑用的记忆不做物理删除，
-    # 结构化拒绝（引用完整性优先），调用方可改走 archive。
-    refs = _blocking_references(conn, rid)
-    if refs:
-        raise DeleteBlocked(
-            "memory 被正式跨域引用，不允许物理删除；请先解除引用或"
-            "改用 archive", memory_id=rid, references=refs)
-    # v2 分层子表全清（B08：v1 清单不含分类/心情/话语/回忆/keep 行，
-    # v2 桶会 FK 失败）
-    for table in ("memory_categories", "memory_tags",
-                  "memory_moods", "memory_mood_tags", "memory_our_words",
-                  "memory_recollections", "memory_view_receipts",
-                  "memory_reengagements",                  "memory_keeps", "field_search_docs", "field_fts",
-                  "search_fts", "retrieval_documents", "memory_versions"):
-        conn.execute(f"DELETE FROM {table} WHERE memory_id=?", (rid,))
-    conn.execute("DELETE FROM memory_relations WHERE from_memory=?"
-                 " OR to_memory=?", (rid, rid))
-    conn.execute("DELETE FROM plan_memory_links WHERE memory_id=?", (rid,))
-    conn.execute("DELETE FROM memories WHERE memory_id=?", (rid,))
+# ---------------------------------------------------------------- 读取
 
-
-def deletion_list(status: str | None = None) -> list[dict]:
+def deletion_get(request_id: str) -> dict:
     with db.formal() as conn:
-        if status:
-            rows = conn.execute(
-                "SELECT * FROM deletion_requests WHERE status=?"
-                " ORDER BY submitted_at DESC", (status,)).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM deletion_requests ORDER BY submitted_at DESC").fetchall()
+        row = conn.execute(
+            "SELECT * FROM deletion_requests WHERE request_id=?",
+            (request_id,)).fetchone()
+    if row is None:
+        raise NotFound("deletion request not found", request_id=request_id)
+    return dict(row)
+
+
+def deletion_list(status: str | None = None,
+                  memory_id: str | None = None) -> list[dict]:
+    where, params = [], []
+    if status:
+        where.append("status=?")
+        params.append(status)
+    if memory_id:
+        where.append("memory_id=?")
+        params.append(memory_id)
+    cond = ("WHERE " + " AND ".join(where)) if where else ""
+    with db.formal() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM deletion_requests {cond}"
+            " ORDER BY created_at DESC LIMIT 200", params).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------- 兼容垫片
+
+def deletion_submit(principal_id: str, resource_id: str, reason: str,
+                    action: str = "delete", resource_kind: str = "memory",
+                    operation_key: str | None = None) -> dict:
+    """旧签名垫片：忽略已退役的 action/resource_kind（§3.1.3）。"""
+    return deletion_request(principal_id, resource_id, reason,
+                            operation_key=operation_key)
+
+
+def _replay_check(principal_id: str, capability: str,
+                  operation_key: str, memory_id: str) -> dict | None:
+    """同 key 重放返回原申请（不重复计数，§7.2）。"""
+    import json as _json
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT result_ref FROM idempotency_records"
+            " WHERE principal_id=? AND capability=? AND idempotency_key=?",
+            (principal_id, capability, operation_key)).fetchone()
+    if row is None:
+        return None
+    try:
+        saved = _json.loads(row["result_ref"])
+    except (ValueError, TypeError):
+        return None
+    if saved.get("memory_id") == memory_id and saved.get("request_id"):
+        try:
+            out = deletion_get(saved["request_id"])
+            out["idempotent_replay"] = True
+            return out
+        except NotFound:
+            return None
+    return None

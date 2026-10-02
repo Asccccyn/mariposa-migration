@@ -17,9 +17,7 @@ from ..errors import Forbidden, NotFound, VersionConflict
 from ..memory.service import canonical_hash
 
 DOC_ID = "i_main"
-_RELATION_TYPES = {
-    "changed_because_of", "clarified_by", "informed_by", "related"
-}
+_RELATION_TYPES = {'changed_because_of', 'clarified_by', 'informed_by', 'related_to'}
 
 
 def _now() -> str:
@@ -98,7 +96,10 @@ def _validate_relations(conn, relations: list[dict] | None) -> list[dict]:
             raise Forbidden("I relation must be an object",
                             code="INVALID_ARGUMENT")
         memory_id = str(rel.get("memory_id", "")).strip()
-        relation_type = str(rel.get("relation_type", "related")).strip() or "related"
+        relation_type = str(rel.get("relation_type", "related_to")).strip() or "related_to"
+        if relation_type == "related":
+            # v2.0 词名收口：I 侧同义词 related → related_to（§4）
+            relation_type = "related_to"
         if not memory_id:
             raise Forbidden("memory_id required for I relation",
                             code="INVALID_ARGUMENT")
@@ -119,17 +120,19 @@ def _validate_relations(conn, relations: list[dict] | None) -> list[dict]:
 def _insert_relations(conn, item_id: str, revision: int,
                       relations: list[dict], now: str) -> None:
     for rel in relations:
+        import uuid as _u
         conn.execute(
-            "INSERT INTO i_revision_memory_relations("
-            " item_id, revision, memory_id, relation_type, created_at)"
-            " VALUES(?,?,?,?,?)",
-            (item_id, revision, rel["memory_id"], rel["relation_type"], now),
+            "INSERT OR IGNORE INTO i_revision_memory_relations("
+            " relation_id, item_id, revision, memory_id, relation_type,"
+            " created_at) VALUES(?,?,?,?,?,?)",
+            (f"irr_{_u.uuid4().hex[:16]}", item_id, revision,
+             rel["memory_id"], rel["relation_type"], now),
         )
 
 
 def _relations_for(conn, item_id: str, revision: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT memory_id, relation_type, created_at"
+        "SELECT relation_id, memory_id, relation_type, created_at"
         " FROM i_revision_memory_relations"
         " WHERE item_id=? AND revision=?"
         " ORDER BY relation_type, memory_id",
@@ -499,3 +502,85 @@ def suggestions_list(status: str | None = None) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM i_suggestions ORDER BY created_at").fetchall()
     return [dict(r) for r in rows]
+
+
+def correct_item_relation(principal_id: str, relation_id: str,
+                          correction_action: str, note: str | None = None,
+                          replacement: dict | None = None,
+                          conn=None) -> dict:
+    """I 修订↔Memory 关系纠错（§P-R02/§5.5 I）。
+
+    只删除错误的关系行并入纠错历史——不改该修订的 I 正文、不制造
+    新修订规避（§5.5）；restore 旧修订不会复活已纠正的绑定
+    （restore 复制的是修订正文与 based_on 链，关系按新修订重声明）。
+    """
+    from .. import db as _db
+    from ..errors import Forbidden, NotFound
+    from ..relations.corrections import record_correction
+    if principal_id != "jiaming":
+        raise Forbidden("I 修订关系仅周家明可变更（§5.6）",
+                        code="OWNER_MISMATCH")
+    if correction_action not in ("remove_wrong_binding",
+                                 "replace_wrong_binding"):
+        raise Forbidden("correction_action must be remove_wrong_binding/"
+                        "replace_wrong_binding")
+
+    def _do(conn):
+        row = conn.execute(
+            "SELECT * FROM i_revision_memory_relations WHERE relation_id=?",
+            (relation_id,)).fetchone()
+        if row is None:
+            raise NotFound("I relation not found", relation_id=relation_id)
+        replacement_id = None
+        if replacement:
+            rels = _validate_relations(conn, [replacement])
+            import uuid as _u
+            new_rid = f"irr_{_u.uuid4().hex[:16]}"
+            conn.execute(
+                "INSERT OR IGNORE INTO i_revision_memory_relations("
+                " relation_id, item_id, revision, memory_id,"
+                " relation_type, created_at) VALUES(?,?,?,?,?,?)",
+                (new_rid, row["item_id"], row["revision"],
+                 rels[0]["memory_id"], rels[0]["relation_type"],
+                 datetime.now(timezone.utc).isoformat()))
+            dup = conn.execute(
+                "SELECT relation_id FROM i_revision_memory_relations"
+                " WHERE item_id=? AND revision=? AND memory_id=? AND"
+                " relation_type=? AND relation_id<>?",
+                (row["item_id"], row["revision"], rels[0]["memory_id"],
+                 rels[0]["relation_type"], new_rid)).fetchone()
+            if dup:
+                conn.execute(
+                    "DELETE FROM i_revision_memory_relations WHERE"
+                    " relation_id=?", (new_rid,))
+                replacement_id = dup["relation_id"]
+            else:
+                replacement_id = new_rid
+        cid = record_correction(
+            conn, domain="i_revision_relation",
+            original_instance_id=relation_id,
+            endpoint_a=f"{row['item_id']}@{row['revision']}",
+            endpoint_b=row["memory_id"],
+            original_meta={"relation_type": row["relation_type"]},
+            original_created_by=None,
+            original_created_at=row["created_at"],
+            corrected_by=principal_id, note=note,
+            replacement_instance_id=replacement_id)
+        conn.execute(
+            "DELETE FROM i_revision_memory_relations WHERE relation_id=?",
+            (relation_id,))
+        return {"correction_id": cid, "removed_relation_id": relation_id,
+                "replacement_relation_id": replacement_id,
+                "action": correction_action}
+
+    if conn is not None:
+        return _do(conn)
+    with _db.formal() as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            out = _do(c)
+            c.execute("COMMIT")
+            return out
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
