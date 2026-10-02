@@ -71,7 +71,7 @@ def _register() -> dict[str, Capability]:
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
-        description="确认本次明确查看；普通桶按自然日续期（plan 不适用）")
+        description="确认本次明确查看（明开回温：explicit-open basis，刷新回温基准；plan 不适用）")
     add("memory.recollections.append", _recollect_append, _owners(), True, True,
         description="凭有效查看回执追加本人回忆（不索引；触发保留线索）")
     add("memory.recollections.revise", _recollect_revise, _owners(), True,
@@ -83,7 +83,7 @@ def _register() -> dict[str, Capability]:
     add("memory.keeps.list", _keeps_list, _owners(), False,
         description="桶的留标记列表（含已撤销；阶段用有效标记）")
     add("memory.our_words.append", _our_words_append, _owners(), True,
-        description="追加我们的话（speaker/ordinal；不参与召回）")
+        description="追加我们的话（speaker/ordinal；参与 WIDE 阶段召回）")
     add("memory.mood.write", _mood_write, {"jiaming"}, True,
         description="补写/修正当前心情（标签+一段自由文字；非原文、"
                     "不参与检索；允许后补）")
@@ -324,7 +324,7 @@ def _register() -> dict[str, Capability]:
     add("memory.by_date", _by_date, _owners(), False, description="按事件日期查")
     add("memory.by_tag", _by_tag, _owners(), False, description="按标签查（结构化入口）")
     add("memory.meanings.append", _meaning_append, {"jiaming"}, True,
-        description="追加 meaning 层（只周家明；纳入 full 投影）")
+        description="追加 meaning 层（只周家明；禁检来源——不进任何检索投影）")
     add("memory.meanings.replace", _meaning_replace, {"jiaming"}, True,
         description="替换 meaning 层（旧层留底，层号归档）")
     add("memory.meanings.list", _meaning_list, _owners(), False,
@@ -928,7 +928,8 @@ def _source_message_get(principal: Principal, a: dict) -> dict:
         message_id=a.get("message_id"),
         provider_message_id=a.get("provider_message_id"),
         context=int(a.get("context", 5)),
-        include_content=bool(a.get("include_content")))
+        include_content=bool(a.get("include_content")),
+        provider=a.get("provider"))
 
 
 def _source_range_open(principal: Principal, a: dict) -> dict:
@@ -1467,7 +1468,7 @@ def _sticker_list(principal: Principal, a: dict) -> dict:
 def _sticker_add(principal: Principal, a: dict) -> dict:
     import hashlib as _hl
     from .. import config as _cfg
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
     label = str(a.get("label", "")).strip()
     content_hash = str(a.get("content_hash", ""))
     if not label:
@@ -1486,7 +1487,7 @@ def _sticker_add(principal: Principal, a: dict) -> dict:
                           (content_hash,)).fetchone()["mime"],
              conn.execute("SELECT storage_key FROM media_objects WHERE"
                           " content_hash=?", (content_hash,)).fetchone()["storage_key"],
-             _dt.utcnow().isoformat()))
+             _dt.now(_tz.utc).isoformat()))
     return {"content_hash": content_hash, "label": label}
 
 

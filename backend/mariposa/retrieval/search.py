@@ -29,23 +29,45 @@ def _allowed_field_kinds(conn, memory_ids: list[str]) -> dict[str, set[str]]:
     return out
 
 
-def _field_fts_hits(conn, phrase: str, where: list[str], params: list,
-                     fetch: int) -> dict[str, list]:
-    """field_fts 命中按桶聚合（返回 mid -> [field_kind,...]，首见顺序
-    即 FTS 相关性顺序）。命中面=分字段投影（title/event/words），
-    不含 why/meaning/mood 等禁检来源。"""
-    sql = ("SELECT f.memory_id AS fmid, f.field_kind AS fkind,"
-           " bm25(field_fts) AS rank FROM field_fts f"
-           f" JOIN memories m ON m.memory_id = f.memory_id"
-           f" WHERE {' AND '.join(where)} AND field_fts MATCH ?"
-           " ORDER BY rank, f.memory_id LIMIT ?")
-    rows = conn.execute(sql, params + [phrase, fetch]).fetchall()
-    agg: dict[str, list[str]] = {}
-    for r in rows:
-        agg.setdefault(r["fmid"], [])
-        if r["fkind"] not in agg[r["fmid"]]:
-            agg[r["fmid"]].append(r["fkind"])
-    return agg
+def _stage_scoped_hits(conn, query: str, where: list[str],
+                       params: list) -> list[tuple[str, list[str]]]:
+    """全量审计 P2-01：兼容入口复用 Runtime 的 scoped BM25——
+    scope 池 → 逐桶当前阶段允许字段 → 分字段文档打分，阶段过滤在
+    打分/截断**之前**生效。此前先 FTS rank LIMIT 再过滤，CORE 桶的
+    不允许 title 命中会占满取数窗，把后面的合法 event_text 挤出
+    候选（false negative）。返回 [(memory_id, [命中字段...])] 按
+    分数降序。"""
+    from ..recall import pipeline as pl
+    from . import query_plan as qp
+    from . import scoped_bm25
+    terms, phrases = qp.plan_token_groups({"original_request": query})
+    if not (terms or phrases):
+        return []
+    pool_ids, _trunc = pl._scope_pool_ids(conn, where, params)
+    pool_ids = [m for m in pool_ids if m]
+    if not pool_ids:
+        return []
+    allowed = _allowed_field_kinds(conn, pool_ids)
+    docs: list[dict] = []
+    for i in range(0, len(pool_ids), 500):
+        chunk = [m for m in pool_ids[i:i + 500] if allowed.get(m)]
+        if not chunk:
+            continue
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+                "SELECT memory_id, field_kind, text_norm FROM"
+                f" field_search_docs WHERE memory_id IN ({marks})",
+                chunk).fetchall():
+            kinds = allowed.get(row["memory_id"])
+            if not kinds or row["field_kind"] not in kinds:
+                continue
+            docs.append({"owner": row["memory_id"],
+                         "field": row["field_kind"],
+                         "tokens": scoped_bm25._doc_tokens(
+                             row["text_norm"] or "")})
+    scored = scoped_bm25.score_documents(docs, terms, phrases)
+    return [(e["owner"], list(e["fields"])) for e in scored]
+
 
 def _pool_where(filters: dict) -> tuple[list[str], list]:
     """结构化筛选 → (where 片段, 参数)。跨维度 AND；同维度默认 any（D04）。"""
@@ -120,28 +142,15 @@ def _hit(row, matched_by: str, matched_fields: list[str]) -> dict:
     }
 
 
-def _recall_keyword(conn, phrase: str, where: list[str], params: list,
+def _recall_keyword(conn, query: str, where: list[str], params: list,
                     filters: dict, limit: int, cursor: list | None) -> dict:
-    """关键词模式：池内 FTS + BM25（升序=更相关，[T1]）；offset 游标。
-
-    matched_fields 如实标注（D17）：v1 旧桶投影含 why/meaning 层（祖父
-    条款），命中未必来自事件正文——用投影自带的 whitelist_body（白名单
-    主字段正文）比对，不在其中的标 legacy_projection，不冒充 event_text。
-    检索层只读投影表，不回读正文版本表。
+    """关键词模式：池内 scoped BM25（全量审计 P2-01：阶段字段过滤在
+    打分/截断**之前**，CORE 桶的不允许命中不再挤掉合法 event_text）；
+    offset 游标；matched_fields 如实标注真实命中字段。
     """
     offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
         cursor[0]).isdigit() else 0
-    # 2026-09-30 裁定：池内关键词命中面=分字段投影并按当前阶段过滤；
-    # why/meaning 等禁检来源不再参与（matched_fields 如实标注真实
-    # 命中字段，阶段不允许的命中不算命中）
-    agg = _field_fts_hits(conn, phrase, where, params,
-                          fetch=(limit + 1) * 4 + offset)
-    allowed = _allowed_field_kinds(conn, list(agg))
-    ordered = []
-    for mid, kinds in agg.items():
-        eff = [k for k in kinds if k in allowed.get(mid, set())]
-        if eff:
-            ordered.append((mid, eff))
+    ordered = _stage_scoped_hits(conn, query, where, params)
     page = ordered[offset:offset + limit]
     hits = []
     for mid, eff in page:
@@ -156,11 +165,7 @@ def _recall_keyword(conn, phrase: str, where: list[str], params: list,
     total_kept = len(ordered)
     next_cursor = ([str(offset + limit)]
                    if total_kept > offset + limit else None)
-    return {"hits": hits, "query": phrase, "mode": "keyword",
-            "filters_applied": _filters_summary(filters),
-            "next_cursor": next_cursor, "limit": limit}
-    next_cursor = [str(offset + limit)] if len(rows) > limit else None
-    return {"hits": hits, "query": phrase, "mode": "keyword",
+    return {"hits": hits, "query": query, "mode": "keyword",
             "filters_applied": _filters_summary(filters),
             "next_cursor": next_cursor, "limit": limit}
 
@@ -201,9 +206,8 @@ def recall(conn, query: str = "", filters: dict | None = None,
     filters = filters or {}
     limit = max(1, min(int(limit), 100))
     where, params = _pool_where(filters)
-    phrase = projection.compile_query(query or "")
-    if phrase:
-        return _recall_keyword(conn, phrase, where, params, filters, limit,
+    if (query or "").strip():
+        return _recall_keyword(conn, query, where, params, filters, limit,
                                cursor)
     return _recall_browse(conn, where, params, filters, limit, cursor)
 
@@ -227,16 +231,12 @@ def search(conn, query: str, limit: int = 20,
     hits: list[dict] = []
     phrase = projection.compile_query(query)
     if phrase:
-        # 2026-09-30 裁定：接口兼容（名称/参数/返回结构），底座进入
-        # v1.7 字段矩阵——命中面=分字段投影并按当前阶段过滤；
-        # why/meaning 等禁检来源不再参与
-        agg = _field_fts_hits(conn, phrase, ["m.visibility='active'"], [],
-                              fetch=limit * 4)
-        allowed = _allowed_field_kinds(conn, list(agg))
-        for mid, kinds in agg.items():
-            eff = [k for k in kinds if k in allowed.get(mid, set())]
-            if not eff:
-                continue  # 命中字段全部不在当前阶段允许集内
+        # 2026-09-30 裁定 + 全量审计 P2-01：接口兼容（名称/参数/返回
+        # 结构），底座=Runtime scoped BM25——阶段字段过滤在 Top-K
+        # 之前；why/meaning 等禁检来源不参与
+        ordered = _stage_scoped_hits(conn, query,
+                                     ["m.visibility='active'"], [])
+        for mid, eff in ordered[:limit]:
             m = conn.execute(
                 "SELECT compression_state, current_version_no FROM memories"
                 " WHERE memory_id=?", (mid,)).fetchone()
@@ -249,8 +249,6 @@ def search(conn, query: str, limit: int = 20,
                 "projection_kind": m["compression_state"],
                 "memory_version": m["current_version_no"],
             })
-            if len(hits) >= limit:
-                break
     if related_of:
         # SEARCH-05：合并按 memory_id 去重——关键词已命中的桶不因关联重复出现
         seen_kw = {h["memory_id"] for h in hits}

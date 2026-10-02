@@ -88,11 +88,21 @@ class AllowedScope:
         neg = plan.get("explicit_negative_constraints") or {}
         for key in ("event_date_excluded",):
             for rng in (neg.get(key) or []):
-                if not isinstance(rng, dict):
+                if not isinstance(rng, dict) or not rng.get("from"):
                     continue
-                if rng.get("from"):
-                    where.append("m.memory_date NOT BETWEEN ? AND ?")
-                    params += [rng["from"], rng.get("to", "9999-12-31")]
+                # 全量审计 P2-02：与正向 SEARCH-03 同一套 interval
+                # 语义——排除=事件时间（memory_date 或 occurred 区间
+                # 重叠）落入排除窗。此前只看 memory_date NOT BETWEEN，
+                # memory_date 为空而 occurred 落在排除窗内的桶漏排
+                f, t = rng["from"], rng.get("to", "9999-12-31")
+                where.append(
+                    "(m.memory_date IS NULL OR"
+                    " m.memory_date NOT BETWEEN ? AND ?)"
+                    " AND (m.occurred_start IS NULL OR"
+                    " substr(m.occurred_start,1,10) > ?"
+                    " OR (m.occurred_end IS NOT NULL AND"
+                    " substr(m.occurred_end,1,10) < ?))")
+                params += [f, t, t, f]
         cats_ex = neg.get("categories_excluded") or []
         if cats_ex:
             marks = ",".join("?" * len(cats_ex))

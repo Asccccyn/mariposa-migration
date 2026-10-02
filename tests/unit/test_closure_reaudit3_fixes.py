@@ -483,13 +483,14 @@ class Test5AnchorExcerpt:
         """单元级：OR 表达式不当锚词——_anchors_excerpt 只认锚词序列。"""
         from mariposa.source import query as sq
         body = "无关铺垫的内容。" * 40 + "结尾提到中秋"
-        win = sq._anchors_excerpt(
+        win, located = sq._anchors_excerpt(
             body, '"中 秋" OR "约 会"', ["中秋", "约会"])
-        assert "中秋" in win, "锚词定位必须命中尾部"
-        head_only = sq._anchors_excerpt(
+        assert located and "中秋" in win, "锚词定位必须命中尾部"
+        head_only, _loc = sq._anchors_excerpt(
             body, '"中 秋" OR "约 会"', None)
         assert "中秋" not in head_only or "中秋" not in body[:120], \
-            "无锚词时退头部窗（不拿表达式猜位置）"
+            "无锚词时退头部窗（不拿表达式猜位置）——P2-05 后：有锚" \
+            "词而定位失败返回空窗，无锚词仍头部窗"
 
 
 class Test6FindWordsQueryOnly:
