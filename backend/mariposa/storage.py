@@ -114,7 +114,7 @@ def restore_verify(backup_dir: str) -> dict:
                 # 不再判"可供 Mariposa 恢复"
                 required = (["memories", "memory_versions", "principals"]
                             if name == "formal"
-                            else ["workspace_task_leases"])
+                            else ["mariposa_db_meta"])
                 for t in required:
                     if not conn.execute(
                             "SELECT 1 FROM sqlite_master WHERE"
