@@ -442,7 +442,12 @@ function srcMd(raw) {
   return html;
 }
 
-function srcTime(t) { return t ? t.replace('T', ' ').replace(/\.\d+.*$/, '') : '—'; }
+function srcTime(t) {
+  // CB-005：会话/消息的原始时间 metadata 是用户导入数据，此前直接拼进
+  // innerHTML（存储型注入入口）。所有消费点都是 HTML 模板插值，这里
+  // 统一转义；显示格式化不承担安全编码，也不依赖值是否合法 ISO。
+  return t ? esc(t.replace('T', ' ').replace(/\.\d+.*$/, '')) : '—';
+}
 
 function srcMsgHtml(m) {
   const isHuman = m.normalized_sender === 'human';
