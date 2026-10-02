@@ -106,6 +106,145 @@ def _matches(spec: dict, value, root: dict) -> bool:
 
 #: v2 能力输入 schema（spec_v2 §12；与包内 v1.1 契约分层，schema_for 优先取此层）
 V2_INPUT_SCHEMAS: dict[str, dict] = {
+    "memory.deletion.request": {
+        "type": "object",
+        "required": ["memory_id", "reason", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "reason": {"type": "string", "minLength": 1},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.deletion.withdraw": {
+        "type": "object", "required": ["request_id"],
+        "additionalProperties": False,
+        "properties": {"request_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.deletion.decide": {
+        "type": "object", "required": ["request_id", "decision"],
+        "additionalProperties": False,
+        "properties": {
+            "request_id": {"type": "string", "minLength": 1},
+            "decision": {"type": "string", "enum": ["approve", "reject"]},
+            "rejection_reason": {"type": "string"}},
+    },
+    "memory.deletion.get": {
+        "type": "object", "required": ["request_id"],
+        "additionalProperties": False,
+        "properties": {"request_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.deletion.list": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"status": {"type": "string"},
+                       "memory_id": {"type": "string"}},
+    },
+    "memory.delete": {
+        "type": "object", "required": ["memory_id", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.relations.correct": {
+        "type": "object",
+        "required": ["relation_id", "correction_action", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "relation_id": {"type": "string", "minLength": 1},
+            "correction_action": {"type": "string",
+                "enum": ["remove_wrong_binding",
+                         "replace_wrong_binding"]},
+            "replacement": {"type": "object"},
+            "note": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "i.item.relations.correct": {
+        "type": "object",
+        "required": ["relation_id", "correction_action", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "relation_id": {"type": "string", "minLength": 1},
+            "correction_action": {"type": "string",
+                "enum": ["remove_wrong_binding",
+                         "replace_wrong_binding"]},
+            "replacement": {"type": "object"},
+            "note": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "source.binding.correct": {
+        "type": "object",
+        "required": ["binding_id", "correction_action", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "binding_id": {"type": "string", "minLength": 1},
+            "correction_action": {"type": "string",
+                "enum": ["remove_wrong_binding",
+                         "replace_wrong_binding"]},
+            "replacement": {"type": "object"},
+            "note": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "plan.memory.correct": {
+        "type": "object",
+        "required": ["link_id", "correction_action", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "link_id": {"type": "string", "minLength": 1},
+            "correction_action": {"type": "string",
+                "enum": ["remove_wrong_binding",
+                         "replace_wrong_binding"]},
+            "replacement": {"type": "object"},
+            "note": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.our_words.source.correct": {
+        "type": "object",
+        "required": ["word_id", "expected_source_ref",
+                     "correction_action", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "word_id": {"type": "string", "minLength": 1},
+            "expected_source_ref": {"anyOf": [{"type": "string"},
+                                              {"type": "null"}]},
+            "correction_action": {"type": "string",
+                "enum": ["remove_wrong_binding",
+                         "replace_wrong_binding"]},
+            "replacement": {"type": "object"},
+            "note": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
+    "relations.list": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "resource": {"type": "object"},
+            "memory_id": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "word_id": {"type": "string"},
+            "item_id": {"type": "string"},
+            "revision": {"type": "integer"},
+            "direction": {"type": "string",
+                          "enum": ["in", "out", "both"]},
+            "domains": {"type": "array",
+                        "items": {"type": "string"}},
+            "limit": {"type": "integer"},
+            "offset": {"type": "integer"}},
+    },
+    "relations.trace": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "resource": {"type": "object"},
+            "memory_id": {"type": "string"},
+            "max_depth": {"type": "integer"}},
+    },
+    "relations.corrections.list": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "endpoint": {"type": "string"},
+            "instance_id": {"type": "string"},
+            "domain": {"type": "string"},
+            "limit": {"type": "integer"},
+            "offset": {"type": "integer"}},
+    },
     "media.upload.prepare": {
         "type": "object", "required": ["mime", "size"],
         "additionalProperties": False,
