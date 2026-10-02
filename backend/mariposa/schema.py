@@ -1390,13 +1390,27 @@ def migrate_runtime() -> None:
     # 只拒"已存在但结构不可识别"的库，缺失/空文件仍会在
     # ALLOW_DB_CREATE=false 下静默新建完整运行库（路径误配时
     # session/operation 状态被重置）
-    _fresh = (not config.RECALL_DB.exists()
-              or config.RECALL_DB.stat().st_size == 0)
+    # RA-023（2026-10-02 复审 P2）：身份判定看 recognized runtime
+    # schema，不看文件大小——4096 字节合法空 SQLite（VACUUM）不是
+    # 既有 Mariposa 运行库；无 recall_sessions 的库统一按"新建"受
+    # ALLOW_DB_CREATE 约束
+    _recognized = False
+    if config.RECALL_DB.exists() and config.RECALL_DB.stat().st_size > 0:
+        import sqlite3 as _sq
+        try:
+            _probe = _sq.connect(str(config.RECALL_DB))
+            _recognized = bool(_probe.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+                " name='recall_sessions'").fetchone())
+            _probe.close()
+        except _sq.Error:
+            _recognized = False
+    _fresh = not _recognized
     if _fresh and not config.ALLOW_DB_CREATE:
         raise RuntimeError(
-            "recall 运行库不存在且未显式 MARIPOSA_ALLOW_CREATE=1："
-            "拒绝静默新建（路径误配时会话/operation 状态将被重置）。"
-            "隔离/测试根由 conftest 显式置位。")
+            "recall 运行库不存在（或非 Mariposa 运行库）且未显式"
+            " MARIPOSA_ALLOW_CREATE=1：拒绝静默新建（路径误配时会话/"
+            "operation 状态将被重置）。隔离/测试根由 conftest 显式置位。")
     with db.recall_runtime() as conn:
         if not config.ALLOW_DB_CREATE and not conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table'"
