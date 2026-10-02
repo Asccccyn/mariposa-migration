@@ -426,6 +426,11 @@ def _run_round_compute(session: dict, plan: dict,
     # 凭空消失），错误 unjudged_count=0 进入 receipt 给 Round2 背书
     _judge_pool_total = len(event_fused) + len(words_hits) + len(raw_pre)
     unjudged = max(0, _judge_pool_total - len(judge_candidates))
+    # CB-013：截断浏览窗口外的 words 不能凭空从 unjudged 消失——
+    # has_more 时窗口外至少还有 1 条未送判（真实数量未知，保守计 1
+    # 即足以让 unjudged_count>0，完整 R1 门禁不得为截断窗口背书）
+    if coverage.get("words_lexical") == "partial_topk_window":
+        unjudged += 1
 
     # 候选合流：event RRF 序 + words 独立序（通道间不比较未校准原始分数）
     all_candidates = fusion.dedupe_by_resource(event_fused + words_hits +
@@ -512,8 +517,26 @@ def _run_round_compute(session: dict, plan: dict,
     }
     packet = _enforce_output_budget(packet)
     # S13：judge 统计（Round1 回执依据——attempts 的 completed 不算）
-    judged_n = sum(1 for i in judge_items
-                   if i.evaluation_status == "evaluated")
+    # CB-012（2026-10-02 审计 P1）：judged 必须是"有效判断"——
+    # evaluated、ref 属于送判集、candidate_version 与卡实际版本一致
+    # （双方非空时）。版本错配/重复/陌生 ref 的判断按 unavailable 计：
+    # selection 的硬门会拦旧版本正文，但回执此前仍把它记作 judged，
+    # 完成证明 fail-open 给 Round2 背书。
+    _sent_by_ref = {c.get("candidate_ref") or c["resource_ref"]: c
+                    for c in judge_candidates}
+
+    def _valid_judge_item(i) -> bool:
+        if i.evaluation_status != "evaluated":
+            return False
+        c = _sent_by_ref.get(i.candidate_ref)
+        if c is None:
+            return False
+        jv, cv = i.candidate_version, c.get("content_version")
+        if jv and cv and str(jv) != str(cv):
+            return False
+        return True
+
+    judged_n = sum(1 for i in judge_items if _valid_judge_item(i))
     # P1-02 复审：unavailable = 送判数 − 判过数——provider 漏返回的
     # 候选在此入账（judged+unavailable 恒等于送判数，缺口不得凭空
     # 消失），receipt/gate 不再被"送 5 回 1"骗过
@@ -589,6 +612,43 @@ def _record_op_in_tx(conn, op_ctx: dict | None, result: dict) -> None:
         store.record_operation_row(
             conn, op_ctx["principal_id"], op_ctx["operation_key"],
             op_ctx["payload_hash"], result)
+
+
+def _query_fp(plan: dict) -> str:
+    """CB-014：packet 落库时的查询计划指纹——重放时与当前 plan 比对，
+    查询已修订（refine）则旧包拒绝重放，不把旧查询候选重标新 revision。"""
+    from ..memory.service import canonical_hash
+    return canonical_hash(plan or {})
+
+
+def _revalidate_session_in_tx(conn, sid: str, expected_revision: int,
+                              action: str) -> None:
+    """CB-009（2026-10-02 审计 P1）：commit-at-end 最终事务内统一重验
+    session 当前状态与 revision。
+
+    计算阶段在写锁外完成——close/并发 refine/expire 可发生在计算合法
+    之后、提交之前；close 不推进 revision，仅靠 revision CAS 挡不住
+    终态复活（refine 把 CANCELLED 拉回 ACTIVE、Round2 把旧 revision
+    的 raw 结果挂上已前进的 session）。提交前在写锁内重读当前行，
+    状态族或 revision 任一失配即整体回滚。
+    """
+    from ..errors import Forbidden as _F
+    row = conn.execute(
+        "SELECT status, current_revision FROM recall_sessions"
+        " WHERE session_id=?", (sid,)).fetchone()
+    if row is None:
+        raise _F("提交时 session 已不存在", code="SESSION_STATE_CHANGED",
+                 session_id=sid)
+    allowed = state_machine.ACTION_PRECONDITIONS.get(action)
+    if allowed is None or row["status"] not in allowed:
+        raise _F(
+            f"提交时 session 状态已变为 {row['status']}（计算期间被"
+            "并发变更）", code="SESSION_STATE_CHANGED", session_id=sid,
+            status=row["status"])
+    if int(row["current_revision"]) != int(expected_revision):
+        raise _F("提交时 session revision 已前进（计算期间被并发变更）",
+                 code="REVISION_CONFLICT", session_id=sid,
+                 expected_revision=expected_revision)
 
 
 #: S16 输出预算（版本化工程参数）
@@ -744,6 +804,7 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                                        op_ctx["payload_hash"])
     packet, effects = _run_round_compute(draft, plan, principal)
     packet["created"] = True
+    packet["query_fingerprint"] = _query_fp(plan)
     sid = draft["session_id"]
     op_key = op_ctx["operation_key"] if op_ctx else None
     with db.recall_runtime() as conn:
@@ -805,11 +866,16 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
         vsession = _virtual(session, expected_revision, burst_no,
                             bursts_used)
         packet, effects = _run_round_compute(vsession, plan, principal)
+        packet["query_fingerprint"] = _query_fp(plan)
         sid = a["session_id"]
         op_key = op_ctx["operation_key"] if op_ctx else None
         with db.recall_runtime() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # CB-009：提交时重验——计算期间被 close/refine 变更
+                # 则整体回滚，不复活终态
+                _revalidate_session_in_tx(conn, sid, expected_revision,
+                                          "refine")
                 if op_ctx:
                     store.record_operation_row(
                         conn, op_ctx["principal_id"], op_ctx["operation_key"],
@@ -855,10 +921,13 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "continuation": None,
         "budget": budget.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
+        "query_fingerprint": _query_fp(plan),
     }
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            _revalidate_session_in_tx(conn, a["session_id"],
+                                      expected_revision, "refine")
             store.advance_revision(conn, a["session_id"], expected_revision,
                                    query_plan=plan,
                                    request_ref=plan.get("request_ref"),
@@ -1290,6 +1359,12 @@ def revalidate_replayed(fn_name: str, saved: dict,
     if not isinstance(saved, dict):
         raise StaleOperation("保存的 operation 响应结构不可识别，拒绝重放",
                              operation=fn_name)
+    # CB-010（2026-10-02 审计 P1）：Raw 通道的旧响应同样受当前开关
+    # 约束——撤回 Raw 访问后，已保存的 round2 包不得继续出站
+    if saved.get("round") == 2 and not config.RECALL_RAW_FALLBACK_ENABLED:
+        raise StaleOperation(
+            "Raw 通道当前已关闭，旧 round2 响应拒绝重放",
+            operation=fn_name)
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
     if not sid:
@@ -1319,6 +1394,16 @@ def revalidate_replayed(fn_name: str, saved: dict,
                 session_id=sid, operation=fn_name)
     if not has_candidates:
         return saved
+    # CB-014（2026-10-02 审计 P1）：旧 operation 的候选属于签发时的
+    # 查询计划——当前 plan 已修订（refine 换词/日期/分类）则旧包拒绝
+    # 重放，不得把旧查询结果重标当前 revision；无指纹的旧格式含候选
+    # 包同样 fail-closed
+    current_plan = store.get_plan(sid)
+    cur_fp = _query_fp(current_plan) if current_plan else None
+    if saved.get("query_fingerprint") != cur_fp:
+        raise StaleOperation(
+            "查询计划已修订或响应缺查询指纹，旧 operation 响应拒绝重放",
+            session_id=sid, operation=fn_name)
     from . import phase_policy
     rejected = store.rejected_resource_refs(sid)
     with db.formal() as conn:
@@ -1333,7 +1418,10 @@ def revalidate_replayed(fn_name: str, saved: dict,
             if not mid:
                 # 闭环复审 P2-6：source_msg 引用按当前库校验（存在
                 # 且 published）后保留——round2 幂等重放不得丢候选
-                if isinstance(ref, str) and ref.startswith("source_msg:"):
+                # CB-014：本 session 已拒绝的资源同样不得经 source_msg
+                # 卡重放（此前该分支在 rejected 检查前直接保留）
+                if (isinstance(ref, str) and ref.startswith("source_msg:")
+                        and ref not in rejected):
                     row = conn.execute(
                         "SELECT published FROM source_messages WHERE"
                         " id=?", (ref[len("source_msg:"):],)).fetchone()
@@ -1548,14 +1636,60 @@ def _round2_lock(sid: str, revision: int, burst: int):
         return lock
 
 
+#: CB-011：raw 深搜租约 TTL——异常退出（进程崩溃/kill）的持有者在
+#: 此窗口后可被抢占；正常路径 finally 立即释放
+_RAW_LEASE_TTL_S = 180
+
+
+def _acquire_raw_lease(sid: str, revision: int, burst: int) -> str | None:
+    """CB-011（2026-10-02 审计 P1）：昂贵调用（raw_deep_search + Jev）
+    前的跨进程互斥。抢到返回 lease_token；已有未过期租约返回 None
+    （另一进程正在算同一 (session, revision, burst) 的 raw 轮）。"""
+    from datetime import datetime, timedelta, timezone as _tz
+    token = uuid.uuid4().hex
+    now = datetime.now(_tz.utc)
+    expired = (now - timedelta(seconds=_RAW_LEASE_TTL_S)).isoformat()
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT created_at FROM recall_raw_leases WHERE"
+                " session_id=? AND revision=? AND burst_no=?",
+                (sid, revision, burst)).fetchone()
+            if row is not None and row["created_at"] > expired:
+                conn.execute("COMMIT")
+                return None
+            conn.execute(
+                "INSERT OR REPLACE INTO recall_raw_leases(session_id,"
+                " revision, burst_no, lease_token, created_at)"
+                " VALUES(?,?,?,?,?)",
+                (sid, revision, burst, token, now.isoformat()))
+            conn.execute("COMMIT")
+            return token
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _release_raw_lease(sid: str, revision: int, burst: int,
+                       token: str) -> None:
+    with db.recall_runtime() as conn:
+        conn.execute(
+            "DELETE FROM recall_raw_leases WHERE session_id=? AND"
+            " revision=? AND burst_no=? AND lease_token=?",
+            (sid, revision, burst, token))
+
+
 def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     """Round 2 raw 深搜（S13）：服务端 plan、六条件门禁、raw 候选过
     同一层 Jev 出站、commit-at-end 单事务提交。
 
-    复审（2026-10-01）并发防护三层：①同 (session, revision, burst)
-    首轮全程持进程锁（单进程内串行，不重复花 Raw/Jev 成本）；②最终
-    事务内复查 has_raw_round（跨进程 fail-closed）；③raw-per-burst
-    partial unique index（最后不变量）。翻页走 continuation CAS，不进锁。
+    并发防护四层（CB-011 补第②′层）：①同 (session, revision, burst)
+    首轮全程持进程锁（单进程内串行）；②′跨进程租约——昂贵调用前
+    在 runtime 库抢占 recall_raw_leases，输家不进入计算（Raw/Jev 每
+    burst 每进程组至多一次），TTL 过期可抢占；③最终事务内复查
+    has_raw_round；④raw-per-burst partial unique index（最后不变量）。
+    翻页走 continuation CAS，不进锁。
     """
     from ..errors import Forbidden as _F
     sid0 = str(a.get("session_id", ""))
@@ -1563,7 +1697,19 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     if not str(a.get("continuation_token") or "").strip():
         with _round2_lock(sid0, session0["current_revision"],
                           session0["current_burst"]):
-            return _round2_body(principal, a, op_ctx)
+            lease = _acquire_raw_lease(
+                sid0, session0["current_revision"],
+                session0["current_burst"])
+            if lease is None:
+                raise _F("另一进程正在执行本 (session, revision, burst)"
+                         " 的 Raw 深搜；昂贵调用不重复执行",
+                         code="RAW_ROUND_IN_PROGRESS",
+                         session_id=sid0)
+            try:
+                return _round2_body(principal, a, op_ctx)
+            finally:
+                _release_raw_lease(sid0, session0["current_revision"],
+                                   session0["current_burst"], lease)
     return _round2_body(principal, a, op_ctx)
 
 
@@ -1588,6 +1734,11 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # token 才是 raw round 的开始，须过完整门禁（no_prior_raw_round
     # 只约束"新开 raw round"，不约束同一轮的翻页）
     cont_token = str(a.get("continuation_token") or "")
+    # CB-010：已签发游标不豁免当前授权——Raw 开关关闭后翻页拒绝，
+    # 不再继续释放原文/执行 Raw 与 Jev 成本
+    if cont_token and not config.RECALL_RAW_FALLBACK_ENABLED:
+        raise _F("Raw 通道当前已关闭（MARIPOSA_RAW_FALLBACK_ENABLED）",
+                 code="RAW_DISABLED")
     with _db.recall_runtime() as conn:
         if cont_token:
             cont = store.read_raw_continuation(
@@ -1650,13 +1801,25 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
                                       {"session_id": sid,
                                        "revision": session[
                                            "current_revision"]})
-        by_ref = {i.candidate_ref: i for i in judge_result.items}
+        # CB-012：Round2 judge 对账——重复 ref/陌生 ref 不是有效判断，
+        # 不得静默去重后照签 evaluated（反例：provider 对一张卡返回
+        # 两个相同 ref 仍 coverage=evaluated 且交付）
+        _r2_sent = {c.get("candidate_ref") or c["resource_ref"]
+                    for c in judge_candidates}
+        by_ref: dict = {}
+        _r2_dropped = 0
+        for i in judge_result.items:
+            if i.candidate_ref in by_ref or i.candidate_ref not in _r2_sent:
+                _r2_dropped += 1
+                continue
+            by_ref[i.candidate_ref] = i
         for c in judge_candidates:
             ji = by_ref.get(c.get("candidate_ref")
                             or c["resource_ref"])
             if ji:
                 c["judge"] = ji.to_dict()
-        coverage["judge"] = judge_result.provider_status
+        coverage["judge"] = ("unavailable" if _r2_dropped
+                             else judge_result.provider_status)
         if judge_result.degraded_reason:
             degraded.append(f"judge_{judge_result.degraded_reason}")
     sel = selection.select(judge_candidates, plan,
@@ -1676,6 +1839,7 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
         "missing": sel["missing"],
         "conflicts": sel["conflicts"],
         "degraded_reasons": sorted(set(degraded)),
+        "query_fingerprint": _query_fp(plan),
         "continuation": None,  # 事务内签发（三轮复审#2：服务端游标）
         # 全量审计 P2-03：首页按"本轮已成功"预览（与 Round1 同口径，
         # 不再少算一轮）；翻页不消耗轮次，用当前快照
@@ -1688,6 +1852,10 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with _db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # CB-009：提交时重验——raw 计算期间被 refine/close 变更则
+            # 整体回滚，不把旧 revision 的结果挂上已前进的 session
+            _revalidate_session_in_tx(conn, sid,
+                                      session["current_revision"], "refine")
             # 游标先行：翻尽清除、未翻尽签发/重签（单活跃），packet 的
             # continuation 在 operation 行落库前定型。自审（2026-10-01）：
             # 翻页签发走 CAS——校验与最终事务之间无锁，并发双花恰一
