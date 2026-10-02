@@ -116,6 +116,16 @@ class TestBootstrapPublicContract:
         assert out.get("unchanged") is True, \
             "loaded_snapshot_id 去重参数必须被公开 schema 接受"
 
+    def test_known_snapshot_id_mapped(self, actors):
+        """RA-007：旧公开参数映射为去重语义（不再被静默忽略）。"""
+        b1 = registry.invoke(actors["jiaming"], "bootstrap.get",
+                             {"profile": "claude_chat"}, None)["data"]
+        out = registry.invoke(actors["jiaming"], "bootstrap.get", {
+            "profile": "claude_chat",
+            "known_snapshot_id": b1["snapshot_id"]}, None)["data"]
+        assert out.get("unchanged") is True, \
+            "known_snapshot_id 必须实现去重（审计反例：返回整新包）"
+
 
 # ---------------------------------------------------------------- CB-046
 

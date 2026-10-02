@@ -1011,9 +1011,20 @@ def _binding_revoke(principal: Principal, a: dict) -> dict:
 
 
 def _bootstrap(principal: Principal, a: dict) -> dict:
+    # RA-007（2026-10-02 复审 P2）：known_snapshot_id 是旧公开参数——
+    # 明确映射为 loaded_snapshot_id（去重语义）；两者同时携带且不一致
+    # 结构化拒绝，不再静默忽略
+    loaded = a.get("loaded_snapshot_id")
+    known = a.get("known_snapshot_id")
+    if known and not loaded:
+        loaded = known
+    if known and loaded and known != loaded:
+        raise Forbidden(
+            "known_snapshot_id 与 loaded_snapshot_id 不一致",
+            code="INVALID_ARGUMENT")
     return bootstrap.get(principal.principal_id, principal.entry_source,
                          str(a.get("profile", "")),
-                         a.get("loaded_snapshot_id"), a.get("cursor"))
+                         loaded, a.get("cursor"))
 
 
 def _bootstrap_next(principal: Principal, a: dict) -> dict:
