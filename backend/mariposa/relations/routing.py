@@ -184,22 +184,66 @@ def list_relations(a: dict) -> dict:
                                   "memory_id": r["memory_id"]},
                         "relation_type": r["relation_type"]})
         elif kind == "source_range":
-            # CB-032：Source 端反查——该区间（按消息序范围精确覆盖，
-            # 不把"同 conversation"当"同一段"）被哪些 memory 绑定
+            # CB-032 + RA-021（2026-10-02 复审 P2）：Source 端反查消费
+            # 完整端点身份——conversation 必须一致，消息区间按
+            # validate_range 解析两端，同消息时按字符区间重叠匹配
+            #（此前只拿 start_message_id，丢 conversation/end/offset）
             if "source_binding" in domains and _wants(direction, "in"):
                 from ..source import binding as src_binding
                 anchor = a.get("resource", {}) if isinstance(
                     a.get("resource"), dict) else {}
-                msg_id = (anchor.get("start_message_id")
-                          or anchor.get("end_message_id") or ident)
-                for b in src_binding.memories_referencing(str(msg_id)):
-                    out.append({
-                        "domain": "source_binding",
-                        "relation_id": b["binding_id"],
-                        "direction": "in",
-                        "other": {"type": "memory",
-                                  "memory_id": b["memory_id"]},
-                        "confidence": b.get("bind_confidence")})
+                conv_id = str(anchor.get("conversation_id", ident))
+                s_mid = str(anchor.get("start_message_id", ""))
+                e_mid = str(anchor.get("end_message_id", s_mid))
+                s_off = anchor.get("start_char_offset")
+                e_off = anchor.get("end_char_offset")
+                rows = conn.execute(
+                    "SELECT b.*, cs.sequence AS cseq, ce.sequence AS eseq"
+                    " FROM memory_source_bindings b"
+                    " JOIN source_conversations c ON"
+                    " c.id=b.conversation_id OR"
+                    " c.provider_conversation_id=b.conversation_id"
+                    " JOIN source_messages cs ON cs.id=b.start_message_id"
+                    " JOIN source_messages ce ON ce.id=b.end_message_id"
+                    " WHERE c.id=? OR c.provider_conversation_id=?",
+                    (conv_id, conv_id)).fetchall()
+                def _ov(a0, a1, b0, b1):
+                    return (a0 is None or b1 is None or a0 <= b1) and \
+                           (b0 is None or a1 is None or b0 <= a1)
+                for r in rows:
+                    if not (r["cseq"] is not None and r["eseq"] is not None):
+                        continue
+                    # 消息区间重叠（同消息时叠加字符半开区间重叠）
+                    msg_overlap = True
+                    if s_mid and e_mid:
+                        srow = conn.execute(
+                            "SELECT sequence FROM source_messages WHERE"
+                            " id=? OR provider_message_id=?",
+                            (s_mid, s_mid)).fetchone()
+                        erow = conn.execute(
+                            "SELECT sequence FROM source_messages WHERE"
+                            " id=? OR provider_message_id=?",
+                            (e_mid, e_mid)).fetchone()
+                        if srow is None or erow is None:
+                            continue
+                        msg_overlap = (srow["sequence"] <= r["eseq"]
+                                       and r["cseq"] <= erow["sequence"])
+                        same_msg = (srow["sequence"] == erow["sequence"]
+                                    == r["cseq"] == r["eseq"])
+                        if msg_overlap and same_msg and (
+                                s_off is not None or e_off is not None):
+                            msg_overlap = _ov(
+                                s_off, e_off,
+                                r["start_char_offset"],
+                                r["end_char_offset"])
+                    if msg_overlap:
+                        out.append({
+                            "domain": "source_binding",
+                            "relation_id": r["binding_id"],
+                            "direction": "in",
+                            "other": {"type": "memory",
+                                      "memory_id": r["memory_id"]},
+                            "confidence": r["bind_confidence"]})
         elif kind == "source_ref":
             # CB-032：source_msg:<id> 反查——引用该消息的 words（native
             # 表）与覆盖该消息的绑定区间（按序范围）
