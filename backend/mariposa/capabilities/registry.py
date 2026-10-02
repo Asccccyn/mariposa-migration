@@ -571,6 +571,7 @@ def _hold(principal: Principal, a: dict) -> dict:
         raw_pending=bool(a.get("raw_pending", True)),
         original_title=a.get("original_title"),
         categories=a.get("categories"),
+        plan_ids=a.get("plan_ids"),
         mood=a.get("mood"),
         our_words=a.get("our_words"),
         creation_mode=a.get("creation_mode"),
@@ -1291,10 +1292,10 @@ def _media_prepare(principal: Principal, a: dict) -> dict:
 
 
 def _media_finalize(principal: Principal, a: dict) -> dict:
-    import base64
-    data = base64.b64decode(str(a.get("data_b64", "")))
+    # P1-07：finalize 只收 token；字节已在 stage 端点落盘暂存，
+    # data_b64 被 schema（additionalProperties=False）结构性拒绝
     return media.upload_finalize(principal.principal_id,
-                                 str(a.get("upload_token", "")), data)
+                                 str(a.get("upload_token", "")))
 
 
 def _media_list(principal: Principal, a: dict) -> dict:

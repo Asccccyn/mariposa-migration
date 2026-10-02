@@ -106,6 +106,18 @@ def _matches(spec: dict, value, root: dict) -> bool:
 
 #: v2 能力输入 schema（spec_v2 §12；与包内 v1.1 契约分层，schema_for 优先取此层）
 V2_INPUT_SCHEMAS: dict[str, dict] = {
+    "media.upload.prepare": {
+        "type": "object", "required": ["mime", "size"],
+        "additionalProperties": False,
+        "properties": {"mime": {"type": "string", "minLength": 1},
+                       "size": {"type": "integer"}},
+    },
+    "media.upload.finalize": {
+        "type": "object", "required": ["upload_token"],
+        "additionalProperties": False,
+        "properties": {"upload_token": {"type": "string",
+                                         "minLength": 1}},
+    },
     "memory.hold": {
         "type": "object",
         "required": ["text"],
@@ -124,6 +136,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "categories": {"type": "array", "items": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan", "sex",
                 "anniversary", "reloplay"]}},
+            "plan_ids": {"type": "array",
+                         "items": {"type": "string", "minLength": 1}},
             "mood": {"type": "object", "additionalProperties": False,
                       "properties": {"text": {"type": "string"},
                                      "tags": {"type": "array",

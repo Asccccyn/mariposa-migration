@@ -168,10 +168,14 @@ class TestMedia:
     def test_upload_dedupe_and_get(self, actors):
         png = b"\x89PNG\r\n\x1a\n" + b"A" * 100
         prep = media.upload_prepare("qiaosheng", "image/png", len(png))
-        out = media.upload_finalize("qiaosheng", prep["upload_token"], png)
+        assert media.stage_bytes("qiaosheng", prep["upload_token"],
+                                  png)["staged"]
+        out = media.upload_finalize("qiaosheng", prep["upload_token"])
         assert out["deduplicated"] is False
         prep2 = media.upload_prepare("jiaming", "image/png", len(png))
-        out2 = media.upload_finalize("jiaming", prep2["upload_token"], png)
+        assert media.stage_bytes("jiaming", prep2["upload_token"],
+                                  png)["staged"]
+        out2 = media.upload_finalize("jiaming", prep2["upload_token"])
         assert out2["deduplicated"] is True
         assert out["content_hash"] == out2["content_hash"]
         meta, path = media.get_media("qiaosheng", out["content_hash"])
@@ -187,7 +191,7 @@ class TestMedia:
     def test_size_mismatch_rejected(self, actors):
         prep = media.upload_prepare("qiaosheng", "image/png", 100)
         with pytest.raises(Forbidden):
-            media.upload_finalize("qiaosheng", prep["upload_token"], b"short")
+            media.stage_bytes("qiaosheng", prep["upload_token"], b"short")
 
 
 class TestMoments:
