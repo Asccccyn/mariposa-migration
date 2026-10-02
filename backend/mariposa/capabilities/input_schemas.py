@@ -197,6 +197,28 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "note": {"type": "string"},
             "operation_id": {"type": "string", "minLength": 1}},
     },
+    "bootstrap.get": {
+        # CB-045：与现行 handler/service 对齐——loaded_snapshot_id 是
+        # 去重快照参数（v1 pack schema 缺此字段致公开路径被拒）
+        "type": "object", "required": ["profile"],
+        "additionalProperties": False,
+        "properties": {"profile": {"type": "string",
+                                   "enum": ["claude_chat", "cc"]},
+                       "known_snapshot_id": {"type": "string"},
+                       "loaded_snapshot_id": {"type": "string"},
+                       "cursor": {"type": "object"}},
+    },
+    "bootstrap.next": {
+        # CB-045：cursor 是服务端返回的 object 复合游标（v1 pack 要
+        # 求 string 致续页 SCHEMA_VIOLATION）；section 枚举为现行
+        # v2 开窗段（raw 已退役，不再作为默认值）
+        "type": "object", "required": ["snapshot_id", "cursor", "section"],
+        "additionalProperties": False,
+        "properties": {"snapshot_id": {"type": "string", "minLength": 1},
+                       "cursor": {"type": "object"},
+                       "section": {"type": "string",
+                                   "enum": ["memory_days", "plans"]}},
+    },
     "memory.our_words.source.correct": {
         "type": "object",
         "required": ["word_id", "correction_action", "operation_id",

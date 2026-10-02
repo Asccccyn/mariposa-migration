@@ -29,18 +29,34 @@ def _rep(conn, memory_id: str) -> dict:
 
 
 def list_memories(state: str | None = None, limit: int = 50,
-                  cursor_date: str | None = None) -> dict:
-    """倒序列表；正文按当前表示（遗忘桶只给摘要）。"""
-    q = ("SELECT memory_id FROM memories WHERE visibility='active'"
+                  cursor_date: str | None = None,
+                  cursor_id: str | None = None) -> dict:
+    """倒序列表；正文按当前表示（遗忘桶只给摘要）。
+
+    CB-049（2026-10-02 审计 P2）：(memory_date, memory_id) 复合
+    keyset——同日多桶可完整续页（此前纯日期排他过滤，同日超出页大小
+    的剩余桶从该游标永久不可达）。无日期桶不在此列表（口径显式，
+    走 by_tag/检索）。
+    """
+    q = ("SELECT memory_id, memory_date FROM memories WHERE"
+         " visibility='active'"
          + (" AND compression_state=? " if state else " ")
-         + "AND memory_date IS NOT NULL AND (? IS NULL OR memory_date < ?)"
-           " ORDER BY memory_date DESC LIMIT ?")
+         + "AND memory_date IS NOT NULL AND (? IS NULL OR"
+           " (memory_date < ? OR (memory_date = ? AND memory_id < ?)))"
+           " ORDER BY memory_date DESC, memory_id DESC LIMIT ?")
     with db.formal() as conn:
         rows = conn.execute(q, tuple(
             ([state] if state else []) +
-            [cursor_date, cursor_date, limit])).fetchall()
+            [cursor_date, cursor_date, cursor_date, cursor_id, limit])
+        ).fetchall()
         items = [memory.get(conn, r["memory_id"]) for r in rows]
-    return {"items": items, "count": len(items)}
+    next_cursor = None
+    if len(rows) >= limit and rows:
+        last = rows[-1]
+        next_cursor = {"memory_date": last["memory_date"],
+                       "memory_id": last["memory_id"]}
+    return {"items": items, "count": len(items),
+            "next_cursor": next_cursor}
 
 
 def by_date(date_str: str) -> dict:
