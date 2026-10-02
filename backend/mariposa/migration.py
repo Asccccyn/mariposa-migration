@@ -58,8 +58,10 @@ def snapshot(source: str, dest: str | None = None) -> dict:
 
 # 旧 frontmatter 键 -> 迁移目标/字段 白名单（§20.2 数据清单）
 _TYPE_TARGET = {"dynamic": "memories", "feel": "memories", "permanent": "memories",
-                "plan": "plans", "letter": "letters", "i": "self_entries",
+                "plan": "plans", "i": "self_entries",
                 "self": "self_entries", "diary": "diary_entries"}
+# 2026-10-01：信件拆出 mariposa（独立项目另行开发）；letter 桶不迁移，
+# 落 UNMAPPED（正文/哈希均不进报告），由信件项目自行处理旧数据。
 _KNOWN_KEYS = {"type", "date", "created", "importance", "pinned", "protected",
                "why_remembered", "meaning", "tags", "domains", "valence",
                "arousal", "author", "lock_type", "unlock_date", "locked_by",
@@ -77,7 +79,7 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
     fdir = Path(fixtures)
     files = _iter_bucket_files(fdir)
     stats: dict = {"total": 0, "by_target": {}, "no_date": 0, "bad_frontmatter": 0,
-                   "unknown_type": 0, "locked_letters": 0, "deletion_terminal": 0,
+                   "unknown_type": 0, "deletion_terminal": 0,
                    "pinned": 0, "with_meaning": 0, "with_relations": 0,
                    "archived_buckets": 0}
     entries, unknown_keys = [], {}
@@ -146,13 +148,6 @@ def dry_run_real(fixtures: str, out: str | None = None) -> dict:
                 str(meta.get("digested", "")).lower() in ("true", "1")):
             entry["needs_migration_review"] = True
             stats["needs_migration_review"] = stats.get("needs_migration_review", 0) + 1
-        if target == "letters":
-            lock = {"lock_type": str(meta.get("lock_type", "none")),
-                    "unlock_date": meta.get("unlock_date"),
-                    "locked_by": meta.get("locked_by")}
-            entry["letter_lock"] = lock
-            if lock["lock_type"] in ("timed", "locked"):
-                stats["locked_letters"] += 1
         for k in meta:
             if k not in _KNOWN_KEYS:
                 unknown_keys[k] = unknown_keys.get(k, 0) + 1
@@ -172,31 +167,19 @@ def inventory(source: str | None, out: str | None = None) -> dict:
         return {"ok": False, "error": f"source not found: {src}"}
     files = _iter_bucket_files(src)
     by_dir: dict[str, dict] = {}
-    letters_locked = 0
     for f in files:
         rel = str(f.parent.relative_to(src))
         stat = f.stat().st_size
         d = by_dir.setdefault(rel, {"files": 0, "bytes": 0})
         d["files"] += 1
         d["bytes"] += stat
-        # 只读头部元数据行判断锁（不读正文；锁信正文不进任何输出）
-        try:
-            # 只读 frontmatter（第二个 --- 之前），不触及正文（§14.3）
-            raw_head = f.read_text(encoding="utf-8", errors="replace")
-            end = raw_head.find("\n---", 3)
-            head = raw_head[:end] if end > 0 else raw_head[:512]
-            if "lock_type: timed" in head or "lock_type: locked" in head:
-                letters_locked += 1
-        except OSError:
-            pass
     report = {
         "ok": True,
         "source": str(src),
         "total_files": len(files),
         "total_bytes": sum(d["bytes"] for d in by_dir.values()),
         "by_directory": by_dir,
-        "locked_letters_detected": letters_locked,
-        "note": "仅元数据统计；正文与锁信内容未读取、未输出",
+        "note": "仅元数据统计；正文内容未读取、未输出",
         "real_snapshot_authorized": False,
     }
     _emit(report, out)
@@ -249,9 +232,20 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         name = f.name
         legacy_id = name
         is_letter = (meta.get("type") == "letter") or "letter" in str(meta.get("bucket_type", ""))
+        payload_hash = hashlib.sha256(
+            body.strip().encode("utf-8")).hexdigest()
+        if is_letter:
+            # 信件已出 mariposa 范围：仅登记存在性与哈希，正文不进报告
+            entries.append({
+                "legacy_id": legacy_id,
+                "target": "out_of_scope",
+                "payload_hash": payload_hash,
+                "content_bytes": len(body.encode("utf-8")),
+            })
+            continue
         plan = {
             "legacy_id": legacy_id,
-            "target": "letters" if is_letter else "memories",
+            "target": "memories",
             "mapping": {
                 "memory_date": meta.get("date") or name[:10],
                 "hold_text": body.strip(),
@@ -259,18 +253,10 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
                 "importance": meta.get("importance"),
                 "pinned": str(meta.get("pinned", "")).lower() in ("true", "1"),
                 "meaning_layers": meta.get("meaning") if isinstance(meta.get("meaning"), list) else [],
-                "letter_lock": {
-                    "lock_type": meta.get("lock_type", "none"),
-                    "unlock_date": meta.get("unlock_date"),
-                } if is_letter else None,
             },
-            "payload_hash": hashlib.sha256(
-                body.strip().encode("utf-8")).hexdigest(),
+            "payload_hash": payload_hash,
             "content_bytes": len(body.encode("utf-8")),
         }
-        # 锁信正文不进报告
-        if is_letter:
-            plan["mapping"]["hold_text"] = f"<restricted:{plan['payload_hash'][:16]}>"
         entries.append(plan)
 
     report = {
@@ -280,7 +266,7 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         "entries": entries,
         "counts": {"total": len(entries),
                    "to_memories": sum(1 for e in entries if e["target"] == "memories"),
-                   "to_letters": sum(1 for e in entries if e["target"] == "letters")},
+                   "out_of_scope": sum(1 for e in entries if e["target"] == "out_of_scope")},
         "apply": "blocked: 真实快照未获准；apply 命令在获准后另跑",
         "policy_version": config.POLICY_VERSION,
     }
@@ -311,8 +297,8 @@ def verify(report_path: str) -> dict:
                 if not m.get(field):
                     problems.append({"legacy_id": e["legacy_id"],
                                      "issue": f"missing:{field}"})
-        if e["target"] == "letters" and not str(e["mapping"]["hold_text"]).startswith("<restricted"):
-            problems.append({"legacy_id": e["legacy_id"], "issue": "letter_body_leaked"})
+        if e["target"] == "out_of_scope" and "hold_text" in e.get("mapping", {}):
+            problems.append({"legacy_id": e["legacy_id"], "issue": "out_of_scope_body_present"})
     result = {"ok": not problems, "checked": len(report.get("entries", [])),
               "problems": problems}
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -372,7 +358,6 @@ def apply_from_report(report_path: str) -> dict:
     from . import db as _db
     from .identity import service as identity
     from .memory import service as memory
-    from .letters import service as letters
     _migrator = identity.Principal("system", "迁移执行器", "system", "migration",
                                    "binding_migration")
     p = Path(report_path)
@@ -447,30 +432,16 @@ def apply_from_report(report_path: str) -> dict:
             applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
                             "target": "memories"})
         else:
-            lock = e["mapping"]["letter_lock"] or {}
-            out = letters.write_letter(
-                _migrator, body.strip(),
-                letter_date=e["mapping"]["memory_date"],
-                lock_type=lock.get("lock_type", "none") or "none",
-                unlock_date=lock.get("unlock_date"))
-            with _db.formal() as conn:
-                conn.execute(
-                    "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
-                    " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
-                    (e["legacy_id"], "letters", out["letter_id"], recomputed,
-                     _dt.utcnow().isoformat()))
-            applied.append({"legacy_id": e["legacy_id"], "new_id": out["letter_id"],
-                            "target": "letters"})
-    # 逐项核对：新库可读、锁参数保留、pinned 保留
+            # out_of_scope（信件等已拆出 mariposa 的资源）：跳过不落地
+            skipped_existing.append({"legacy_id": e["legacy_id"],
+                                     "reason": "out_of_scope"})
+            continue
+    # 逐项核对：新库可读、pinned 保留
     verified = 0
     for a in applied:
         with _db.formal() as conn:
-            if a["target"] == "memories":
-                row = conn.execute("SELECT pinned FROM memories WHERE memory_id=?",
-                                   (a["new_id"],)).fetchone()
-            else:
-                row = conn.execute("SELECT lock_type FROM letters WHERE id=?",
-                                   (a["new_id"],)).fetchone()
+            row = conn.execute("SELECT pinned FROM memories WHERE memory_id=?",
+                               (a["new_id"],)).fetchone()
         if row is not None:
             verified += 1
     result = {"ok": not problems, "applied": len(applied),

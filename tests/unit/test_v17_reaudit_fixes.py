@@ -16,7 +16,7 @@ import pytest
 from mariposa import db
 from mariposa.errors import AlreadyDecided, Forbidden, NotFound
 from mariposa.identity import service as identity
-from mariposa.letters import service as letters
+from mariposa.deletion import service as deletion
 from mariposa.memory import extras as memory_extras
 from mariposa.memory import service as memory
 from mariposa.raw import binding as raw_binding
@@ -113,9 +113,9 @@ class TestN11MemoryTagsDeletion:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-        req = letters.deletion_submit(
+        req = deletion.deletion_submit(
             actors["qiaosheng"].principal_id, mid, "N11 测试")
-        res = letters.deletion_decide(actors["jiaming"].principal_id,
+        res = deletion.deletion_decide(actors["jiaming"].principal_id,
                                       req["request_id"], "approve")
         assert res["status"] == "approved"
         with db.formal() as conn:
@@ -136,7 +136,7 @@ class TestN12SupersededConcurrentLoser:
         掩盖。直接驱动 CAS 输家分支。"""
         out = hold_v2(actors["jiaming"], "superseded CAS 场景正文")
         mid = out["memory_id"]
-        req = letters.deletion_submit(
+        req = deletion.deletion_submit(
             actors["qiaosheng"].principal_id, mid, "N12 测试")
         # 目标转不活跃（归档可见性），使 decide 走 superseded 分支
         with db.formal() as conn:
@@ -150,7 +150,7 @@ class TestN12SupersededConcurrentLoser:
                 " WHERE id=?", (req["request_id"],))
         # 入口预检查（status != pending）会先挡下；绕过预检查直驱
         # superseded CAS：手工构造 row dict（decide 前置读取的结果）
-        from mariposa.letters import service as ls
+        from mariposa.deletion import service as ls
         with db.formal() as conn:
             row = conn.execute(
                 "SELECT * FROM deletion_requests WHERE id=?",

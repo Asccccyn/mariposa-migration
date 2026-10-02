@@ -1,8 +1,8 @@
 {
- "generated_at": "2026-09-22T06:46:29.419360+00:00",
+ "generated_at": "2026-10-02T04:24:58.836409+00:00",
  "source": "docs/execution_pack_v1.1/contracts/acceptance_cases.json（118 条原件）",
  "summary": {
-  "PASS": 106,
+  "PASS": 105,
   "BLOCKED": 12,
   "NOT_IMPLEMENTED": 0,
   "unmapped": 0,
@@ -789,8 +789,8 @@
    "phase": 5,
    "title": "本地行为而非上游猜测",
    "status": "PASS",
-   "evidence": "docs/legacy_behavior_matrix.md + 16 项特征测试",
-   "note": "每条指向现场源码证据"
+   "evidence": "docs/legacy_behavior_matrix.md + test_deletion.py 特征测试",
+   "note": "每条指向现场源码证据（letters 部分随拆分移除）"
   },
   {
    "id": "T-LEG-02",
@@ -798,8 +798,8 @@
    "phase": 5,
    "title": "锁信不提前读取",
    "status": "PASS",
-   "evidence": "inventory frontmatter-only 测试 + 迁移报告无正文断言",
-   "note": "锁信正文零输出"
+   "evidence": "inventory 元数据测试 + dry-run out_of_scope 无正文断言",
+   "note": "迁移报告正文零输出"
   },
   {
    "id": "T-LEG-03",
@@ -815,9 +815,9 @@
    "priority": "P0",
    "phase": 5,
    "title": "迁移保留锁所有者",
-   "status": "PASS",
-   "evidence": "letters 锁参数保留测试 + 迁移 dry-run-real 锁元数据",
-   "note": "锁规则/日期/所有者一致"
+   "status": "REMOVED",
+   "evidence": "letters 模块 2026-10-01 拆出 mariposa（独立项目另行开发）",
+   "note": "锁语义随信件项目走，不再属本仓验收范围"
   },
   {
    "id": "T-MIG-01",
