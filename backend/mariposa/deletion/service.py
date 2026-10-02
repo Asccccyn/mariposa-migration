@@ -164,6 +164,7 @@ def deletion_request(principal_id: str, memory_id: str, reason: str,
                 (rid, memory_id, reason, principal_id, local_date, _iso()))
             if operation_key:
                 # 同事务存完成回执：同 key 重放返回本申请，不重复计数
+                # （CB-008：op: 前缀与 transport 幂等键空间隔离）
                 import json as _json
                 import hashlib as _hl
                 ph = _hl.sha256(_json.dumps(
@@ -173,7 +174,8 @@ def deletion_request(principal_id: str, memory_id: str, reason: str,
                     "INSERT INTO idempotency_records(principal_id,"
                     " capability, idempotency_key, payload_hash, status,"
                     " result_ref, created_at) VALUES(?,?,?,?,?,?,?)",
-                    (principal_id, "memory.deletion.request", operation_key,
+                    (principal_id, "memory.deletion.request",
+                     f"op:{operation_key}",
                      ph, "completed",
                      _json.dumps({"memory_id": memory_id,
                                   "request_id": rid},
@@ -334,13 +336,18 @@ def deletion_submit(principal_id: str, resource_id: str, reason: str,
 
 def _replay_check(principal_id: str, capability: str,
                   operation_key: str, memory_id: str) -> dict | None:
-    """同 key 重放返回原申请（不重复计数，§7.2）。"""
+    """同 key 重放返回原申请（不重复计数，§7.2）。
+
+    CB-008：记录键与 atomic_write 一致带 `op:` 前缀——领域 operation
+    键与 transport 幂等键（registry 裸键）此前共用
+    (principal, capability, key) 空间，同字符串双键会互相占坑。
+    """
     import json as _json
     with db.formal() as conn:
         row = conn.execute(
             "SELECT result_ref FROM idempotency_records"
             " WHERE principal_id=? AND capability=? AND idempotency_key=?",
-            (principal_id, capability, operation_key)).fetchone()
+            (principal_id, capability, f"op:{operation_key}")).fetchone()
     if row is None:
         return None
     try:

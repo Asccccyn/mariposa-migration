@@ -141,6 +141,15 @@ def correct(principal_id: str, binding_id: str,
                                  "replace_wrong_binding"):
         raise Forbidden("correction_action must be remove_wrong_binding/"
                         "replace_wrong_binding")
+    # CB-006（2026-10-02 审计 P1）：replace 必带 replacement、remove 禁带
+    if correction_action == "remove_wrong_binding" and replacement:
+        raise Forbidden("remove_wrong_binding 不接受 replacement（移除"
+                        "语义；改绑请用 replace_wrong_binding）",
+                        code="INVALID_ARGUMENT")
+    if correction_action == "replace_wrong_binding" and not replacement:
+        raise Forbidden("replace_wrong_binding 必须携带完整 replacement"
+                        "——缺新绑定的替换即撤销", code="INVALID_ARGUMENT")
+
     def _do(conn):
         row = conn.execute(
             "SELECT * FROM memory_source_bindings WHERE binding_id=?",
@@ -148,6 +157,11 @@ def correct(principal_id: str, binding_id: str,
         if row is None:
             raise NotFound("source binding not found",
                            binding_id=binding_id)
+        # CB-006：先删旧实例再建新实例——bind 命中同键旧绑定时复用再
+        # 删除会把替换变成撤销，回执指向不存在的 replacement
+        conn.execute(
+            "DELETE FROM memory_source_bindings WHERE binding_id=?",
+            (binding_id,))
         replacement_id = None
         if replacement:
             rep = bind(principal_id,
@@ -177,9 +191,6 @@ def correct(principal_id: str, binding_id: str,
             original_created_at=row["created_at"],
             corrected_by=principal_id, note=note,
             replacement_instance_id=replacement_id)
-        conn.execute(
-            "DELETE FROM memory_source_bindings WHERE binding_id=?",
-            (binding_id,))
         audit.record(conn, "source.binding.corrected", principal_id,
                      resource_id=binding_id,
                      payload={"correction_id": cid})
