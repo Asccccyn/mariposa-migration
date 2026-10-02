@@ -10,7 +10,7 @@ def rebuild_index(actor: str = "system") -> dict:
     """按当前版本重建全部有效投影与 FTS。
 
     不变式：forgotten 桶只从 compressed_summary 生成投影；
-    hidden/archived 无投影。重建后旧正文词不可搜（有测试钉住）。
+    hidden 无投影。重建后旧正文词不可搜（有测试钉住）。
     审计 F04：full 投影经 memory.rebuild_full_projection 统一构造
     （event_text 优先，v1 旧数据回退 hold_text）——v2 正文不再在
     全库重建时从检索消失。
