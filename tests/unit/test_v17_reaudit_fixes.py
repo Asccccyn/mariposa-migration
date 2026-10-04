@@ -311,9 +311,15 @@ class TestReplayGuardN03N04:
         assert rej["candidates"] == [], "N03：已拒绝资源经重放返回"
 
     def test_guard_refreshes_packet_header(self, actors):
-        """refine 后旧 start 包重放：revision/budget 用当前值（N03）。"""
+        """refine 后旧 start 包重放（N03 + CB-014 现行语义）：
+        - 计划已修订（original_request 变化 → 指纹不同）：旧包拒绝
+           重放（StaleOperation），不得把旧查询结果重标当前 revision；
+        - 同计划 refine（指纹不变）：旧包合法重放，revision/budget
+           以当前 session 现值刷新。（审计 2026-10-03：旧断言期待
+           跨计划重标新 revision，与 CB-014 冲突，按语义修测。）"""
         from mariposa.capabilities import registry as reg
         from mariposa.memory import service as memory
+        from mariposa.errors import StaleOperation
         memory.hold(actors["jiaming"], text="头部刷新场景正文搬家",
                     memory_date="2026-09-22", date_confidence="exact",
                     original_title="头部刷新",
@@ -325,9 +331,11 @@ class TestReplayGuardN03N04:
                                         "lexical_terms": ["搬家"]},
                          "operation_id": "op-hdr-1"}, None)
         sid = r1["data"]["data"]["recall_session_id"]
+        # 同计划 refine：指纹不变 → revision 前进后旧包仍可合法重放，
+        # 且头部以当前 session 现值刷新（N03 原意）
         reg.invoke(actors["jiaming"], "memory.recall.refine",
                    {"session_id": sid,
-                    "query_plan": {"original_request": "再查搬家",
+                    "query_plan": {"original_request": "查搬家",
                                    "channels": ["event"],
                                    "lexical_terms": ["搬家"]},
                     "operation_id": "op-hdr-2"}, None)
@@ -341,6 +349,20 @@ class TestReplayGuardN03N04:
         assert replayed["revision"] == 2, \
             f"N03：重放包仍宣称旧 revision：{replayed['revision']}"
         assert replayed["budget"]["rounds_used"] == 2
+        # 计划修订（original_request 变化 → 指纹不同）：旧包拒绝重放
+        # （StaleOperation），不得把旧查询结果重标当前 revision
+        reg.invoke(actors["jiaming"], "memory.recall.refine",
+                   {"session_id": sid,
+                    "query_plan": {"original_request": "再查搬家",
+                                   "channels": ["event"],
+                                   "lexical_terms": ["搬家"]},
+                    "operation_id": "op-hdr-4"}, None)
+        with pytest.raises(StaleOperation):
+            reg.invoke(actors["jiaming"], "memory.recall.start",
+                       {"query_plan": {"original_request": "查搬家",
+                                       "channels": ["event"],
+                                       "lexical_terms": ["搬家"]},
+                        "operation_id": "op-hdr-1"}, None)
 
     def test_guard_rejects_when_runtime_disabled(self, actors, monkeypatch):
         """Recall 禁用后：fresh 拒绝，同 key 重放同样拒绝（N03）。"""

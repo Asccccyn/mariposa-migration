@@ -111,13 +111,19 @@ class TestWordSourceCorrectViaRegistry:
             word_id = conn.execute(
                 "SELECT word_id FROM memory_our_words WHERE memory_id=?",
                 (out["memory_id"],)).fetchone()["word_id"]
-        with pytest.raises(Forbidden):
+        # 审计 2026-10-03：此前缺 expected_source_version，请求先被
+        # SCHEMA_VIOLATION 拦截、根本没走到 prefix guard——补全有效
+        # 前置并断言专门错误信息（去掉 guard 时本用例必须真红）
+        with pytest.raises(Forbidden) as ei:
             registry.invoke(
                 actors["jiaming"], "memory.our_words.source.correct",
                 {"word_id": word_id, "expected_source_ref": None,
+                 "expected_source_version": 0,
                  "correction_action": "replace_wrong_binding",
                  "replacement": {"source_ref": "raw_msg:legacy"},
                  "operation_id": "ws-legacy"}, None)
+        assert "raw" in str(ei.value) or "现行" in str(ei.value), \
+            f"必须是退役前缀守卫拒绝，而非其他前置错误：{ei.value}"
 
     def test_public_path_cas_guard(self, actors):
         msg_id = _seed_source_msg()
@@ -221,6 +227,16 @@ class TestCrossDomainConcurrency:
                 None)
 
         out = self._barrier_pair(do_correct, do_delete)
+        # 审计 2026-10-03：并发结果必须被断言——两条线程都要有结构化
+        # 终态（ok 或结构化业务拒绝），不允许裸异常逃逸
+        for tag, (status, payload) in out.items():
+            assert status in ("ok", "err"), tag
+            if status == "err":
+                assert isinstance(payload, Exception), tag
+                assert not isinstance(payload, (KeyError, TypeError,
+                                                AttributeError)), \
+                    f"{tag} 线程裸异常逃逸：{payload!r}"
+        statuses = {k: v[0] for k, v in out.items()}
         with db.formal() as conn:
             a_alive = bool(conn.execute(
                 "SELECT 1 FROM memories WHERE memory_id=?",
@@ -266,6 +282,21 @@ class TestCrossDomainConcurrency:
 
         out = self._barrier_pair(do_approve, do_direct)
         statuses = [v[0] for v in out.values()]
+        # 审计 2026-10-03：收集了就要断言——删除副作用恰发生一次，
+        # 输家必须是结构化拒绝（桶已删的 NotFound/状态机 Forbidden），
+        # 不允许双方都自称成功
+        with db.formal() as conn:
+            n_del = conn.execute(
+                "SELECT COUNT(*) c FROM audit_events WHERE"
+                " event_type='memory.deleted' AND resource_id=?",
+                (m["memory_id"],)).fetchone()["c"]
+        assert n_del == 1, f"删除副作用必须恰一次：{n_del}"
+        for tag, (status, payload) in out.items():
+            if status == "err":
+                assert isinstance(payload, Exception), tag
+                assert not isinstance(payload, (KeyError, TypeError,
+                                                AttributeError)), \
+                    f"{tag} 线程裸异常逃逸：{payload!r}"
         with db.formal() as conn:
             alive = bool(conn.execute(
                 "SELECT 1 FROM memories WHERE memory_id=?",

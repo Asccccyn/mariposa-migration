@@ -785,6 +785,7 @@ def _with_round_preview(session: dict) -> dict:
     """计算阶段的预算快照视图：把本轮算作已成功（rounds_used+1）。"""
     preview = dict(session)
     preview["rounds_used"] = session["rounds_used"] + 1
+    preview["_round_preview_offset"] = 1
     return preview
 
 
@@ -1027,6 +1028,10 @@ def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # F03：写锁内复查——终态 session 不再接受 reject 写入
+            fresh = store.require_session_in_tx(conn, a["session_id"])
+            state_machine.require_action(fresh, "reject")
+            require_owned_session(principal, fresh, a)
             store.set_candidate_state_tx(
                 conn, a["session_id"], candidate_ref, "rejected",
                 reject_target=target)
@@ -1057,12 +1062,18 @@ def accept(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # F03（2026-10-03 审计 P1）：允许检查在锁外，close 不推进
+            # revision——最终写锁内必须重读行重跑状态机+归属，
+            # 否则本事务会把并发 close 的 CANCELLED 覆盖成 RESOLVED
+            fresh = store.require_session_in_tx(conn, a["session_id"])
+            state_machine.require_action(fresh, "accept")
+            require_owned_session(principal, fresh, a)
             if a.get("candidate_ref"):
                 store.set_candidate_state_tx(
                     conn, a["session_id"], a["candidate_ref"], "accepted")
             if a.get("close"):
                 store.update_status_tx(conn, a["session_id"],
-                                       session["current_revision"],
+                                       fresh["current_revision"],
                                        "RESOLVED")
                 out["status"] = "RESOLVED"
             _record_op_in_tx(conn, op_ctx, out)
@@ -1262,8 +1273,13 @@ def close(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # F03：写锁内复查——两个并发终态动作只留先提交者，
+            # 后到者按当前终态被状态机拒绝（不覆盖）
+            fresh = store.require_session_in_tx(conn, a["session_id"])
+            state_machine.require_action(fresh, "close")
+            require_owned_session(principal, fresh, a)
             store.update_status_tx(conn, a["session_id"],
-                                   session["current_revision"], final)
+                                   fresh["current_revision"], final)
             _record_op_in_tx(conn, op_ctx, out)
             conn.execute("COMMIT")
         except Exception:
@@ -1459,6 +1475,13 @@ def revalidate_replayed(fn_name: str, saved: dict,
         raise StaleOperation(
             "Raw 通道当前已关闭，旧 round2 响应拒绝重放",
             operation=fn_name)
+    # F02（2026-10-03 审计 P1）：words 开关对重放无例外（CURRENT §4）
+    # ——fresh/continuation/operation replay 同权执行当前通道开关；
+    # 专项 find_words 的旧响应整体拒绝，与 fresh 的 Forbidden 同权
+    if saved.get("intent") == "find_words" and not config.RECALL_WORDS_ENABLED:
+        raise StaleOperation(
+            "Words 通道当前已关闭，旧响应拒绝重放",
+            operation=fn_name)
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
     if not sid:
@@ -1504,6 +1527,13 @@ def revalidate_replayed(fn_name: str, saved: dict,
         kept = []
         for c in saved["candidates"]:
             if not isinstance(c, dict):
+                continue
+            # F02：混合通道旧包中的 words 卡同样受当前开关约束，
+            # 关闭即剔除（专项 find_words 已在入口整体拒绝）
+            if (c.get("channel") == "words" or "our_words" in [
+                    _norm_recall_field(f)
+                    for f in (c.get("matched_fields") or [])]) \
+                    and not config.RECALL_WORDS_ENABLED:
                 continue
             ref = c.get("resource_ref") or ""
             mid = c.get("memory_id")

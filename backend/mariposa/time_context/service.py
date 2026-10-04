@@ -29,26 +29,50 @@ def local_date(now: datetime | None = None) -> str:
     return (now or _now()).astimezone(tz).date().isoformat()
 
 
+def _parse_instant(s: str) -> datetime:
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _max_by_instant(values) -> str | None:
+    """F15（2026-10-03 审计 P2）：时间比较按规范化瞬时，不按字符串。
+
+    `20:00+08`（12UTC）字符串大于同日 `15:00Z`（15UTC），SQL MAX /
+    Python max 都会选错；混合 offset 的消息事实必须先归一再比。"""
+    best = None
+    for v in values:
+        if not v:
+            continue
+        try:
+            key = _parse_instant(v)
+        except ValueError:
+            continue
+        if best is None or key > best[0]:
+            best = (key, v)
+    return best[1] if best else None
+
+
 def _latest_activity(conn, kinds: list[str]) -> str | None:
     marks = ",".join("?" * len(kinds))
-    row = conn.execute(
-        f"SELECT MAX(occurred_at) AS m FROM activity_events WHERE kind IN ({marks})",
-        tuple(kinds)).fetchone()
-    return row["m"] if row and row["m"] else None
+    rows = conn.execute(
+        f"SELECT occurred_at FROM activity_events WHERE kind IN ({marks})",
+        tuple(kinds)).fetchall()
+    return _max_by_instant(r["occurred_at"] for r in rows)
 
 
 def _latest_raw_user(conn) -> str | None:
     # D13（2026-10-01）：legacy raw_messages 退役——最近用户消息改查
     # 现行 Source 层（normalized_sender='human'）
-    row = conn.execute(
-        "SELECT MAX(m.created_at) AS m FROM source_messages m"
-        " WHERE m.normalized_sender='human'").fetchone()
-    return row["m"] if row and row["m"] else None
+    # F14（2026-10-03 审计 P2）：只认已发布消息——导入校验中/失败
+    # 清场前的未发布行不得产生"用户刚联系过"的假时间事实
+    rows = conn.execute(
+        "SELECT m.created_at FROM source_messages m"
+        " WHERE m.normalized_sender='human' AND m.published=1").fetchall()
+    return _max_by_instant(r["created_at"] for r in rows)
 
 
 def _max(*vals):
-    present = [v for v in vals if v]
-    return max(present) if present else None
+    return _max_by_instant(vals)
 
 
 def now() -> dict:

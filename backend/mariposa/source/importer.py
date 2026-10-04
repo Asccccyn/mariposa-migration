@@ -923,6 +923,14 @@ def _purge_failed_batch_artifacts(conn, batch_id: str) -> int:
     （source_message_versions，SL-07）、审计事件。本批写入前已存在的
     其他批次数据（含已发布行）不受影响。
     """
+    # F06（2026-10-03 审计 P1）：先记下本批观察过的会话——快照删除
+    # 后就失去"本批碰过哪些会话"的依据；空壳清场只针对这些会话，
+    # 不得全库 DELETE（历史成功导入的合法空会话挂着不可变快照的
+    # FK，全库清会 IntegrityError 且毁掉合法数据）
+    batch_conv_ids = [r["id"] for r in conn.execute(
+        "SELECT DISTINCT s.conversation_id AS id FROM"
+        " source_conversation_snapshots s WHERE s.batch_id=?",
+        (batch_id,))]
     unpublished = conn.execute(
         "SELECT id FROM source_messages WHERE import_batch_id=?"
         " AND published=0", (batch_id,)).fetchall()
@@ -933,7 +941,7 @@ def _purge_failed_batch_artifacts(conn, batch_id: str) -> int:
                      ids)
         conn.execute(
             f"DELETE FROM source_search_docs WHERE message_id IN ({marks})",
-            ids)
+                     ids)
     conn.execute(
         "DELETE FROM source_messages WHERE import_batch_id=?"
         " AND published=0", (batch_id,))
@@ -944,10 +952,18 @@ def _purge_failed_batch_artifacts(conn, batch_id: str) -> int:
     conn.execute(
         "DELETE FROM source_conversation_snapshots WHERE batch_id=?",
         (batch_id,))
-    # 空壳会话：清场后不再挂任何消息的会话行
-    conn.execute(
-        "DELETE FROM source_conversations WHERE id NOT IN ("
-        " SELECT DISTINCT conversation_id FROM source_messages)")
+    # 空壳会话：仅本批观察过、清场后不挂任何消息、且没有其他批次
+    # 快照引用的会话才删——历史合法空会话（含仅空会话成功导入）受
+    # 不可变快照保护，不属于本批清场范围
+    if batch_conv_ids:
+        conv_marks = ",".join("?" * len(batch_conv_ids))
+        conn.execute(
+            f"DELETE FROM source_conversations WHERE id IN ({conv_marks})"
+            " AND id NOT IN (SELECT DISTINCT conversation_id FROM"
+            " source_messages)"
+            " AND id NOT IN (SELECT DISTINCT conversation_id FROM"
+            " source_conversation_snapshots)",
+            batch_conv_ids)
     return len(ids)
 
 

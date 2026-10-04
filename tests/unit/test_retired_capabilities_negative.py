@@ -49,8 +49,26 @@ class TestRetiredCapabilitiesNegative:
     def test_not_in_mcp_tools_list(self, actors):
         from mariposa.capabilities.mcp_adapter import _tools_for
         tools = _tools_for(actors["jiaming"])
-        left = [t["name"] for t in tools if RETIRED.match(t["name"])]
+        # 审计 2026-10-03：transport 工具名固定 mariposa_ 前缀+下划线，
+        # canonical 正则直接匹配 transport 名恒不命中（守卫恒绿）——
+        # 先映射回 canonical 再比对
+        def _canonical(tool_name: str) -> str:
+            return (tool_name.removeprefix("mariposa_")
+                    .replace("_", "."))
+
+        left = [t["name"] for t in tools if RETIRED.match(_canonical(
+            t["name"]))]
         assert left == [], f"MCP tools/list 仍暴露：{left}"
+
+    def test_guard_catches_injected_retired_tools(self):
+        """自证映射有效：注入的退役 transport 名必须被同一规则命中
+        （否则上面的负测是恒真空转）。"""
+        fakes = ["mariposa_letter_write", "mariposa_diary_write",
+                 "mariposa_raw_search"]
+        caught = [f for f in fakes
+                  if RETIRED.match(f.removeprefix("mariposa_")
+                                   .replace("_", "."))]
+        assert caught == fakes, f"映射漏抓：{set(fakes) - set(caught)}"
 
     def test_invoke_rejected(self, actors):
         from mariposa.capabilities import registry

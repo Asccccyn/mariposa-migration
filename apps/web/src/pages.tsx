@@ -52,21 +52,18 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
   const hold = async () => {
     const text = window.prompt("记忆正文（合成测试数据）");
     if (!text) return;
+    // F22（2026-10-03 审计 P2）：hold 必填 categories；日期由使用者
+    // 明确给出（默认今天）——不再自动伪造"40 天前"的事件日期
+    const date = window.prompt(
+      "事件日期 YYYY-MM-DD", new Date().toISOString().slice(0, 10));
+    if (!date) return;
     try {
       const d = await call<{ memory_id: string }>("memory.hold", {
         text, why_remember: "测试用途",
-        memory_date: new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10),
+        categories: ["daily"],
+        memory_date: date,
       });
       note(`已写入 ${d.memory_id}`);
-      search(q);
-    } catch (e) { note(String(e), true); }
-  };
-
-  const restore = async (id: string, ver: number) => {
-    try {
-      const d = await call<{ new_version: number }>("memory.restore", {
-        memory_id: id, expected_current_version: ver });
-      note(`已恢复到 v${d.new_version}`);
       search(q);
     } catch (e) { note(String(e), true); }
   };
@@ -99,7 +96,7 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
             <Meta>
               <span>matched_by: <code>{h.matched_by}</code></span>
               {m && m.representation === "forgotten_summary" ? (
-                <button onClick={() => restore(m.memory_id, m.version)}>恢复旧正文</button>
+                <span>旧遗忘摘要（v1.7 起遗忘已退役，仅供查看）</span>
               ) : null}
             </Meta>
           </Item>

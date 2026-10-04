@@ -250,3 +250,76 @@ class TestF34ReferentialIntegrity:
         assert "archive" not in str(ei.value)
         assert deletion.deletion_get(req["request_id"])["status"] == "pending"
 
+
+
+class TestF09VectorDerivedCleanup:
+    """F09（2026-10-03 审计 P2）：物理删除必须同事务清空
+    memory_embeddings/word_embeddings 派生向量（合成向量，不加载模型）。"""
+
+    def _seed_vectors(self, mid):
+        from mariposa.retrieval import semantic, words_semantic
+        with db.formal() as conn:
+            semantic.ensure_schema(conn)
+            words_semantic.ensure_schema(conn)
+            wrow = conn.execute(
+                "SELECT word_id FROM memory_our_words WHERE memory_id=?",
+                (mid,)).fetchone()
+            conn.execute(
+                "INSERT INTO memory_embeddings(memory_id, model, dim,"
+                " projection_hash, vector, created_at)"
+                " VALUES(?,?,?,?,?,datetime('now'))",
+                (mid, "synthetic-model", 2, "ph-f09",
+                 b"\x00" * 8))
+            if wrow:
+                conn.execute(
+                    "INSERT INTO word_embeddings(word_id, model, dim,"
+                    " word_fingerprint, vector, created_at)"
+                    " VALUES(?,?,?,?,?,datetime('now'))",
+                    (wrow["word_id"], "synthetic-model", 2, "wf-f09",
+                     b"\x00" * 8))
+            return wrow["word_id"] if wrow else None
+
+    def _leftovers(self, mid, wid):
+        with db.formal() as conn:
+            me = conn.execute(
+                "SELECT COUNT(*) AS c FROM memory_embeddings WHERE"
+                " memory_id=?", (mid,)).fetchone()["c"]
+            we = (conn.execute(
+                "SELECT COUNT(*) AS c FROM word_embeddings WHERE"
+                " word_id=?", (wid,)).fetchone()["c"] if wid else 0)
+            mem = conn.execute(
+                "SELECT COUNT(*) AS c FROM memories WHERE memory_id=?",
+                (mid,)).fetchone()["c"]
+        return me, we, mem
+
+    def test_approve_clears_vectors(self, actors):
+        out = memory.hold(
+            actors["jiaming"], text="approve 向量清理",
+            memory_date="2026-09-01", date_confidence="exact",
+            original_title="f09a", categories=["daily"],
+            creation_mode="contemporaneous", raw_pending=False,
+            our_words=[{"speaker": "qiaosheng", "text": "approve 向量话语",
+                        "expression_kind": "verbatim"}])
+        mid = out["memory_id"]
+        wid = self._seed_vectors(mid)
+        req = submit_delete(actors, mid)
+        deletion.deletion_decide(actors["jiaming"].principal_id,
+                                 req["request_id"], "approve")
+        me, we, mem = self._leftovers(mid, wid)
+        assert (me, we, mem) == (0, 0, 0), \
+            f"approve 后派生向量残留：mem_emb={me} word_emb={we} memory={mem}"
+
+    def test_direct_delete_clears_vectors(self, actors):
+        out = memory.hold(
+            actors["jiaming"], text="直删向量清理",
+            memory_date="2026-09-02", date_confidence="exact",
+            original_title="f09d", categories=["daily"],
+            creation_mode="contemporaneous", raw_pending=False,
+            our_words=[{"speaker": "qiaosheng", "text": "直删向量话语",
+                        "expression_kind": "verbatim"}])
+        mid = out["memory_id"]
+        wid = self._seed_vectors(mid)
+        deletion.direct_delete("jiaming", mid)
+        me, we, mem = self._leftovers(mid, wid)
+        assert (me, we, mem) == (0, 0, 0), \
+            f"直删后派生向量残留：mem_emb={me} word_emb={we} memory={mem}"

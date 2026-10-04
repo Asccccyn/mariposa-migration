@@ -479,5 +479,10 @@
     "preliminary_notes": "PASS_preliminary = Mariposa 侧契约已真实执行并断言；依赖真实 provider/外部宿主的部分按授权状态分层留待（HYBRID-01/08, JEV-07, SESSION-03）",
     "test_run": "pytest tests -q 分批前台执行；新套件 122 条全绿，存量 313 条回归全绿（435 collected）",
     "verify_script": "python scripts/verify_recall_runtime.py → 9/9"
+  },
+  "superseded": {
+    "notice": "历史验收证据（v1.4 / 2026-09-26 / baseline 29b5e4f）。",
+    "reason": "审计 2026-10-03 证实 71 个唯一 evidence 引用中 12 个对应文件或函数已不存在（如 test_raw_recall_scope.py 已退役、words 测试已改名）——本文件只能作为 v1.4 当时的验收记录，不得当作 v1.7 现行通过证据。",
+    "current_status": "现行基线（b484908 及之后）的通过证据以当轮审计的 RESULTS/报告与全量分批重跑记录为准；v1.7 nodeid 映射待专项重建。"
   }
 }

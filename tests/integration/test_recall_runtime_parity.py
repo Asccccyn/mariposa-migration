@@ -40,6 +40,13 @@ def seeded(actors):
                 raw_pending=False,
                 our_words=[{"speaker": "qiaosheng", "text": "搬家说好一起挑窗帘",
                             "expression_kind": "verbatim"}])
+    # scope 内更早锚（审计 2026-10-03：refine 收窄到八月后，earlier
+    # 的合法目标是八月内更早事件；七月桶越界返回已被 scope 门拦截，
+    # 旧断言期待七月桶与现行语义冲突，按语义修测）
+    memory.hold(actors["jiaming"], text="八月上旬搬家准备", memory_date="2026-08-03",
+                date_confidence="exact", original_title="t-aug-early",
+                categories=["daily"], creation_mode="contemporaneous",
+                raw_pending=False)
     memory.hold(actors["jiaming"], text="九月搬家事件", memory_date="2026-09-10",
                 date_confidence="exact", original_title="t2",
                 categories=["daily"], creation_mode="contemporaneous",
@@ -78,7 +85,10 @@ def test_session01_mcp_full_loop(c, seeded):
     nav = tool(c, "jiaming", "mariposa_memory_recall_navigate", {
         "session_id": sid, "direction": "earlier",
         "operation_id": "op-par-s1-nav"})["data"]
-    assert nav["candidates"]
+    assert nav["candidates"], "scope 内应有更早的八月事件"
+    assert all((x.get("memory_date") or "") >= "2026-08-01"
+               for x in nav["candidates"]), \
+        "earlier 不得越过 refine 的八月 scope 返回七月桶"
     st = tool(c, "jiaming", "mariposa_memory_recall_status",
               {"session_id": sid})
     assert st["receipts_revalidated"]["checked"] >= 1

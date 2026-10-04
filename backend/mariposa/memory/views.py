@@ -35,20 +35,27 @@ def open_memory(principal, memory_id: str) -> dict:
         try:
             content = memory.get(conn, memory_id)
             version = memory.representation_version(conn, memory_id)
+            # F01（2026-10-03 审计）：票据同时绑定签发时刻的表示版本
+            # 与内容版本——追加/确认两侧据此判定"看过的还是不是当前
+            # 内容"，不再拿表示版本去比内容版本
+            content_version = content["version"]
             receipt_id = f"vr_{uuid.uuid4().hex[:16]}"
             now = _now()
             conn.execute(
                 "INSERT INTO memory_view_receipts(receipt_id, principal_id,"
-                " binding_id, memory_id, representation_version, confirm_key,"
-                " issued_at, confirmed_at) VALUES(?,?,?,?,?,?,?,NULL)",
+                " binding_id, memory_id, representation_version,"
+                " content_version, confirm_key,"
+                " issued_at, confirmed_at) VALUES(?,?,?,?,?,?,?,?,NULL)",
                 (receipt_id, principal.principal_id, principal.binding_id,
-                 memory_id, version, f"ck_{uuid.uuid4().hex[:16]}", now))
+                 memory_id, version, content_version,
+                 f"ck_{uuid.uuid4().hex[:16]}", now))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     content["view_receipt"] = receipt_id
     content["representation_version"] = version
+    content["receipt_content_version"] = content_version
     content["note"] = ("确认内容已显示后调用 memory.view.confirm；"
                        "票据不跨桶/身份/版本复用")
     return content
@@ -94,6 +101,20 @@ def confirm_view(principal, memory_id: str, receipt_id: str,
                     receipt_id=receipt_id,
                     issued_for=r["representation_version"],
                     current=current_version)
+            # F01：内容维度同检——v1 打开未确认、内容已更新到 v2 的
+            # 旧票据不得确认（否则给没看过的 v2 写明开回温事实）。
+            # 迁移前签发的旧票据无内容绑定（NULL），fail-closed 重开。
+            current_content = conn.execute(
+                "SELECT current_version_no FROM memories WHERE memory_id=?",
+                (memory_id,)).fetchone()["current_version_no"]
+            if r["content_version"] is None or str(
+                    r["content_version"]) != str(current_content):
+                raise ViewReceiptInvalid(
+                    "content moved; re-open to get a fresh receipt",
+                    receipt_id=receipt_id,
+                    issued_for=(str(r["content_version"])
+                                if r["content_version"] is not None else None),
+                    current=str(current_content))
             now = _now()
             _check_ttl(r["issued_at"], now)
             # v1.7 明开回温：记录服务端确认事实时刻（取 max，防乱序旧确认

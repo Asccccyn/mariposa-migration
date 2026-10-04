@@ -395,6 +395,21 @@ def set_candidate_state_tx(conn, session_id: str, candidate_ref: str,
                        candidate_ref=candidate_ref)
 
 
+def require_session_in_tx(conn, session_id: str) -> dict:
+    """写锁内重读 session 当前行（F03：动作最终事务统一复查）。
+
+    动作的允许检查发生在锁外；close 不推进 revision，仅按 revision
+    的 CAS 拦不住"锁外读 ACTIVE → 对端提交终态 → 本事务覆盖终态"
+    的合法交错。设为型动作在最终写锁内必须以此行重跑状态机与归属。
+    """
+    row = conn.execute(
+        "SELECT * FROM recall_sessions WHERE session_id=?",
+        (session_id,)).fetchone()
+    if row is None:
+        raise NotFound("recall session not found", session_id=session_id)
+    return dict(row)
+
+
 def update_status_tx(conn, session_id: str, expected_revision: int,
                      status: str) -> None:
     """事务内版 CAS 状态写入（close/accept 等最终事务调用）。"""
