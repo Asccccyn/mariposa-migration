@@ -119,8 +119,8 @@ def test_bootstrap_injects_current_i_but_not_old_i_body(actors):
         "jiaming", created["item_id"], "CURRENT-I-BODY",
         expected_revision=1)
     section = bootstrap.get("jiaming", "cc", "cc")["i"]
-    assert section["items"][0]["has_history"] is True
-    # MEM-03：items 只留指针元数据；当前正文在分节 content 顶层
-    assert "content" not in section["items"][0]
+    # 裁定（2026-10-04 三）：开窗只出当前的话+has_history 提示
+    assert section["has_history"] is True
+    assert "items" not in section
     assert section["content"] == "CURRENT-I-BODY"
     assert "OLD-I-BODY-SENTINEL" not in json.dumps(section, ensure_ascii=False)
