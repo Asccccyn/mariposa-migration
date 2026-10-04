@@ -295,6 +295,21 @@ def invoke(principal: Principal, capability: str, arguments: dict,
     if cap is None:
         raise NotFound("unknown capability", capability=capability)
     identity.require_any(principal, cap.allowed_principals)
+    # compact_v1 出站 profile（JSON 瘦身 2026-10-04 五）：传输层参数，
+    # 业务执行前剥离——不进 schema 校验/payload 哈希/request_ref 载荷，
+    # 同 operation 切换 profile 不重做业务；支持性先验后验（fail fast）
+    from . import compact
+    output_profile = arguments.get("output_profile", "legacy")
+    if output_profile not in ("legacy", "compact_v1"):
+        raise Forbidden(
+            f"unknown output_profile: {output_profile}"
+            "（支持 legacy/compact_v1）", code="INVALID_ARGUMENT")
+    if output_profile == "compact_v1" and not compact.supports(capability):
+        raise Forbidden(
+            f"capability {capability} 不支持 compact_v1 输出 profile",
+            code="OUTPUT_PROFILE_UNSUPPORTED", capability=capability)
+    arguments = {k: v for k, v in arguments.items()
+                 if k != "output_profile"}
     from . import input_schemas
     input_schemas.validate(capability, arguments)
 
@@ -309,8 +324,13 @@ def invoke(principal: Principal, capability: str, arguments: dict,
     # 现算。
     if (idempotency_key and not _is_recall_runtime(capability)
             and cap.write):
-        return _idempotent_invoke(principal, cap, arguments, idempotency_key)
-    return {"ok": True, "data": cap.handler(principal, arguments)}
+        result = _idempotent_invoke(principal, cap, arguments,
+                                    idempotency_key)
+    else:
+        result = {"ok": True, "data": cap.handler(principal, arguments)}
+    if output_profile == "compact_v1":
+        result["data"] = compact.project(capability, result["data"])
+    return result
 
 
 #: 召回运行时能力集：runtime 幂等隔离（§9.4）
