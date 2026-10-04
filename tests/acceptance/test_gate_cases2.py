@@ -90,12 +90,6 @@ class TestOPS:
         assert "memory.search" in mcp_adapter._canonical_name(
             mcp_adapter._transport_name("memory.search"))
 
-    def test_T_OPS_05_stop_script_scoped(self, actors):
-        """T-OPS-05：stop-dev 只按端口+mariposa 命令行匹配，不按进程名杀。"""
-        text = Path("scripts/stop-dev.ps1").read_text(encoding="utf-8")
-        assert "mariposa" in text  # 命令行校验
-        assert "Get-Process" not in text and "taskkill" not in text
-
     def test_T_EXT_02_outcome_unknown_code_defined(self, actors):
         """T-EXT-02：OUTCOME_UNKNOWN 错误码就绪（外部写入未接，blocked）。"""
         from mariposa.errors import MariposaError

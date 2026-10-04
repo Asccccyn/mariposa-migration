@@ -290,18 +290,8 @@ async function searchMemories(q) {
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
-$('memResults').addEventListener('click', async (e) => {
-  const btn = e.target.closest('button[data-restore]');
-  if (!btn || btn.dataset.rep === 'full') return;
-  try {
-    const d = await api('memory.restore', {
-      memory_id: btn.dataset.restore,
-      expected_current_version: parseInt(btn.dataset.ver),
-    });
-    setStatus('已恢复到 v' + d.new_version);
-    searchMemories($('q').value);
-  } catch (err) { setStatus(err.message, true); }
-});
+// 恢复旧正文入口已随 v1.7 遗忘退役删除（按钮与调用一并清理；
+// 旧遗忘摘要仅供查看）
 
 // ---------- 计划 ----------
 $('planAdd').onclick = async () => {
