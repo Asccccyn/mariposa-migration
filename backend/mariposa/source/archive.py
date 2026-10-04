@@ -85,8 +85,13 @@ def publish_snapshot(provider: str, batch_id: str, staged: Path,
         "immutability": "应用级只读保护（0444）；不清洗、不覆盖、不因重"
                         "解析丢弃；非管理员不可删的 WORM 存储",
     }
-    (dest_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    # SRC-05：manifest 临时写+原子替换——半截 manifest 不得留在
+    # 归档目录（verify 会把它当损坏恢复集）
+    _mf_tmp = dest_dir / "manifest.json.part"
+    _mf_tmp.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    os.replace(_mf_tmp, dest_dir / "manifest.json")
     return payload
 
 

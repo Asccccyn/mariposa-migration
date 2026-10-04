@@ -73,7 +73,11 @@ def _register() -> dict[str, Capability]:
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
         description="确认本次明确查看（明开回温：explicit-open basis，刷新回温基准；plan 不适用）")
-    add("memory.recollections.append", _recollect_append, _owners(), True, True,
+    # WR-01（2026-10-04 全量审计）：追加语义每调一次新增一条——
+    # 公开 idempotentHint 必须为 false（此前误标 true，同参重放会
+    # 得到第二条回忆和 keep）
+    add("memory.recollections.append", _recollect_append, _owners(), True,
+        False,
         description="凭有效查看回执追加本人回忆（不索引；触发保留线索）")
     add("memory.recollections.revise", _recollect_revise, _owners(), True,
         description="修订本人回忆（原话留底，supersedes 链）")
@@ -913,11 +917,16 @@ def _by_emotion(principal: Principal, a: dict) -> dict:
 
 
 
+from ..memory.extras import _UNSET  # WR-04：字段缺席哨兵
+
+
 def _memory_update(principal: Principal, a: dict) -> dict:
     return extras.update_text(
         principal.principal_id, str(a.get("memory_id", "")),
-        int(a.get("expected_version", 0)), a.get("text"), a.get("why_remember"),
-        a.get("memory_date"), a.get("date_confidence"))
+        int(a.get("expected_version", 0)), a.get("text"),
+        a["why_remember"] if "why_remember" in a else _UNSET,
+        a["memory_date"] if "memory_date" in a else _UNSET,
+        a["date_confidence"] if "date_confidence" in a else _UNSET)
 
 
 def _versions_list(principal: Principal, a: dict) -> dict:

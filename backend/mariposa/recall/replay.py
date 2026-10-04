@@ -57,14 +57,38 @@ def revalidate_replayed(fn_name: str, saved: dict,
         raise StaleOperation(
             "Words 通道当前已关闭，旧响应拒绝重放",
             operation=fn_name)
-    # RECALL-03（2026-10-04 二批 P1）：Judge 关闭时旧 operation 也不
-    # 释放正文——request_ref 幂等的是结果身份，不是缓存正文的出站
-    # 许可；出站仍按当前 Judge 状态重校验，关闭则结构化降级为
-    # unavailable/空正文（保留结果身份元数据，不重新释放旧正文）
+    # RECALL-03 + CR-01（2026-10-04 全量审计 P1）：Judge 不可用或
+    # 原文许可撤回后，旧 operation 不释放正文——request_ref 幂等的
+    # 是结果身份，不是缓存正文的出站许可。与 fresh/continuation 共用
+    # 同一当前 provider 可用性判定（不只认 DisabledJudge 类名）：
+    # TypeSafe 配置失效/缺 key/无有效 profile 同样不可用；raw 卡
+    # 还须当前 profile 仍含 source_excerpt。
     from ..retrieval.judges import base as _jb
-    if isinstance(_jb.get_provider(), _jb.DisabledJudge) and \
-            isinstance(saved.get("candidates"), list) and \
-            saved["candidates"]:
+    from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
+    _provider = _jb.get_provider()
+    _judge_down = isinstance(_provider, _jb.DisabledJudge)
+    _profile = None
+    if isinstance(_provider, TypeSafeJevJudge):
+        if getattr(_provider, "_disabled_reason", None):
+            _judge_down = True
+        _profile = getattr(_provider, "_data_profile", None) \
+            or frozenset()
+        if not _profile:
+            _judge_down = True
+        # 缺 key 只对"仍在用原生 judge()（真实 HTTP 路径）"的实例
+        # 判不可用——测试注入的 fake 覆写 judge() 且常以类属性声明
+        # key，实例级 env 缺失会遮蔽它，但 fake 根本不走 HTTP
+        if (not getattr(_provider, "_api_key", None)
+                and type(_provider).judge is
+                TypeSafeJevJudge.judge):
+            _judge_down = True
+        print("DBG provider=", type(_provider).__name__,
+              "down=", _judge_down, "profile=", _profile,
+              "reason=", getattr(_provider, "_disabled_reason", "NA"),
+              "key=", bool(getattr(_provider, "_api_key", None)),
+              "n=", len(saved.get("candidates") or []))
+    if _judge_down and isinstance(saved.get("candidates"), list) \
+            and saved["candidates"]:
         degraded = dict(saved)
         degraded["candidates"] = []
         degraded["degraded_reasons"] = list(
@@ -74,6 +98,28 @@ def revalidate_replayed(fn_name: str, saved: dict,
         degraded["coverage"]["judge"] = "unavailable"
         degraded["delivery_action"] = "no_candidates"
         saved = degraded
+    elif (_profile is not None
+            and isinstance(saved.get("candidates"), list)):
+        # 原文许可缩权：raw/source 卡在当前 profile 缺 source_excerpt
+        # 时抑制（与 fresh continuation 的 RAW_PROFILE_WITHDRAWN 同权）
+        _kept = []
+        _suppressed = False
+        for _c in saved["candidates"]:
+            if isinstance(_c, dict) and \
+                    _c.get("channel") in ("raw", "source") and \
+                    "source_excerpt" not in _profile:
+                _suppressed = True
+                continue
+            _kept.append(_c)
+        if _suppressed:
+            degraded = dict(saved)
+            degraded["candidates"] = _kept
+            degraded["degraded_reasons"] = list(
+                saved.get("degraded_reasons") or []) + [
+                    "raw_profile_withdrawn_replay_body_suppressed"]
+            degraded["coverage"] = dict(saved.get("coverage") or {})
+            degraded["coverage"]["raw"] = "unavailable_profile"
+            saved = degraded
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
     if not sid:

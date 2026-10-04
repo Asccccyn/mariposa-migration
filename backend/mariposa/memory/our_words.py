@@ -235,6 +235,13 @@ def correct_source(principal_id: str, word_id: str,
                 "来源不一致（并发/换代保护）",
                 code="CONFLICT", current=cur,
                 current_source_binding_version=cur_version)
+        # WR-03（2026-10-04 全量审计）：当前本无来源时，撤销动作
+        # 是无对象操作——结构化拒绝，不制造"曾绑定被撤销"的假历史、
+        # 不无端升版本降级逐字证据
+        if correction_action == "remove_wrong_binding" and cur is None:
+            raise Forbidden(
+                "该话语当前没有来源绑定，无可撤销",
+                code="INVALID_ARGUMENT", word_id=word_id)
         new_ref = None
         if replacement and replacement.get("source_ref"):
             new_ref = str(replacement["source_ref"])
