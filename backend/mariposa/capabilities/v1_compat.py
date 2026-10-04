@@ -12,7 +12,16 @@ from __future__ import annotations
 
 from .. import db
 from ..errors import Forbidden, NotFound
-from .registry import REGISTRY, Capability, Principal
+from ..identity import Principal  # 类型来源与 registry 同一对象
+
+#: registry 名字晚绑定（registry 底部装配本模块——顶部互 import 成环）
+def _R():
+    from . import registry
+    return registry
+
+
+def _Capability(*args, **kwargs):
+    return _R().Capability(*args, **kwargs)
 
 
 def _blocked(reason: str, unblock: str):
@@ -30,8 +39,8 @@ def _reserved(note: str):
 def _alias(spec_name: str):
     """规格名 -> 既有实现能力的别名。"""
     target = _ALIASES[spec_name]
-    cap = REGISTRY[target]
-    return Capability(spec_name, cap.handler, cap.allowed_principals, cap.write,
+    cap = _R().REGISTRY[target]
+    return _Capability(spec_name, cap.handler, cap.allowed_principals, cap.write,
                       cap.idempotent, f"[规格别名] {cap.description}")
 
 
@@ -97,20 +106,22 @@ _OWNERS = {"qiaosheng", "jiaming"}
 
 def register_v1_compat() -> dict:
     """把规格缺失项注册进 REGISTRY；返回注册统计。"""
+    R = _R()
+    REG = R.REGISTRY
     added = {"alias": 0, "blocked": 0, "reserved": 0, "thin": 0}
     for spec_name, target in _ALIASES.items():
-        if spec_name not in REGISTRY and target in REGISTRY:
-            REGISTRY[spec_name] = _alias(spec_name)
+        if spec_name not in REG and target in REG:
+            REG[spec_name] = _alias(spec_name)
             added["alias"] += 1
     for name, (reason, unblock) in _BLOCKED_CAPS.items():
-        if name not in REGISTRY:
-            REGISTRY[name] = Capability(
+        if name not in REG:
+            REG[name] = R.Capability(
                 name, _blocked(reason, unblock), _OWNERS, False,
                 description=f"[blocked] {reason}")
             added["blocked"] += 1
     for name, note in _RESERVED_CAPS.items():
-        if name not in REGISTRY:
-            REGISTRY[name] = Capability(
+        if name not in REG:
+            REG[name] = R.Capability(
                 name, _reserved(note), _OWNERS, False,
                 description=f"[reserved] {note}")
             added["reserved"] += 1
@@ -120,22 +131,24 @@ def register_v1_compat() -> dict:
 
 def _register_thin() -> int:
     from . import registry as R
+    REG = R.REGISTRY
+    Cap = R.Capability
     n = 0
 
     def add(name, handler, allowed=_OWNERS, write=False):
         nonlocal n
-        if name not in REGISTRY:
-            REGISTRY[name] = Capability(name, handler, set(allowed), write,
-                                        description=f"[v1.1 薄实现] {name}")
+        if name not in REG:
+            REG[name] = Cap(name, handler, set(allowed), write,
+                            description=f"[v1.1 薄实现] {name}")
             n += 1
 
     add("capabilities.list", lambda p, a: {
         "capabilities": R.list_capabilities(p)})
     add("capabilities.status", lambda p, a: {
-        "total": len(REGISTRY),
-        "blocked": sorted(k for k, v in REGISTRY.items()
+        "total": len(REG),
+        "blocked": sorted(k for k, v in REG.items()
                           if v.description.startswith("[blocked]")),
-        "reserved": sorted(k for k, v in REGISTRY.items()
+        "reserved": sorted(k for k, v in REG.items()
                            if v.description.startswith("[reserved]"))})
 
 

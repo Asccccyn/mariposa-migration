@@ -15,10 +15,10 @@ from ..errors import Forbidden, SnapshotStale
 from ..identity_i import service as _i_svc
 from ..plans import service as plans
 from ..plans import service as _plans_svc  # noqa: F401
-from .service import (BOOT_I_SECTION_CHARS, BOOT_MEMORY_DAYS,
-                      BOOT_PLAN_SECTION_CHARS, BOOT_SECTION_LIMIT,
-                      BOOT_UPCOMING_DAYS, _memory_slim,
-                      _state_hash, _three_day_window)
+from .core import (BOOT_I_SECTION_CHARS, BOOT_MEMORY_DAYS,
+                   BOOT_PLAN_SECTION_CHARS, BOOT_SECTION_LIMIT,
+                   BOOT_UPCOMING_DAYS, _memory_slim,
+                   _state_hash, _three_day_window)
 
 def next_page(principal_id: str, entry_source: str, snapshot_id: str,
               cursor: dict, section: str = "plans") -> dict:
