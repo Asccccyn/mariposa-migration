@@ -785,22 +785,32 @@ def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
     不变，崩溃窗口重放安全）。
     """
     op = a.get("operation_id")
-    # 裁定（2026-10-04 江乔生）：request_ref = 一次具体请求的幂等身份。
-    # 未显式给 operation_id 时由 request_ref 派生（reqref: 前缀进入
-    # 同一 runtime 幂等空间）：同 ref 同 payload 网络重试重放原结果
-    # （start 回原 session、不重新领预算）；同 ref 异 payload 拒绝。
+    # 裁定（2026-10-04 江乔生，措辞修正二）：request_ref 在场时，
+    # 幂等身份 = 主体 + capability/action + request_ref——operation_id
+    # 只是 transport 回执身份、session_id 只是路由参数，改变任一都
+    # 不得绕开同一逻辑请求的冲突检测（RECALL-01）。
     _plan = a.get("query_plan")
     _req_ref = a.get("request_ref")
     if not _req_ref and isinstance(_plan, dict):
         _req_ref = _plan.get("request_ref")
     from_req_ref = False
-    if not op and isinstance(_req_ref, str) and _req_ref.strip():
+    if isinstance(_req_ref, str) and _req_ref.strip():
         op = f"reqref:{_req_ref.strip()}"
         from_req_ref = True
     if not op:
         return fn(principal, a)
-    key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
-    ph = memory.canonical_hash(a)
+    if from_req_ref:
+        # request_ref 定义的逻辑身份不含 session_id——跨 session 的
+        # 同 ref 重试必须回到原 operation（start 回原 session）
+        key = f"{fn.__name__}:::{op}"
+        # 逻辑载荷同样不含传输/路由字段：operation_id/session_id 变化
+        # 不构成不同 payload（RECALL-01：不得借改字段绕开身份）
+        _logical = {k: v for k, v in a.items()
+                    if k not in ("operation_id", "session_id")}
+        ph = memory.canonical_hash(_logical)
+    else:
+        key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
+        ph = memory.canonical_hash(a)
     ctx = {"principal_id": principal.principal_id, "operation_key": key,
            "payload_hash": ph}
     try:

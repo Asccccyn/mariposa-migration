@@ -146,3 +146,90 @@ class TestLinearContinuation:
                               dict(args), None)["data"]["data"]
         assert r2b["revision"] == r2["revision"], "重试应重放原结果"
         assert store.get_session(sid)["bursts_used"] == bursts_after_first
+
+
+class TestRequestRefIdentityNotBypassable:
+    """RECALL-01（2026-10-04 二批）：request_ref 定义的逻辑请求身份
+    不得被 operation_id 或 session_id 改变。"""
+
+    def test_operation_id_cannot_replace_request_identity(self, actors):
+        _hold(actors, "身份不可替换正文")
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": PLAN_A,
+                              "operation_id": "op-A"}, None)["data"]["data"]
+        # 同 request_ref + 不同 operation_id：仍须判定为同一逻辑请求
+        with pytest.raises(Forbidden) as ei:
+            registry.invoke(actors["jiaming"], "memory.recall.start",
+                            {"query_plan": PLAN_B,
+                             "operation_id": "op-B-different"}, None)
+        assert ei.value.code == "REF_REUSE_MISMATCH"
+        # 同 ref 同 payload + 换 operation_id：重放回原 session
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": dict(PLAN_A),
+                              "operation_id": "op-C-different"}, None
+                             )["data"]["data"]
+        assert r2["recall_session_id"] == r1["recall_session_id"]
+
+    def test_refine_ref_not_reusable_across_sessions(self, actors):
+        """refine 的 request_ref 绑定的是逻辑请求，不是 session 路由：
+        换一个 session 提交同 ref——异 payload 必须冲突；同 payload
+        重放原结果而不是在第二个 session 上执行。"""
+        _hold(actors, "跨会话复用正文甲")
+        s1 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": {
+                                 "original_request": "甲",
+                                 "channels": ["event"],
+                                 "lexical_terms": ["甲"],
+                                 "request_ref": "xs-start-1"}}, None
+                             )["data"]["data"]["recall_session_id"]
+        _hold(actors, "跨会话复用正文乙")
+        s2 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": {
+                                 "original_request": "乙",
+                                 "channels": ["event"],
+                                 "lexical_terms": ["乙"],
+                                 "request_ref": "xs-start-2"}}, None
+                             )["data"]["data"]["recall_session_id"]
+        assert s1 != s2
+        common = {"query_plan": {"original_request": "改查甲",
+                                 "channels": ["event"],
+                                 "lexical_terms": ["甲"]},
+                  "request_ref": "xs-refine-R"}
+        registry.invoke(actors["jiaming"], "memory.recall.refine",
+                        {"session_id": s1, **dict(common)}, None)
+        # 同 ref 在另一个 session 上、不同 payload → 冲突
+        with pytest.raises(Forbidden) as ei:
+            registry.invoke(actors["jiaming"], "memory.recall.refine",
+                            {"session_id": s2,
+                             "query_plan": {"original_request": "改查乙",
+                                            "channels": ["event"],
+                                            "lexical_terms": ["乙"]},
+                             "request_ref": "xs-refine-R"}, None)
+        assert ei.value.code == "REF_REUSE_MISMATCH"
+
+
+class TestJudgeDisabledBlocksReplayBodies:
+    """RECALL-03（2026-10-04 二批 P1）：Judge 关闭时旧 operation 重放
+    不释放正文——返回同一 operation 的 unavailable/空正文，保留结果
+    身份元数据，不标当前可用。"""
+
+    def test_replay_suppresses_bodies_when_judge_off(self, actors):
+        from mariposa import config as cfg
+        _hold(actors, "Judge关闭重放的窗帘正文")
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": PLAN_A}, None)["data"]["data"]
+        assert r1["candidates"], "前置：Judge 开启时有交付"
+        old_provider = cfg.RECALL_JUDGE_PROVIDER
+        cfg.RECALL_JUDGE_PROVIDER = "disabled"
+        try:
+            r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                                 {"query_plan": dict(PLAN_A)}, None
+                                 )["data"]["data"]
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old_provider
+        assert r2["candidates"] == [], "Judge 关闭后重放不得释放旧正文"
+        assert r2["recall_session_id"] == r1["recall_session_id"], \
+            "结果身份不变（同一 operation）"
+        assert "judge_disabled_replay_body_suppressed" in \
+            (r2.get("degraded_reasons") or []), "必须结构化标注降级原因"
+        assert r2.get("coverage", {}).get("judge") == "unavailable"

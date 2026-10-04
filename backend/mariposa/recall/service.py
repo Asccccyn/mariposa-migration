@@ -1488,6 +1488,23 @@ def revalidate_replayed(fn_name: str, saved: dict,
         raise StaleOperation(
             "Words 通道当前已关闭，旧响应拒绝重放",
             operation=fn_name)
+    # RECALL-03（2026-10-04 二批 P1）：Judge 关闭时旧 operation 也不
+    # 释放正文——request_ref 幂等的是结果身份，不是缓存正文的出站
+    # 许可；出站仍按当前 Judge 状态重校验，关闭则结构化降级为
+    # unavailable/空正文（保留结果身份元数据，不重新释放旧正文）
+    from ..retrieval.judges import base as _jb
+    if isinstance(_jb.get_provider(), _jb.DisabledJudge) and \
+            isinstance(saved.get("candidates"), list) and \
+            saved["candidates"]:
+        degraded = dict(saved)
+        degraded["candidates"] = []
+        degraded["degraded_reasons"] = list(
+            saved.get("degraded_reasons") or []) + [
+                "judge_disabled_replay_body_suppressed"]
+        degraded["coverage"] = dict(saved.get("coverage") or {})
+        degraded["coverage"]["judge"] = "unavailable"
+        degraded["delivery_action"] = "no_candidates"
+        saved = degraded
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
     if not sid:
