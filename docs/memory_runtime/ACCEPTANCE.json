@@ -1,6 +1,6 @@
 {
   "contract_version": "recall_runtime_acceptance_v1.7",
-  "baseline_head": "4e58bd5",
+  "baseline_head": "f734a81",
   "verified_on": "2026-10-04",
   "note": "requirement → 当前代表 nodeid → 状态。条款来自 docs/memory_runtime/CURRENT.md（v1.7）与 2026-10-04 裁定；只列正式验收合同，不为每个 pytest 用例反向登记。真实模型项保持 NOT_RUN_REAL_MODEL，不伪装 PASS。",
   "requirements": [
