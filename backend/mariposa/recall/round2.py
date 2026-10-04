@@ -24,10 +24,10 @@ from .models import validate_query_plan
 from ..memory import service as _mem_svc
 _F = Forbidden  # 原 service 内别名，随块迁移
 _canonical_hash = _mem_svc.canonical_hash
-from .service import (_enforce_output_budget, _finalize_cards,
-                       _now_iso, _op_id, _query_fp,
-                       _require_enabled, _revalidate_session_in_tx,
-                       _with_round_preview, require_owned_session)
+from .shared import (_enforce_output_budget, _finalize_cards,
+                      _now_iso, _op_id, _query_fp,
+                      _require_enabled, _revalidate_session_in_tx,
+                      _with_round_preview, require_owned_session)
 
 # ---------- Round 2（S13 完整门禁 + commit-at-end，WP04 重写） ----------
 
