@@ -141,6 +141,24 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
 半开区间偏移（邻接不重叠、锚定消息须属绑定会话）+ content_hash 防漂
 移；边界序号上的同号 sibling 须消息身份一致才算覆盖）。
 
+**md 对话转写导入（2026-10-04 四，乔生裁定）**：
+
+- `source.import` 接受 `.md` 对话转写；两种方言：**claude 导出**
+  （`## User`/`## Claude` 说话人标题、`**ISO Z**` 时间戳行、头部
+  `**Created:**`/`**Link:**` 元数据、`### Thinking` 围栏块）与
+  **gemini 导出**（`# you asked`/`# gemini response` 标题、
+  `message time:` 行、`> From:` 来源 URL）。
+- 时区：claude 的 Z 时间戳=UTC 直接用；gemini 裸时间按 **UTC+8**
+  转 UTC 存储（两种导出的真实本地时间均核对为 +8）。
+- 时间戳行是元数据不是内容：解析进 `created_at` 后**从原文剥离**。
+- 出站时间只到**分钟**（年月日时分，按上海显示），秒/毫秒/Z 不出。
+- 说话人映射：human=qiaosheng、assistant=jiaming（与 JSON 导入同）。
+  Thinking 块与 JSON 导入同口径分离（标志+证据，不进正文）。
+- 消息 id 确定性合成（内容锚定，重导幂等）；解析产出与 Claude JSON
+  同形的元素契约——母本归档/发布门禁/失败清场/绑定全链复用。
+- 切块为围栏感知（正文内代码块/标题不误切）；不识别任一方言的
+  md 结构化拒收。测试只用合成夹具；真实文档由乔生自行导入。
+
 **provenance 收紧（2026-10-04 裁定，优先项）**：
 
 - `source_msg:<id>` 必须指向真实存在且**已发布**的 source message；

@@ -120,32 +120,54 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     original_name = filename or src.name
 
     # ---- 2) provider 检测：从固定快照读 ----
-    try:
-        with open_element_stream(staged) as f:
-            first, _ = json_stream.peek_first_element(f)
-        if first is json_stream.EMPTY_ARRAY:
-            # 空数组：合法输入，0 会话（无数据不建批次）
-            staged.unlink(missing_ok=True)
-            return {"batch_id": None, "provider": "unknown",
-                    "status": "completed", "stats": _new_stats(),
-                    "note": "空数组：无可导入会话",
-                    "raw_path": None}
-        provider = adapters.detect_provider(first)
-    except json_stream.JsonStreamError as e:
-        _record_failed_import(principal_id, staged, "unknown",
-                              f"bad json: {e}", filename)
-        raise MariposaError(f"文件不是合法的顶层 JSON 数组: {e}",
-                            code=e.code) from e
-    except MariposaError:
-        _record_failed_import(principal_id, staged, "unknown",
-                              "unreadable archive", filename)
-        raise
-    if provider is None:
-        _record_failed_import(principal_id, staged, "unknown",
-                              "unrecognized export format", filename)
-        raise MariposaError(
-            "无法识别导出格式（本轮支持 Claude conversations 导出）",
-            code="SOURCE_FORMAT_UNKNOWN")
+    # md 对话转写（裁定 2026-10-04 四）：按源扩展名分流——解析产出
+    # 与 Claude JSON 同形的元素契约，后续认领/归档/门禁全链复用
+    md_dialect = None
+    if src.suffix.lower() in (".md", ".markdown"):
+        from . import md_transcript
+        try:
+            provider, elements = md_transcript.parse(staged, original_name)
+            md_dialect = provider
+            # 文件名是 md 转写唯一的会话命名来源——元素无标题时补
+            for _el in elements:
+                if not (_el.get("name") or _el.get("title")):
+                    _el["title"] = Path(original_name).stem
+            if not elements:
+                staged.unlink(missing_ok=True)
+                return {"batch_id": None, "provider": provider,
+                        "status": "completed", "stats": _new_stats(),
+                        "note": "md 转写无可导入会话", "raw_path": None}
+        except MariposaError as e:
+            _record_failed_import(principal_id, staged, "unknown",
+                                  f"bad md: {e}", filename)
+            raise
+    if md_dialect is None:
+        try:
+            with open_element_stream(staged) as f:
+                first, _ = json_stream.peek_first_element(f)
+            if first is json_stream.EMPTY_ARRAY:
+                # 空数组：合法输入，0 会话（无数据不建批次）
+                staged.unlink(missing_ok=True)
+                return {"batch_id": None, "provider": "unknown",
+                        "status": "completed", "stats": _new_stats(),
+                        "note": "空数组：无可导入会话",
+                        "raw_path": None}
+            provider = adapters.detect_provider(first)
+        except json_stream.JsonStreamError as e:
+            _record_failed_import(principal_id, staged, "unknown",
+                                  f"bad json: {e}", filename)
+            raise MariposaError(f"文件不是合法的顶层 JSON 数组: {e}",
+                                code=e.code) from e
+        except MariposaError:
+            _record_failed_import(principal_id, staged, "unknown",
+                                  "unreadable archive", filename)
+            raise
+        if provider is None:
+            _record_failed_import(principal_id, staged, "unknown",
+                                  "unrecognized export format", filename)
+            raise MariposaError(
+                "无法识别导出格式（本轮支持 Claude conversations 导出）",
+                code="SOURCE_FORMAT_UNKNOWN")
 
     # ---- 3) 幂等与并发认领（租约） ----
     batch_id, reused, lease = _claim_batch(provider, sha256, staged,
@@ -177,7 +199,9 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     try:
         # ---- 5) 解析归档 payload（绝不碰原始路径） ----
         try:
-            _parse_all(archived, provider, batch_id, stats, lease)
+            _parse_all(archived, provider, batch_id, stats, lease,
+                       md_dialect=md_dialect,
+                       original_name=original_name)
         except json_stream.JsonStreamError as e:
             # 检测通过但流中后段不合规（如尾随垃圾）：同源码严格拒绝
             _fail_batch(batch_id, provider, f"bad json: {e}", stats,
@@ -303,10 +327,11 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             archive.write_metadata(provider, batch_id, {
                 "status": "completed", "stats": stats,
                 "metadata_note": f"metadata write retried: {meta_err}"})
-        return {"batch_id": batch_id, "provider": provider,
-                "status": "completed", "stats": stats,
-                "verification": {**verification, "archive": archive_check},
-                "raw_path": str(archived)}
+        return _slim_result({
+            "batch_id": batch_id, "provider": provider,
+            "status": "completed", "stats": stats,
+            "verification": {**verification, "archive": archive_check},
+            "raw_path": str(archived)})
     except Exception as e:  # noqa: BLE001 —— 未预期异常必须留失败痕迹
         if isinstance(e, LeaseLost):
             raise  # 本 worker 已被接管：不留痕不清理
@@ -414,15 +439,43 @@ def _existing_payload_if_consistent(provider: str, batch_id: str,
     return None  # 无归档（新批次/上次归档前失败）→ 正常发布
 
 
+def _slim_result(result: dict) -> dict:
+    """导入结果出站瘦身（裁定 2026-10-04 四：省 token）。
+
+    完整 stats/verification 留在库内（批次表 + metadata），出站只给
+    必要可读信息；失败时完整 blocking/parse_failures 保留（排障要读）。
+    """
+    if result.get("status") != "completed":
+        return {k: v for k, v in result.items() if k != "raw_path"}
+    st = result.get("stats") or {}
+    # 计数字段全集保留（个位数 int，成本可忽略）；删的是
+    # min/max_created_at、verify/sample/复核类诊断块与 raw_path
+    slim_stats = {k: v for k, v in st.items()
+                  if isinstance(v, (int, float)) and not k.startswith("_")}
+    vf = result.get("verification") or {}
+    if vf.get("problems"):
+        slim_stats["verify_problems"] = vf["problems"]
+    vf = result.get("verification") or {}
+    slim = {
+        "batch_id": result.get("batch_id"),
+        "provider": result.get("provider"),
+        "status": "completed",
+        "stats": slim_stats,
+        "verified": bool(vf.get("ok")),
+    }
+    return slim
+
+
 def _already_result(provider: str, sha256: str) -> dict:
     with db.formal() as conn:
         row = conn.execute(
             "SELECT * FROM source_import_batches WHERE provider=?"
             " AND sha256=?", (provider, sha256)).fetchone()
-    return {"batch_id": row["batch_id"], "provider": provider,
-            "status": "already_imported",
-            "stats": json.loads(row["stats"] or "{}"),
-            "raw_path": row["raw_path"]}
+    return _slim_result({
+        "batch_id": row["batch_id"], "provider": provider,
+        "status": "already_imported",
+        "stats": json.loads(row["stats"] or "{}"),
+        "raw_path": row["raw_path"]})
 
 
 def batch_status(batch_id: str) -> dict:
@@ -441,11 +494,21 @@ def batches_list(limit: int = 50) -> list[dict]:
     with db.formal() as conn:
         rows = conn.execute(
             "SELECT batch_id, provider, status, original_filename,"
-            " original_bytes, sha256, import_started_at, import_finished_at,"
-            " error FROM source_import_batches"
+            " import_started_at, import_finished_at, error"
+            " FROM source_import_batches"
             " ORDER BY import_started_at DESC LIMIT ?",
             (max(1, min(int(limit), 200)),)).fetchall()
-    return [dict(r) for r in rows]
+    # 出站瘦身 + 分钟精度（裁定 2026-10-04 四）
+    from .query import _fmt_min
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["import_started_at"] = _fmt_min(d.get("import_started_at"))
+        d["import_finished_at"] = _fmt_min(d.get("import_finished_at"))
+        if d.get("status") == "completed" and not d.get("error"):
+            d.pop("error", None)
+        out.append(d)
+    return out
 
 
 # ---------------------------------------------------------------- 解析
@@ -469,7 +532,22 @@ def _new_stats() -> dict:
 
 
 def _parse_all(payload: Path, provider: str, batch_id: str,
-               stats: dict, lease: str) -> None:
+               stats: dict, lease: str, md_dialect: str | None = None,
+               original_name: str | None = None) -> None:
+    if md_dialect is not None:
+        # md 转写：归档母本为 md 原文，按方言解析出同形元素契约。
+        # 会话标题以原始文件名为准（归档名是 payload-<sha>，不可当标题）
+        from . import md_transcript
+        _, elements = md_transcript.parse(
+            payload, original_name or payload.name)
+        for _el in elements:
+            if not (_el.get("name") or _el.get("title")):
+                _el["title"] = Path(original_name or payload.name).stem
+        for idx, element in enumerate(elements):
+            _consume_element(element, provider, batch_id, idx, stats,
+                             lease)
+        stats["conversations_total"] = len(elements)
+        return
     with open_element_stream(payload) as f:
         first, it = json_stream.peek_first_element(f)
         idx = 0
