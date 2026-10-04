@@ -216,10 +216,18 @@ def correct_source(principal_id: str, word_id: str,
                     "来源必须是现行 source_msg:<id> 身份（旧 raw 前缀"
                     "已退役）", code="INVALID_ARGUMENT")
             msg_id = new_ref[len("source_msg:"):]
-            if not conn.execute(
-                "SELECT 1 FROM source_messages WHERE id=? OR"
-                " provider_message_id=?", (msg_id, msg_id)).fetchone():
+            # MEM-01（2026-10-04 二批）：与写侧同一收紧——改绑的新
+            # 来源必须是当前已发布消息；未发布/不存在一律结构化拒绝，
+            # 旧绑定保留且不写纠错回执
+            _msg_row = conn.execute(
+                "SELECT published FROM source_messages WHERE id=? OR"
+                " provider_message_id=?", (msg_id, msg_id)).fetchone()
+            if _msg_row is None:
                 raise NotFound("source message not found", ref=new_ref)
+            if not _msg_row["published"]:
+                raise Forbidden(
+                    "改绑目标消息未发布——不得纠错写入未发布来源",
+                    code="INVALID_SOURCE_REF", got=new_ref)
         new_version = cur_version + 1
         cid = record_correction(
             conn, domain="word_source",

@@ -176,12 +176,36 @@ def _word_evidence(row, conn=None) -> list[dict]:
                 "", f"our_word:{wid}",
                 structured_value={"source_ref_state": _state})]
     if kind == "paraphrase":
-        return [evidence_mod.make_evidence(
+        out = [evidence_mod.make_evidence(
             "word_paraphrase", "our_words.text", text,
             f"our_word:{wid}", source_version=version)]
-    return [evidence_mod.make_evidence(
+        # RECALL-06（2026-10-04 二批）：来源解析缺口独立报告——不
+        # 只在 verbatim 分支处理，所有显式读取与证据构造都标 gap
+        if source_ref and not _source_ref_valid(conn, source_ref):
+            out.append(evidence_mod.make_evidence(
+                "structured_fact", "our_words.source_ref",
+                "", f"our_word:{wid}",
+                structured_value={
+                    "source_ref_state": (
+                        "legacy_raw_prefix"
+                        if isinstance(source_ref, str)
+                        and source_ref.startswith("raw_msg:")
+                        else "invalid_or_missing")}))
+        return out
+    out = [evidence_mod.make_evidence(
         "word_unverified", "our_words.text", text,
         f"our_word:{wid}", source_version=version)]
+    if source_ref and not _source_ref_valid(conn, source_ref):
+        out.append(evidence_mod.make_evidence(
+            "structured_fact", "our_words.source_ref",
+            "", f"our_word:{wid}",
+            structured_value={
+                "source_ref_state": (
+                    "legacy_raw_prefix"
+                    if isinstance(source_ref, str)
+                    and source_ref.startswith("raw_msg:")
+                    else "invalid_or_missing")}))
+    return out
 
 
 def words_search(conn, plan: dict, limit: int | None = None) -> dict:
@@ -235,20 +259,19 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
     # FTS MATCH 仍作召回下限（短语词法），排序与命中判定以 scoped
     # 评分为准（term 组内相邻+有序，HYBRID-04 同步 F17）。
     from . import scoped_bm25
+    # RECALL-05（2026-10-04 二批）：语料统计的候选宇宙 = 结构条件
+    # （owner/speaker/可见性等 scope）决定的**全池**——包括 scope 内
+    # 未命中词项的文档；FTS MATCH 不再作预筛（会把 corpus/IDF 缩成
+    # 命中子集，与 event 的全池口径不一致）。词法匹配由 scoped_bm25
+    # 的组内连续判定完成。
     pool_sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker,"
                 " w.text, w.expression_kind, w.source_ref,"
                 " w.source_binding_version, m.memory_date,"
                 " m.current_version_no"
                 " FROM memory_our_words w"
                 " JOIN memories m ON m.memory_id = w.memory_id")
-    if expr:
-        pool_sql += (" JOIN words_fts ON words_fts.word_id = w.word_id"
-                     " JOIN words_search_docs d ON d.word_id = w.word_id")
-        pool_sql += " WHERE words_fts MATCH ? AND " + " AND ".join(where)
-        pool_params = [expr] + params
-    else:
-        pool_sql += " WHERE " + " AND ".join(where)
-        pool_params = list(params)
+    pool_sql += " WHERE " + " AND ".join(where)
+    pool_params = list(params)
     pool = conn.execute(pool_sql, pool_params).fetchall()
 
     term_groups, phrase_groups = qp.plan_token_groups(plan)

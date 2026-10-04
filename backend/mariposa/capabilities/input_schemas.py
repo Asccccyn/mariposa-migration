@@ -424,8 +424,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {"snapshot_id": {"type": "string", "minLength": 1},
                        "cursor": {"type": "object"},
+                       # MEM-02（2026-10-04 二批）：枚举必须包含服务端
+                       # 实际签发的续取段——i / plan_content 游标否则
+                       # 被 schema 拒绝，续取承诺不可消费
                        "section": {"type": "string",
-                                   "enum": ["memory_days", "plans"]}},
+                                   "enum": ["memory_days", "plans", "i",
+                                            "plan_content"]}},
     },
     "memory.our_words.source.correct": {
         "type": "object",

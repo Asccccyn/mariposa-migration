@@ -38,10 +38,12 @@ class TestBurstRealCounting:
                                 "channels": ["event"],
                                 "lexical_terms": ["灯火"]}}, None)
         sid = p["data"]["data"]["recall_session_id"]
-        # 显式 continue 开新 burst（burst1 仅 1 轮）
+        # 显式 continue 开新 burst（burst1 仅 1 轮）——ref 用服务端
+        # 随 start 签发的接续引用（RECALL-02）
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
                              { "operation_id": "op-auto-test_c-5","session_id": sid,
-                              "continue_request_ref": "msg-1",
+                              "continue_request_ref": p["data"]["data"][
+                                  "continuation"]["continue_request_ref"],
                               "query_plan": {
                                   "original_request": "再查",
                                   "channels": ["event"],

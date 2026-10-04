@@ -1415,6 +1415,12 @@ CREATE TABLE recall_continue_refs(
 -- 拒绝理由必须能证明候选在哪一轮真实出站（内部 seen 不算）
 ALTER TABLE recall_receipts ADD COLUMN revision INTEGER;
 """),
+    (13, """
+
+-- RECALL-02（2026-10-04 二批）：continue_request_ref 改为服务端签发
+-- +绑定交付轮——签发（未消费）与消费态区分
+ALTER TABLE recall_continue_refs ADD COLUMN consumed_at TEXT;
+"""),
 ]
 
 

@@ -50,7 +50,15 @@ def health() -> dict:
 
 @app.get("/api/capabilities")
 def capabilities(request: Request):
-    principal = identity.authenticate(_bearer(request))
+    # ROOT-02（2026-10-04 二批）：缺 token/坏 token 是结构化 401
+    # UNAUTHENTICATED，不是 500——客户端据此识别需重新认证
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError as e:
+        return JSONResponse(
+            status_code=e.http_status,
+            content={"ok": False, "error": {"code": e.code,
+                                            "message": str(e)}})
     return {"ok": True, "data": registry.list_capabilities(principal)}
 
 

@@ -140,9 +140,12 @@ class TestBudget:
         assert p["status"] == "BUDGET_EXHAUSTED"
         assert p["degraded_reasons"] == ["budget_exhausted_no_new_burst"]
         assert p["revision"] == 4  # 条件修订仍生效（revision 推进）
-        # 显式携带真实用户继续请求引用 → 新 burst
+        # 显式携带服务端签发的接续引用 → 新 burst（RECALL-02：ref
+        # 随交付签发，不接受任意字符串）
         p = recall_service.refine(actors["jiaming"], {
-            "session_id": sid, "continue_request_ref": "msg_user_42",
+            "session_id": sid,
+            "continue_request_ref": p["continuation"][
+                "continue_request_ref"],
             "query_plan": {
                 "original_request": "用户说：不是九月是八月，再查一次",
                 "channels": ["event"], "lexical_terms": ["搬家"]}})
@@ -153,7 +156,8 @@ class TestBudget:
             try:
                 recall_service.refine(actors["jiaming"], {
                     "session_id": sid,
-                    "continue_request_ref": "msg_more",
+                    "continue_request_ref": p["continuation"][
+                        "continue_request_ref"],
                     "query_plan": {
                         "original_request": "再", "channels": ["event"],
                         "lexical_terms": ["搬家"]}})
@@ -251,8 +255,11 @@ class TestScopesAndTTL:
             "anchor_candidate_ref": anchor})
         assert nav["candidates"][0]["matched_fields"] == ["event_time"]
         # plan_time 轴对事件导航不可用：明确报错，不用入库时间冒充
+        _cont = nav if "continuation" in nav else p
         recall_service.refine(actors["jiaming"], {
-            "session_id": sid, "continue_request_ref": "m",
+            "session_id": sid,
+            "continue_request_ref": _cont["continuation"][
+                "continue_request_ref"],
             "query_plan": {"original_request": "再", "channels": ["event"],
                            "lexical_terms": ["搬家"],
                            "temporal_axis": "plan_time"}})

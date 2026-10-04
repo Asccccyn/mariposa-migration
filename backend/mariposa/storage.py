@@ -48,9 +48,12 @@ def _collect_object_references() -> tuple[list[str], list[str]]:
             if conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND"
                     " name='source_import_batches'").fetchone():
+                # SRC-05（2026-10-04 二批）：空字符串=尚无归档引用
+                #（格式错误导入会落 ''）——不收集，否则一次坏输入
+                # 永久污染后续所有备份的恢复校验
                 raw_paths = [r[0] for r in conn.execute(
                     "SELECT DISTINCT raw_path FROM source_import_batches"
-                    " WHERE raw_path IS NOT NULL")]
+                    " WHERE raw_path IS NOT NULL AND raw_path <> ''")]
             if conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND"
                     " name='media_objects'").fetchone():
@@ -113,6 +116,16 @@ def backup() -> dict:
             f"raw/orphan/{rp.name}"
         entry = _copy_object(rp, rel, dest_dir)
         if entry:
+            # SRC-03（2026-10-04 二批）：归档运行必需 manifest 一并
+            # 备份——只有 payload 没有 manifest 的恢复集不能重建
+            # 归档身份（校验依据 manifest 记录的精确 payload 路径）
+            mf = rp.parent / "manifest.json"
+            if mf.is_file():
+                rel_dir = str(Path(rel).parent)
+                mf_rel = (f"{rel_dir}/manifest.json"
+                          if rel_dir not in (".", "")
+                          else "manifest.json")
+                _copy_object(mf, mf_rel, dest_dir)
             manifest["raw_archives"].append(entry)
     manifest["media_objects"] = []
     for key in storage_keys:
@@ -247,6 +260,13 @@ def _verify_object_restore_set(bdir: Path, manifest: dict) -> list[dict]:
         if not p.is_file() or _sha256_file(p) != e.get("sha256"):
             problems.append({"object": e["rel"],
                              "issue": "raw_archive_bytes_mismatch"})
+            continue
+        # SRC-03：恢复集必须能重建归档运行——缺 manifest 的 payload
+        # 无法按记录的精确路径校验母本，不判完整
+        mf = p.parent / "manifest.json"
+        if not mf.is_file():
+            problems.append({"object": e["rel"],
+                             "issue": "raw_archive_manifest_missing"})
     for e in (manifest.get("media_objects") or []):
         p = bdir / e["rel"]
         if not p.is_file() or _sha256_file(p) != e.get("sha256"):
