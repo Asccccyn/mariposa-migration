@@ -170,12 +170,26 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   （`legacy_raw_prefix` / `invalid_or_missing`），**不作为有效
   provenance 污染删除硬门计数**。
 
-## 7. 未决业务项
+## 7. 出站瘦身（compact_v1，2026-10-04 五——review4 方案）
 
-- forgotten our_words recall：保持 `disabled`。原"PENDING_OWNER_
-  DECISION"所涉存量遗留表示已随 2026-10-04 测试数据清除归零
-  （见 §0 数据状态）——该问题当前无实例；若未来有真实数据进入，
-  是否允许话语跟随桶级遗忘状态检索再行拍板。
+- **纯展示投影层**（capabilities/compact.py）：业务操作、权限/开关/
+  版本/Judge 重校验全部完成后才投影；canonical 结果、operation 回执、
+  业务存储保留完整信息——精简包不写幂等回执、不喂检索/状态机。
+- **profile 协商**：请求带 `output_profile: "compact_v1"`（MCP 参数
+  或 HTTP query param），业务执行前剥离——不进 schema 校验/payload
+  哈希/request_ref 载荷；同 operation 切换 profile 重放同一业务结果
+  不重做。默认 legacy/full 不变。不支持的能力结构化拒绝。
+- **白名单式只删诊断**：Bootstrap 的固定 policy/state_hash/估算值/
+  当前页可推导 count；Recall 的 query_fingerprint/token_count/
+  coverage 内部统计（_ 前缀、lexical_scorer/stage_filter/event_pool/
+  judge_cache/dense_pending_vectors）/候选 scores/rrf_score/judge 的
+  model/prompt 版本；excerpt 仅与首个 evidence.snippet 逐值相同时删
+  （正文唯一完整副本在 evidence）。Source 检索同会话 ≥3 条时
+  provider/会话 id 页级上提（小列表保持原形）。
+- **不裁剪**：正文/证据链/ID/版本/receipt/budget/continuation/
+  snapshot/分页游标/gap/truncated/false-null 语义；安全信封逐页
+  保留。不做短键缩写/位置数组/正文改写/机械删 null。实测首包
+  Recall −32%、Bootstrap −40%（合成小样本）。
 
 ## 8. 读侧安全语义（2026-10-04 裁定）
 
@@ -261,6 +275,10 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
   lexical_terms 合同确认 + deletion 幂等 + Plan 分节；确立本文件为
   唯一正本入口与历史文件降级清单（§0/§10）；确认并清除全部
   合成测试数据（§0 数据状态，§7 未决项随之归零）。
+- 2026-10-04（五）：出站瘦身 compact_v1 落地（§7）——纯展示投影
+  层 + profile 协商（业务前剥离、同 operation 切换不重做）；md 对话
+  转写导入（§6）双方言落地；I 开窗最小化；深耦合拆分三批
+  （registry 传输幂等层/recall replay+round2/bootstrap pages）。
 - 2026-10-04（二）：按周家明对 Codex 22 条审计的复核修正合同措辞
   ——request_ref 幂等=同一 operation/result identity 而非原样重放
   旧正文（出站仍按当前权限/开关/Judge 重校验，与 RECALL-03 不再
@@ -269,3 +287,10 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
   合同=可验证绑定最新已交付可续 revision（实现不作规定）；
   bootstrap.next 页级安全语义等价（形状不统一）；migration.py
   定位为离线维护工具（P3/deferred）。材料见 docs/audit_20261004/。
+
+## 13. 未决业务项
+
+- forgotten our_words recall：保持 `disabled`。原"PENDING_OWNER_
+  DECISION"所涉存量遗留表示已随 2026-10-04 测试数据清除归零
+  （见 §0 数据状态）——该问题当前无实例；若未来有真实数据进入，
+  是否允许话语跟随桶级遗忘状态检索再行拍板。

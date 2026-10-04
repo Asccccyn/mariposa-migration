@@ -81,6 +81,11 @@ async def invoke(name: str, request: Request):
             status_code=e.http_status,
             content={"ok": False, "error": {"code": e.code,
                                             "message": str(e)}})
+    # compact_v1 输出 profile（JSON 瘦身 2026-10-04 五）：HTTP 以
+    # query param 协商（与 MCP arguments 内参数同语义，出站前剥离）
+    _prof = request.query_params.get("output_profile")
+    if _prof:
+        body = {**body, "output_profile": _prof}
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
     try:
         result = registry.invoke(principal, name, body.get("arguments", {}), idem)
