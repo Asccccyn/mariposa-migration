@@ -7,16 +7,18 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import claude
+from . import claude, gemini
 
 #: provider -> detect(element) -> bool（按注册顺序探测）
 _ADAPTERS: dict[str, Callable[[Any], bool]] = {
     claude.PROVIDER: claude.detect,
+    gemini.PROVIDER: gemini.detect,
 }
 
 #: provider -> 模块（normalize_* / synthetic_* / speaker_of）
 _MODULES: dict[str, Any] = {
     claude.PROVIDER: claude,
+    gemini.PROVIDER: gemini,
 }
 
 

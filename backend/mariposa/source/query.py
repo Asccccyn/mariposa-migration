@@ -13,6 +13,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo("Asia/Shanghai")
 
 from .. import config, db
 from ..errors import Forbidden, NotFound
@@ -799,11 +803,12 @@ def _conv_summary(conv) -> dict:
     out = {"id": conv["id"], "provider": conv["provider"],
            "provider_conversation_id": conv["provider_conversation_id"],
            "title": conv["title"] or "(未命名对话)",
-           "created_at": conv["created_at"], "updated_at": conv["updated_at"],
+           "created_at": _fmt_min(conv["created_at"]),
+           "updated_at": _fmt_min(conv["updated_at"]),
            "message_count": conv["message_count"]}
     if "first_message_at" in conv.keys():
-        out["first_message_at"] = conv["first_message_at"]
-        out["last_message_at"] = conv["last_message_at"]
+        out["first_message_at"] = _fmt_min(conv["first_message_at"])
+        out["last_message_at"] = _fmt_min(conv["last_message_at"])
     return out
 
 
@@ -862,6 +867,24 @@ def _slice_content_json(content_json: str | None, s_off, e_off) -> str | None:
     return json.dumps(out_blocks, ensure_ascii=False)
 
 
+
+def _fmt_min(value) -> str | None:
+    """出站时间口径（裁定 2026-10-04 四）：只到分钟、按上海显示。
+
+    存储仍是完整 UTC ISO；出站统一 年-月-日 时:分——秒/毫秒/Z
+    不给模型侧，省 token 且消除时区误读。
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_TZ).strftime("%Y-%m-%d %H:%M")
+
+
 def _serialize(row, *, keyword: str = "", include_content: bool = False,
                char_offsets=None, is_start=False, is_end=False,
                slice_offsets=None, matched_by: str | None = None,
@@ -884,8 +907,8 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "normalized_sender": row["normalized_sender"],
         "speaker": row["speaker"],
         "speaker_display": SPEAKER_DISPLAY.get(row["speaker"]),
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+        "created_at": _fmt_min(row["created_at"]),
+        "updated_at": _fmt_min(row["updated_at"]),
         "occurred_date": row["occurred_date"],
         "text": text,
         "excerpt": "",
