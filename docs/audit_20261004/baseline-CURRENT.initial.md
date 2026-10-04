@@ -13,12 +13,6 @@
   冲突时，以本文件为准并按缺陷处理。
 - 只字未在仓库落档的口头/会话裁定，已在 2026-10-04 全部收编进本
   文件（§4/§5/§6/§8/§9）。此后新裁定必须先落本文件再动代码。
-- **数据状态（2026-10-04 乔生确认）**：mariposa 至今没有真实
-  用户数据——她从未提供过任何真实原文；本机曾存在的
-  `~/Data/live-20260925/mariposa-runtime`（51 条等）全部是各轮
-  测试/审计写入的合成数据，已整体删除。审计与实现不得把库内
-  拟真内容当真实数据处理；正式数据根当前为空，一切库内容均为
-  隔离测试根随跑随删。
 - 现行验收映射：`docs/memory_runtime/ACCEPTANCE.json`（v1.7，
   requirement → 当前 nodeid → 状态；`NOT_RUN_REAL_MODEL` 如实标注）。
   v1.4 历史证据在 `ACCEPTANCE_v1.4_history.json`，不参与当前验收。
@@ -79,27 +73,17 @@
   §6.5 升级 raw 深搜。已知 `source_ref` 的定点展开是证据读取，不是
   检索 round，不需 Jev 重判。
 - **request_ref / continue_request_ref / 预算（2026-10-04 裁定）**：
-  - `request_ref` = 一次具体请求的幂等身份。幂等键 = **主体 +
-    capability/action（如 recall.start / recall.refine）+
-    request_ref**——`operation_id` 只是 transport/operation 回执
-    身份，`session_id` 只是路由参数，**二者都不得改变 request_ref
-    所定义的逻辑请求身份**（改变任一不能绕开冲突检测）。
-  - payload 相同 → 重放**同一已完成 operation/result identity**：
-    不重复业务执行、不新建 session、不重复消费预算、不产生第二份
-    逻辑结果；**实际出站内容仍按当前权限、开关、版本与 Judge 状态
-    重新校验**——Judge 已关闭时返回同一 operation 的
-    unavailable/空正文，不重新释放旧正文。payload 不同 →
+  - `request_ref` = 一次具体请求的幂等身份。同主体、同操作、同
+    request_ref：payload 相同 → 重放第一次已完成的结果（start 回原
+    session，**不新建 session、不重新领预算**）；payload 不同 →
     `REF_REUSE_MISMATCH`。未显式给 `operation_id` 时由 request_ref
     派生幂等键（schema 二选一）。
   - `continue_request_ref` 只表示"接着哪一个已交付的 revision 往下
-    走"，**不承担幂等身份**。session 是线性状态机不支持分叉。合同
-    要求：**服务端必须验证 continue_request_ref 与当前 session 最新
-    已交付且可继续 revision 的绑定关系**——已过时的 ref、从未签发
-    过的任意字符串都不能授予 burst；同一 continuation 不得重复领
-    burst；同 request_ref 网络重试走幂等重放，不二次消费。具体
-    token/映射/签名实现（ref→revision 表、continuation receipt 等）
-    **不作合同规定**。（现行实现参考：burst 授予与 ref 消费同事务
-    `recall_continue_refs`，runtime 迁移 11。）
+    走"，**不承担幂等身份**。session 是线性状态机不支持分叉：refine
+    必须引用当前最新仍可继续的 revision；每次成功 refine 的 burst
+    授予与 ref 消费同事务（`recall_continue_refs`，runtime 迁移 11）
+    ——旧 ref 再申领判 stale；同 request_ref 网络重试走幂等重放，
+    不二次消费。
   - 预算 = session 内成功轮次派生 COUNT，事务提交前重数；客户端
     ref 不发放额度。
   - 三者不混用：request_ref 管"是不是同一次调用"，continue_ref 管
@@ -154,10 +138,8 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
 
 ## 7. 未决业务项
 
-- forgotten our_words recall：保持 `disabled`。原"PENDING_OWNER_
-  DECISION"所涉存量遗留表示已随 2026-10-04 测试数据清除归零
-  （见 §0 数据状态）——该问题当前无实例；若未来有真实数据进入，
-  是否允许话语跟随桶级遗忘状态检索再行拍板。
+- forgotten our_words recall：保持 `disabled / PENDING_OWNER_DECISION`
+  （删除链退役后仅影响存量遗留表示，等乔生拍板）。
 
 ## 8. 读侧安全语义（2026-10-04 裁定）
 
@@ -174,10 +156,6 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   none`）、legacy 缺口不伪装完整、不绕开 content-role/injection
   safety。I 与 Plan 长正文分节续取（`next_page` 的 `i` /
   `plan_content` 段）；mood 不是长内容载体不分节。
-- **Bootstrap 续页（`bootstrap.next`）与首页同权**：每一页进入
-  模型上下文边界时都必须能明确证明该页内容是 memory/data 且无
-  instruction authority——页级 envelope 或统一 ContextAssembler
-  包装均可；**不要求逐项复制 Recall 字段或 JSON 形状统一**。
 
 ## 9. 删除与破坏性幂等（2026-10-04 裁定）
 
@@ -203,10 +181,6 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
 | 2026-10-03 审计与修复 | `docs/audit_20261003/`（REPORT/RESULTS/REMEDIATION） |
 | 现行验收 | `docs/memory_runtime/ACCEPTANCE.json`（v1.7） |
 | 存储/备份恢复集 | 本文件 §6 + `storage.py`（库+被引用母本+媒体对象） |
-
-离线迁移工具 `migration.py` 属**维护工具链，非现行运行时主链**：
-其缺陷按 P3/deferred 处置（2026-10-04 裁定）；当前无真实存量数据，
-不影响正式运行，正式启用该工具迁移数据前再行提升优先级。
 
 **其余一切语义类文档均为历史/考古**（含但不限于：
 `docs/memory_runtime/BASELINE.md`、`PATH_MAP.md`、`EVALUATION.md`、
@@ -234,13 +208,4 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 - 2026-10-04：收编五项裁定（request_ref 幂等/线性接续、provenance
   收紧、delivery 定义、words scoped BM25、读侧安全语义等价）+
   lexical_terms 合同确认 + deletion 幂等 + Plan 分节；确立本文件为
-  唯一正本入口与历史文件降级清单（§0/§10）；确认并清除全部
-  合成测试数据（§0 数据状态，§7 未决项随之归零）。
-- 2026-10-04（二）：按周家明对 Codex 22 条审计的复核修正合同措辞
-  ——request_ref 幂等=同一 operation/result identity 而非原样重放
-  旧正文（出站仍按当前权限/开关/Judge 重校验，与 RECALL-03 不再
-  表面冲突）；幂等键明确为主体+capability/action+request_ref
-  （operation_id/session_id 不改逻辑身份）；continue_request_ref
-  合同=可验证绑定最新已交付可续 revision（实现不作规定）；
-  bootstrap.next 页级安全语义等价（形状不统一）；migration.py
-  定位为离线维护工具（P3/deferred）。材料见 docs/audit_20261004/。
+  唯一正本入口与历史文件降级清单（§0/§10）。

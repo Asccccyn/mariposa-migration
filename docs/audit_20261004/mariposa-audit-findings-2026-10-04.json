@@ -1,0 +1,532 @@
+{
+  "date": "2026-10-04",
+  "baseline": {
+    "source": "/Users/zhoujiaming/Projects/mariposa",
+    "snapshot": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/snapshot",
+    "head": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50",
+    "status": " M docs/memory_runtime/BASELINE.md\n M docs/memory_runtime/CURRENT.md\n M docs/memory_runtime/EVALUATION.md\n M docs/memory_runtime/PATH_MAP.md\n",
+    "files": 339,
+    "remote_main_verified": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50",
+    "remote_head_verified": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50",
+    "semantic_entry": "docs/memory_runtime/CURRENT.md（含2026-10-04数据状态更新）",
+    "current_sha256": "0d4a50fb2e202574e2b9e6d3d029d99a14224dc279713a693925b079d69b5c8f"
+  },
+  "severity_counts": {
+    "P1": 2,
+    "P2": 19,
+    "P3": 1
+  },
+  "existing_tests": {
+    "files": 91,
+    "cases": {
+      "passed": 888,
+      "skipped": 1
+    },
+    "max_sampled_tree_rss_bytes": 98353152,
+    "batch_seconds": 79.58,
+    "excluded": [
+      "tests/acceptance/test_gate_cases.py::TestRET (2)",
+      "tests/integration/test_dense_real_model_smoke.py::TestRealModelWarmupAndSmoke (3)"
+    ],
+    "skipped": [
+      "tests/unit/test_source_layer.py::TestRealExportOptional::test_real_export_readonly"
+    ],
+    "environment_only_initial_errors": [
+      "pytest basetemp parent not created",
+      "snapshot .venv link missing"
+    ]
+  },
+  "findings": [
+    {
+      "id": "RECALL-01",
+      "title": "request_ref 幂等身份可被 operation_id 或 session_id 绕开",
+      "severity": "P1",
+      "file": "backend/mariposa/capabilities/registry.py",
+      "lines": [
+        787,
+        802
+      ],
+      "contract": "CURRENT.md §4：同主体、同操作、同 request_ref，异 payload 必须 REF_REUSE_MISMATCH；start 不新建 session、不重新领预算。",
+      "repro": [
+        "test_explicit_operation_id_cannot_replace_request_identity",
+        "test_refine_request_ref_cannot_be_reused_across_sessions"
+      ],
+      "actual": "同一个 request_ref 连续 start，仅把 operation_id 从 transport-a 改为 transport-b，成功创建两个不同 session（数据库 COUNT=2）；同一个 refine request_ref 用于另一个 session（payload 不同）也成功。显式 operation_id 时没有保存/检查 request_ref 绑定；派生键又包含 session_id。",
+      "expected": "以 principal + operation + request_ref 独立约束其第一次请求载荷；改变 operation_id 或 session_id 不能避开 REF_REUSE_MISMATCH。",
+      "evidence": [
+        "evidence/recall/test_explicit_operation_id_cannot_replace_request_identity.txt",
+        "evidence/recall/test_refine_request_ref_cannot_be_reused_across_sessions.txt"
+      ],
+      "audit_id": "F01",
+      "snapshot_sha256": "ffd6e55624dd985a518717c1f26c8c5d3a3dc44ef29b96e68830e78e30c8418b"
+    },
+    {
+      "id": "RECALL-03",
+      "title": "关闭 Judge 后 operation replay 仍交付正文",
+      "severity": "P1",
+      "file": "backend/mariposa/recall/service.py",
+      "lines": [
+        1472,
+        1490
+      ],
+      "contract": "CURRENT.md §4：recall/words/raw/judge 开关对 fresh、continuation、operation replay 无例外同权生效。",
+      "repro": [
+        "test_judge_disabled_blocks_operation_replay"
+      ],
+      "actual": "先用本地 fake Judge 完成并交付事件卡，再切 RECALL_JUDGE_PROVIDER=disabled。fresh 请求 candidates=[]，重放原 request_ref 却仍交付同一正文卡和旧 evaluated coverage。revalidate_replayed 仅检查 recall/words/raw，遗漏当前 Judge。",
+      "expected": "当前 Judge 关闭时旧 operation 也不释放正文（拒绝或结构化 unavailable 空正文）；不能继续标当前可用。",
+      "evidence": [
+        "evidence/recall/test_judge_disabled_blocks_operation_replay.txt"
+      ],
+      "audit_id": "F02",
+      "snapshot_sha256": "744afaa6777f32dc7728bd47532e557c6c40f5db11380be8fe3a3e2aeff17444"
+    },
+    {
+      "id": "RECALL-02",
+      "title": "continue_request_ref 只去重，没有验证所指 revision 是否为最新交付",
+      "severity": "P2",
+      "file": "backend/mariposa/recall/store.py",
+      "lines": [
+        409,
+        414
+      ],
+      "contract": "CURRENT.md §4：continue_request_ref 指向已交付 revision；refine 必须引用当前最新仍可继续的 revision，旧 ref 再申领判 stale。",
+      "repro": [
+        "test_old_unconsumed_continue_ref_cannot_grant_burst"
+      ],
+      "actual": "start 交付 rev1，普通 refine 交付 rev2 后，携带 rev1 的 request_ref 作为 continue_request_ref 仍成功创建 rev3 并授予下一 burst。消费表把输入字符串直接登记到当前 from_revision=2，没有查其实际引用 rev1。也验证过从未签发/交付的任意字符串能授予 burst。",
+      "expected": "先解析服务端已交付 ref→revision 绑定，只有最新可继续 revision 的 ref 能授予 burst；未签发及未消费但已过时的 ref 均应拒绝。",
+      "evidence": [
+        "evidence/recall/test_old_unconsumed_continue_ref_cannot_grant_burst.txt"
+      ],
+      "audit_id": "F03",
+      "snapshot_sha256": "cbdc82460f6649393203f3a2c9765072e086ca496a25ca0dd202d30914de5db3"
+    },
+    {
+      "id": "RECALL-04",
+      "title": "Round2 实际交付的原文没有出站回执",
+      "severity": "P2",
+      "file": "backend/mariposa/recall/service.py",
+      "lines": [
+        2119,
+        2135
+      ],
+      "contract": "CURRENT.md §4：真实进入模型出站包的候选应有 recall_receipts 且绑定 revision；不限制当前 revision，前轮真实交付的候选可支持 EXPLICIT_REJECT_AFTER_DELIVERY。",
+      "repro": [
+        "test_round2_delivery_has_receipt_and_supports_rejection"
+      ],
+      "actual": "走真实 start(words paraphrase)→source 导入→round2（获 source_excerpt 许可的本地 TypeSafe fake），raw 卡真实出站；最终事务只 upsert candidates/round/attempt，无 add_receipts。公开 reject 此 source_msg 后，_reason_fact_supported(EXPLICIT_REJECT_AFTER_DELIVERY) 返回 false，DB 无该 source_msg 的交付回执。",
+      "expected": "Round2 首页和续页都在最终事务内为最终实际出站卡保存带 revision 的交付回执；之后拒绝应有事实依据。",
+      "evidence": [
+        "evidence/recall/test_round2_delivery_has_receipt_and_supports_rejection.txt"
+      ],
+      "audit_id": "F04",
+      "snapshot_sha256": "744afaa6777f32dc7728bd47532e557c6c40f5db11380be8fe3a3e2aeff17444"
+    },
+    {
+      "id": "RECALL-05",
+      "title": "words BM25 在词法命中后才统计语料，与 scope 全池评分不一致",
+      "severity": "P2",
+      "file": "backend/mariposa/retrieval/words.py",
+      "lines": [
+        244,
+        262
+      ],
+      "contract": "CURRENT.md §4：event/words 都用 scoped_bm25 池内评分；scoped_bm25.py:3-17 明确 N/df/avgdl 来自授权+阶段过滤后的文档集合；event 主线 pipeline.py:322-340 确实先取 scope 内全部字段文档再评分。",
+      "repro": [
+        "test_words_bm25_uses_all_docs_in_allowed_scope"
+      ],
+      "actual": "words 的 pool SQL 先 WHERE words_fts MATCH，再把该命中子集交给 scoped_bm25；scope 内未命中文档不参与 N/df/avgdl。最小同 scope 三篇：alpha；beta×3+padding×17；padding×1000。查询 alpha OR beta，实际 alpha 第一；同仓库 scoped_bm25 对完整合法池计算 beta 第一。",
+      "expected": "用 owner/speaker/可见性等结构条件确定 corpus statistics 的候选宇宙（包括 scope 内未命中词项的文档），再进行词法匹配、评分与 Top-K；与 event 口径一致。",
+      "evidence": [
+        "evidence/recall/test_words_bm25_uses_all_docs_in_allowed_scope.txt",
+        "evidence/recall/test_words_outside_speaker_scope_do_not_change_rank.txt"
+      ],
+      "audit_id": "F05",
+      "snapshot_sha256": "56b37e97aac3eda38f83cedc3b8266fdd32de06d3b8d40f02a6469dced4d908c"
+    },
+    {
+      "id": "RECALL-06",
+      "title": "legacy 来源缺口只在部分 words 读路显示",
+      "severity": "P2",
+      "file": "backend/mariposa/memory/our_words.py",
+      "lines": [
+        114,
+        119
+      ],
+      "related_locations": [
+        {
+          "file": "backend/mariposa/retrieval/words.py",
+          "lines": [
+            178,
+            184
+          ]
+        }
+      ],
+      "contract": "CURRENT.md §6：legacy 无法解析来源读侧标 legacy_raw_prefix / invalid_or_missing；§8:146-149 安全语义统一，序列化可不同。",
+      "repro": [
+        "test_legacy_source_gap_is_present_on_words_list",
+        "test_legacy_source_gap_is_present_on_words_get[paraphrase]",
+        "test_legacy_source_gap_is_present_on_words_get[unspecified]"
+      ],
+      "actual": "为合法桶植入存量 raw_msg:unresolvable 话语记录。memory.our_words.list 原样返回 expression_kind=verbatim/source_ref，完全无来源缺口；memory.words.get 对 verbatim 正确标 legacy_raw_prefix，但 paraphrase/unspecified 无标记（_word_evidence 在这两个分支跳过来源校验）。",
+      "expected": "所有显式读取和 Recall 证据构造均独立报告已知来源的解析缺口，不能仅在 verbatim 分支处理。正文角色/无指令权限包装已存在且无问题。",
+      "evidence": [
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_list.txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[verbatim].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[paraphrase].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[unspecified].txt"
+      ],
+      "audit_id": "F06",
+      "snapshot_sha256": "4c762fd2c4c5ed2e2e2167ee78fd14f5e4c6021e939828484b009a2017f796c2"
+    },
+    {
+      "id": "MEM-01",
+      "title": "来源纠错入口仍可写入未发布 source message",
+      "severity": "P2",
+      "file": "backend/mariposa/memory/our_words.py",
+      "lines": [
+        219,
+        222
+      ],
+      "contract": "CURRENT §6 provenance 收紧：source_msg:<id> 必须真实存在且已发布；新写零 dangling。",
+      "repro": "合成导入一条 Source 消息，将其设为 unpublished；创建没有来源的 our_words；公开 Registry memory.our_words.source.correct 使用 replace_wrong_binding 将它指向这条消息。",
+      "actual": "公开调用 ok=true，source_ref 被正式写入且 source_binding_version=1。correct_source 查询只查 ID/provider_message_id，没有 published=1，绕过 hold/append 的同类门禁。",
+      "expected": "以结构化 INVALID_SOURCE_REF/等价错误拒绝未发布来源，保留旧绑定且不写纠错回执。",
+      "evidence": [
+        "evidence/memory/probe-05.txt"
+      ],
+      "test_node": "test_source_correction_rejects_unpublished_messages",
+      "audit_id": "F07",
+      "snapshot_sha256": "4c762fd2c4c5ed2e2e2167ee78fd14f5e4c6021e939828484b009a2017f796c2"
+    },
+    {
+      "id": "MEM-02",
+      "title": "Bootstrap 签发的 I/Plan 正文续取游标被公开 schema 拒绝",
+      "severity": "P2",
+      "file": "backend/mariposa/capabilities/input_schemas.py",
+      "lines": [
+        425,
+        428
+      ],
+      "contract": "CURRENT §8：I 与 Plan 长正文通过 next_page 的 i/plan_content 段续取。",
+      "repro": "分别写入 5,000 字 I 和 active Plan；公开 bootstrap.get 获取 i.next_cursor 与 plans.items[0].content_next_cursor；分别通过公开 bootstrap.next 传 section=i / plan_content。",
+      "actual": "两次都在 input_schemas.validate 抛 SCHEMA_VIOLATION，handler 尚未执行。schema 枚举仍只有 memory_days/plans，服务层实现的新分节不可通过 HTTP/MCP 共用 Registry 调用。",
+      "expected": "公开 schema 接受 i 和 plan_content，让服务端签发的续取游标可消费并取回余下正文。",
+      "evidence": [
+        "evidence/memory/probe-01.txt",
+        "evidence/memory/probe-02.txt"
+      ],
+      "test_node": "test_public_bootstrap_long_content_cursor_is_consumable[i|plan_content]",
+      "audit_id": "F08",
+      "snapshot_sha256": "d0b6b80522672b098f4d2a52a376c907f9d216aa69b0d9a96f4e52106dc4a28e"
+    },
+    {
+      "id": "MEM-03",
+      "title": "Bootstrap 的 I.items 重复携带未分节的完整长正文",
+      "severity": "P2",
+      "file": "backend/mariposa/bootstrap/service.py",
+      "lines": [
+        294,
+        296
+      ],
+      "contract": "CURRENT §8：I 长正文分节续取；实现 BOOT_I_SECTION_CHARS=2000 及预算检测不能被同包另一字段绕过。",
+      "repro": "通过 I 正式接口创建 50,000 字当前条目，调用 bootstrap.get，统计 i.content 与 i.items[*].content。",
+      "actual": "i.content 截为2,000字，但 i.items[0].content 仍含全部50,000字；默认包总计52,000字 I 正文，estimated_tokens=1333 且无预算警告，因为 _estimate_budget 只计顶层 i.content。",
+      "expected": "默认包只带当前分节正文，items 仅保留条目/历史指针元数据或同样分页；实际出站内容应计入预算。",
+      "evidence": [
+        "evidence/memory/probe-03.txt"
+      ],
+      "test_node": "test_bootstrap_i_paging_does_not_inline_the_unsent_tail",
+      "audit_id": "F09",
+      "snapshot_sha256": "469ede1c9a144cc31aff4397f11d39ce4876ad658a88f573af6fc59c1ae7fa81"
+    },
+    {
+      "id": "MEM-04",
+      "title": "Plan 列表续页绕过长正文分节",
+      "severity": "P2",
+      "file": "backend/mariposa/bootstrap/service.py",
+      "lines": [
+        464,
+        473
+      ],
+      "contract": "CURRENT §8：Plan 长正文分节续取，不仅第一页如此。",
+      "repro": "按原始 BOOT_SECTION_LIMIT=50 创建51个 active Plans，最早的Plan含50,000字正文；bootstrap.get 后用其 plans.next_cursor 调公开 bootstrap.next(section=plans)。",
+      "actual": "第二页完整输出50,000字 Plan，没有 content_truncated、content_next_cursor 或预算提示。首包的截断逻辑未复用到 next_page 的 plans 分支。",
+      "expected": "每个 Plan 列表页都应用相同的2,000字正文分节，后续正文给 plan_content 游标。",
+      "evidence": [
+        "evidence/memory/probe-04.txt"
+      ],
+      "test_node": "test_bootstrap_plans_second_page_preserves_content_sections",
+      "audit_id": "F10",
+      "snapshot_sha256": "469ede1c9a144cc31aff4397f11d39ce4876ad658a88f573af6fc59c1ae7fa81"
+    },
+    {
+      "id": "MEM-05",
+      "title": "四个已具领域回执的纠错/删除入口遗漏 transport 崩溃恢复",
+      "severity": "P2",
+      "file": "backend/mariposa/capabilities/registry.py",
+      "lines": [
+        488,
+        490
+      ],
+      "contract": "CURRENT §9：纠错 atomic_write transport 崩溃窗口以领域回执恢复；deletion decide/直删重试恢复同一个最终操作。",
+      "repro": "分别公开调用 memory.our_words.source.correct、plan.memory.correct、memory.delete、memory.deletion.decide，同时传 operation_id 与 transport key；确认 op:<operation_id> completed 后模拟仅外层回执未提交的 crash（外层 stale running/result_ref=NULL），重试同一公开请求。",
+      "actual": "四个入口均抛 OUTCOME_UNKNOWN；_DOMAIN_IDEMPOTENT_CAPS 仅包含另外三种纠错，当前四个入口没有读取已有 completed 领域证据。",
+      "expected": "补写外层 completed 并返回第一次完成结果，业务不重复执行；没有领域记录时也应按相应领域合同允许安全重试。",
+      "evidence": [
+        "evidence/memory/probe-06.txt",
+        "evidence/memory/probe-07.txt",
+        "evidence/memory/probe-08.txt",
+        "evidence/memory/probe-09.txt"
+      ],
+      "test_node": "test_domain_completed_receipt_recovers_transport_crash[four capabilities]",
+      "repair_note": "decide 确实使用 op: 前缀，但 result_ref 只有 request_id（deletion/service.py:344-347），须 rehydrate 最终结果，不能只扩大通用白名单。",
+      "audit_id": "F11",
+      "snapshot_sha256": "ffd6e55624dd985a518717c1f26c8c5d3a3dc44ef29b96e68830e78e30c8418b"
+    },
+    {
+      "id": "MEM-06",
+      "title": "Bootstrap 续页丢失内容身份与无指令权限标记",
+      "severity": "P2",
+      "file": "backend/mariposa/bootstrap/service.py",
+      "lines": [
+        470,
+        473
+      ],
+      "contract": "CURRENT §8：Bootstrap 内容进入模型上下文必须保持 data/memory 身份，顶层 content_role=bootstrap_memory_package / instruction_authority=none，不绕过 content-role/injection safety。",
+      "repro": "写入包含指令样式文字的 active Plan，bootstrap.get 后通过公开 bootstrap.next(section=plans) 读取其页面。",
+      "actual": "首包有两个安全字段，但 bootstrap.next 返回裸 Plan title/content；页顶层和条目都没有 content_role / instruction_authority。memory_days/i/plan_content 分支也直接返回无包装数据。",
+      "expected": "所有 bootstrap.next 出站页面携带相同的无指令权限/data identity 语义，正文继续作为 memory data。",
+      "evidence": [
+        "evidence/memory/probe-10.txt"
+      ],
+      "test_node": "test_bootstrap_next_retains_memory_data_authority",
+      "audit_id": "F12",
+      "snapshot_sha256": "469ede1c9a144cc31aff4397f11d39ce4876ad658a88f573af6fc59c1ae7fa81"
+    },
+    {
+      "id": "MEM-07",
+      "title": "崩溃恢复未校验领域 payload，可能把另一项纠错当作本请求完成",
+      "severity": "P2",
+      "file": "backend/mariposa/capabilities/registry.py",
+      "lines": [
+        506,
+        512
+      ],
+      "contract": "CURRENT §9 的同一最终操作恢复；现行 atomic_write 同 operation_key 同 payload 重放、异 payload 冲突，恢复路径不得绕过此合同。",
+      "repro": "为删除关系A的请求留下 stale transport claim（领域尚未执行）；另一请求用同 operation_id 删除关系B并完成领域回执；再通过公开 Registry 重试A原header/body。",
+      "actual": "恢复仅以 op:<operation_id> 查 status/result_ref，不读或比较 payload_hash；请求A返回 ok=true/idempotent_replay=true，但 removed_relation_id 为B，A仍存在；B结果还被永久写入A外层completed回执。",
+      "expected": "比较领域归一化 payload 身份，异payload抛 IDEMPOTENCY_CONFLICT，不把B结果缓存为A成功。",
+      "evidence": [
+        "evidence/memory/probe-12.txt"
+      ],
+      "test_node": "test_transport_recovery_does_not_replay_different_domain_payload",
+      "audit_id": "F13",
+      "snapshot_sha256": "ffd6e55624dd985a518717c1f26c8c5d3a3dc44ef29b96e68830e78e30c8418b"
+    },
+    {
+      "id": "SRC-01",
+      "title": "跨快照 sequence 冲突使已验证的原文 parent 区间丢失中间消息",
+      "severity": "P2",
+      "file": "backend/mariposa/source/query.py",
+      "lines": [
+        196,
+        202
+      ],
+      "contract": "CURRENT §6 parent 路径校验；SOURCE_LAYER_FIX_REPORT_v1.1 §3 SL-06 同 parent 路径，SL-07 sequence 仅在快照内解释；range 应返回已验证的连续 parent 路径。",
+      "repro": "先成功导入同会话 [a, padding1, padding2, b(parent=a)]，再成功导入完整新快照 [a, b(parent=a), c(parent=b)]；调用 source.range.open(a,c)。a/b 内容与 parent 不变，仅快照 sequence 变化。",
+      "actual": "validate_range 找到 a→b→c；但 open_range 按 source_messages 首见 sequence 取 [a.seq=0,c.seq=2]，b.seq=3 被排除；messages 仅 [a,c]，无缺口提示。",
+      "expected": "读取完整的已验证 parent 路径 [a,b,c]，按路径/指定快照决定顺序，不以跨快照首见 sequence 截掉成员。",
+      "evidence": [
+        "evidence/source/probe-open_range_preserves_all_parent_path_nodes_across_snapshots.log"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/test_source_new_findings.py::test_open_range_preserves_all_parent_path_nodes_across_snapshots",
+      "audit_id": "F14",
+      "snapshot_sha256": "17d0ed2277973c0b16e8792228db3ca4d23480882166b0fc56fa486e5bf3a080"
+    },
+    {
+      "id": "SRC-02",
+      "title": "合法无时区 Source 时间戳使 time.since 抛出 TypeError",
+      "severity": "P2",
+      "file": "backend/mariposa/time_context/service.py",
+      "lines": [
+        109,
+        113
+      ],
+      "contract": "SOURCE_LAYER_REPORT_20260927 §8（v1.1叠加后仍现行）：created_at 保留 provider 原字符串、无时区按 UTC；现行 time_context._parse_instant 同样接受 naive 并按 UTC。",
+      "repro": "成功导入 human 消息 created_at=\"2026-09-28T10:00:00\"；time.context 正常返回它为最近已发布用户消息，再调用 time.since。",
+      "actual": "since 用 datetime.fromisoformat 产生 naive datetime，与 aware _now() 相减，抛 TypeError: cannot subtract offset-naive and offset-aware datetimes。",
+      "expected": "使用与 context/Source 相同的 UTC 归一规则，返回 since_last_contact 数值。",
+      "evidence": [
+        "evidence/source/probe-time_since_accepts_imported_naive_timestamp.log"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/test_source_new_findings.py::test_time_since_accepts_imported_naive_timestamp",
+      "audit_id": "F15",
+      "snapshot_sha256": "c7e177ba41a76ad712b1b3a32ac2ac690669c6ad4fcbfd1bf072ea0ccf2f8314"
+    },
+    {
+      "id": "SRC-03",
+      "title": "备份漏掉 Raw Archive manifest，却宣称恢复集验证通过",
+      "severity": "P2",
+      "file": "backend/mariposa/storage.py",
+      "lines": [
+        109,
+        116
+      ],
+      "contract": "CURRENT §6/§10 恢复集含被引用 Raw 母本；SOURCE_LAYER_REPORT_20260927 §5 与 v1.1 SL-02/§3 要求 Raw Archive 的 manifest 提供精确 payload 路径及身份；archive.verify_archived 必须据此校验。",
+      "repro": "成功导入合成 Source 并确认 archive.verify_archived ok；执行 backup 与 restore_verify 均成功。将 SOURCE_RAW_DIR 指向备份里的 raw 恢复集，再调用同批次 archive.verify_archived。",
+      "actual": "备份只包含 raw/claude/<batch>/payload-...，缺 manifest.json（也无 metadata.json）；restore_verify ok=true，但恢复集上的 archive.verify_archived 为 {ok:false,issue:SOURCE_ARCHIVE_MISSING}。",
+      "expected": "复制归档运行必需的 manifest 并验证其 payload 关系，或提供并验证等价重建流程；verify 不应对缺必要归档元数据的恢复集判完整。",
+      "evidence": [
+        "evidence/source/probe-backup_contains_raw_archive_manifest_needed_to_verify.log"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/test_source_new_findings.py::test_backup_contains_raw_archive_manifest_needed_to_verify",
+      "audit_id": "F16",
+      "snapshot_sha256": "a738aa82d0f97f19f060b27d63c9a1f925d9b4b99c2598d9194b446b4f4bf1ec"
+    },
+    {
+      "id": "SRC-04",
+      "title": "原文导入失败且清场后，实际网页显示“导入完成…校验通过”",
+      "severity": "P2",
+      "file": "backend/mariposa/web/index.html",
+      "lines": [
+        588,
+        595
+      ],
+      "contract": "CURRENT §6 失败批次默认不可见；SOURCE_LAYER_FIX_REPORT_v1.1 SL-01 parse_failures>0 必须阻断 completed，并返回 failed 与 blocking 明细；UI 应准确呈现执行结果。",
+      "repro": "在真实 Chromium 页面使用 owner token，经“原文→上传并导入”上传包含一条合法消息及非法元素42的 JSON。HTTP source.import 返回 200/ok=true 包装但 data.status=failed，parse_failures=1，failed_batch_purged_unpublished=1，verify_problems=[]。",
+      "actual": "网页 status 精确为“导入完成：1 会话 / 1 新消息 / human 1 · assistant 0 · system/tool/unknown 0 · 校验通过”；未提示失败，也未使用错误颜色。",
+      "expected": "首先按 d.status 判 failed，并显示 blocking/parse_failures/error；不能将已清场的消息计为成功导入或显示校验通过。",
+      "evidence": [
+        "evidence/source/playwright-new-ui.log",
+        "evidence/source/ui-failed-import-browser.json",
+        "evidence/source/ui-failed-import.png"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/web_runtime/apps/web/e2e/audit-source-ui.spec.ts",
+      "audit_id": "F17",
+      "snapshot_sha256": "b60771e8080a8d04e85aee0d447d3e9adaf7766fc315cbd99da167090c5eb805"
+    },
+    {
+      "id": "SRC-05",
+      "title": "一次格式错误导入会令此后所有备份的恢复校验失败",
+      "severity": "P2",
+      "file": "backend/mariposa/storage.py",
+      "lines": [
+        51,
+        53
+      ],
+      "contract": "CURRENT §10 恢复集包含数据库和被引用的 Raw 母本/媒体对象；未归档的拒绝批次没有有效对象引用，不能把空路径当成丢失的归档文件。",
+      "repro": "全新隔离库对“{invalid json”调用 source.import，确认 SOURCE_BAD_JSON；失败诊断批次存 raw_path=\"\"。随后执行 backup/restore_verify。",
+      "actual": "_collect_object_references 仅过滤 IS NOT NULL，将空字符串转换成Path(\".\")，manifest登记raw/orphan/缺失；backup仍ok=true，但restore_verify恒为ok=false，issues=[raw_archive_missing_at_backup,raw_archive_not_in_backup]。",
+      "expected": "空路径应表示尚无归档引用（或源头存NULL），收集和校验均排除它；正常数据库备份不应被一次已拒绝输入永久污染。",
+      "evidence": [
+        "evidence/source/probe-failed_format_detection_does_not_poison_backups.log"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/test_source_new_findings.py::test_failed_format_detection_does_not_poison_backups",
+      "audit_id": "F18",
+      "snapshot_sha256": "a738aa82d0f97f19f060b27d63c9a1f925d9b4b99c2598d9194b446b4f4bf1ec"
+    },
+    {
+      "id": "SRC-06",
+      "title": "迁移 dry-run 丢弃子目录路径，导致自有报告无法 verify/apply",
+      "severity": "P2",
+      "file": "backend/mariposa/migration.py",
+      "lines": [
+        228,
+        229
+      ],
+      "contract": "现行 migration.py _iter_bucket_files 递归收集、dry_run→verify/apply演练闭环；不是新增迁移业务合同，也未引用旧审计结论。",
+      "repro": "创建 fixtures/daily/2026-09-28 nested_abc123def456.md（合法daily正文）；dry_run(fixtures) 返回ok=true且to_memories=1，再把原样报告传给verify。",
+      "actual": "报告legacy_id仅文件basename，无daily/相对目录；实测verify返回file_missing，源文件完整在位。apply_from_report亦按fixture_dir/legacy_id读取同一不存在路径（代码证据migration.py:393-396；本探针未执行apply）。",
+      "expected": "把相对路径与资源身份分开保存，或至少保留相对路径；递归发现的合法文件应能原样完成verify/apply。",
+      "evidence": [
+        "evidence/source/probe-nested_migration_dry_run_verify_roundtrip.log"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/probes/source/test_source_new_findings.py::test_nested_migration_dry_run_verify_roundtrip",
+      "audit_id": "F19",
+      "snapshot_sha256": "c0b04985529bf4bae00ad5f5ba90e98e63ca4ad1b13dc67f305b15d486a4d47f"
+    },
+    {
+      "id": "ROOT-01",
+      "title": "幂等对账双重添加 t: 前缀，会清除另一请求的记录",
+      "severity": "P2",
+      "file": "backend/mariposa/capabilities/registry.py",
+      "lines": [
+        870,
+        876
+      ],
+      "related_locations": [
+        {
+          "file": "backend/mariposa/maintenance/service.py",
+          "lines": [
+            77,
+            86
+          ]
+        }
+      ],
+      "contract": "CURRENT §9 要求同一幂等身份恢复同一结果；维护对账必须只作用于调用者指定的原始 key。",
+      "repro": [
+        "test_reconcile_raw_key_cannot_select_prefixed_sibling"
+      ],
+      "actual": "同主体同能力分别使用原始 key=k 与 key=t:k，落库 t:k / t:t:k。模拟两条 stale running 后经 Registry 对账 key=k，实际将 t:t:k 改成 failed，t:k 保持 running。handler 已加一次前缀，service 又加一次，优先查询了另一个合法 key。",
+      "expected": "原始 key 仅编码一次，k 对账只能清 t:k；否则放行未指定请求的重执行，原请求仍卡住。",
+      "evidence": [
+        "evidence/root/test_reconcile_raw_key_cannot_select_prefixed_sibling.log"
+      ],
+      "audit_id": "F20",
+      "snapshot_sha256": "ffd6e55624dd985a518717c1f26c8c5d3a3dc44ef29b96e68830e78e30c8418b"
+    },
+    {
+      "id": "ROOT-02",
+      "title": "能力发现端点未捕获鉴权异常，缺 token 返回 500",
+      "severity": "P2",
+      "file": "backend/mariposa/app.py",
+      "lines": [
+        51,
+        54
+      ],
+      "contract": "HTTP 身份认证采用结构化 UNAUTHENTICATED/401；同文件 invoke/media/source 端点及 errors.Unauthenticated 已定义该行为。",
+      "repro": [
+        "test_capabilities_unauthenticated_is_401"
+      ],
+      "actual": "GET /api/capabilities 不带 Authorization 返回 500 Internal Server Error；此路径直接 authenticate，既没有局部异常转换，也没有全局 MariposaError handler。",
+      "expected": "返回401和结构化 UNAUTHENTICATED，让客户端识别需重新认证。",
+      "evidence": [
+        "evidence/root/test_capabilities_unauthenticated_is_401.log"
+      ],
+      "audit_id": "F21",
+      "snapshot_sha256": "126ce02f140dbd3cf334674d823fcc43c0dc855105bbf26ee8e1f064079ff4dc"
+    },
+    {
+      "id": "ROOT-03",
+      "title": "MariposaError 忽略显式 http_status，超大 JSON 预检返回 400",
+      "severity": "P3",
+      "file": "backend/mariposa/errors.py",
+      "lines": [
+        9,
+        16
+      ],
+      "related_locations": [
+        {
+          "file": "backend/mariposa/app.py",
+          "lines": [
+            126,
+            133
+          ]
+        }
+      ],
+      "contract": "app._json_body 明确以 http_status=413 抛 BODY_TOO_LARGE；流式限额路径也按413实现。",
+      "repro": [
+        "test_declared_oversize_is_413"
+      ],
+      "actual": "合法token、Content-Length=2097153的JSON请求返回400 BODY_TOO_LARGE。异常构造器只提升 code，把 http_status 留在 detail，实例继续用默认400。",
+      "expected": "显式 http_status 生效，声明长度超限和流式累计超限一致返回413。请求本身已被拒绝，不存在绕过大小限制。",
+      "evidence": [
+        "evidence/root/test_declared_oversize_is_413.log"
+      ],
+      "audit_id": "F22",
+      "snapshot_sha256": "7485620040d6a8a79b04f64f2250ad813ee57b94e2680020b9e004e986ff7f6a"
+    }
+  ]
+}
