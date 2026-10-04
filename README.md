@@ -5,14 +5,13 @@
 
 ## 快速开始（开发）
 
-```powershell
-# 环境检查
-scripts/doctor.ps1
+```bash
 # 初始化依赖（首次）
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.lock
-# 种子 + 启动（127.0.0.1:18780）
-scripts/start-dev.ps1
+.venv/bin/pip install -r requirements.lock
+# 种子 + 启动（127.0.0.1:18780；Windows 时代 .ps1 脚本已随 Mac 迁移退役删除）
+MARIPOSA_ROOT=<数据根> MARIPOSA_ALLOW_CREATE=1 .venv/bin/python -m mariposa.devseed
+MARIPOSA_ROOT=<数据根> .venv/bin/python -m uvicorn mariposa.app:app --port 18780
 ```
 
 开发 token 生成于 `runtime/dev_tokens.json`（不入 git），在 Web 页粘贴对应主体的 token。
