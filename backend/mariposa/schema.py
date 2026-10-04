@@ -1395,6 +1395,26 @@ CREATE TABLE recall_raw_leases(
   PRIMARY KEY(session_id, revision, burst_no)
 );
 """),
+    (11, """
+
+-- 裁定（2026-10-04 江乔生）：线性接续消费表——continue_request_ref
+-- 每 session 只能消费一次；第一次 refine 成功提交后 head 前移，
+-- 旧 ref 再发起 refine 判 stale，不得从旧节点重复领 burst
+CREATE TABLE recall_continue_refs(
+  session_id TEXT NOT NULL,
+  continue_request_ref TEXT NOT NULL,
+  from_revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, continue_request_ref)
+);
+"""),
+    (12, """
+
+-- 裁定（2026-10-04 江乔生）：EXPLICIT_REJECT_AFTER_DELIVERY 的
+-- "delivery" = 真实进入过出站交付包。交付回执补记 revision——
+-- 拒绝理由必须能证明候选在哪一轮真实出站（内部 seen 不算）
+ALTER TABLE recall_receipts ADD COLUMN revision INTEGER;
+"""),
 ]
 
 

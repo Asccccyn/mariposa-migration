@@ -1,488 +1,186 @@
 {
-  "contract_version": "recall_runtime_acceptance_v1.4",
-  "baseline_head": "29b5e4fbad8a1fc5aa99ff1251f32fcf6424cf28",
-  "verified_on": "2026-09-26",
-  "note": "每条含真实执行证据（pytest nodeid）与结果；详细场景断言在映射的测试函数内。C 组（真实 Jev）与外部数据评测未获授权，接口保留未执行。",
-  "v13_mandatory": [
+  "contract_version": "recall_runtime_acceptance_v1.7",
+  "baseline_head": "4e58bd5",
+  "verified_on": "2026-10-04",
+  "note": "requirement → 当前代表 nodeid → 状态。条款来自 docs/memory_runtime/CURRENT.md（v1.7）与 2026-10-04 裁定；只列正式验收合同，不为每个 pytest 用例反向登记。真实模型项保持 NOT_RUN_REAL_MODEL，不伪装 PASS。",
+  "requirements": [
     {
-      "id": "SAFE-01",
-      "status": "PASS",
+      "id": "V17-R1",
+      "title": "明开回温与查看票据（open/confirm/版本绑定）",
+      "clause": "CURRENT §2",
       "evidence": [
-        "tests/unit/test_recall_session.py::TestSessionActions::test_safe01_memory_command_is_data",
-        "tests/acceptance/test_recall_v13.py::TestV13SafeEvid::test_safe01"
-      ]
-    },
-    {
-      "id": "SAFE-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_safe02_raw_system_marker_is_data",
-        "tests/acceptance/test_recall_v13.py::TestV13SafeEvid::test_safe02"
-      ]
-    },
-    {
-      "id": "EVID-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v13.py::TestV13SafeEvid::test_evid01"
-      ]
-    },
-    {
-      "id": "EVID-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_words_recall.py::TestEvidenceKinds::test_evid02_paraphrase_not_verbatim",
-        "tests/acceptance/test_recall_v13.py::TestV13SafeEvid::test_evid02"
-      ]
-    },
-    {
-      "id": "EVID-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_words_recall.py::TestEvidenceKinds::test_evid03_verbatim_source_invalid_downgrades",
-        "tests/integration/test_recall_recovery.py::TestInvalidation::test_forgetting_invalidates_word_receipts"
-      ]
-    },
-    {
-      "id": "QUERY-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_query_plan.py::TestQueryLayering::test_query01_inferred_hint_not_hard_filter"
-      ]
-    },
-    {
-      "id": "QUERY-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_query_plan.py::TestQueryLayering::test_query02_explicit_constraints_hard_filter",
-        "tests/unit/test_recall_query_plan.py::TestQueryLayering::test_query02_negative_constraint_excludes"
-      ]
-    },
-    {
-      "id": "QUERY-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_query_plan.py::TestQueryLayering::test_query03_alternate_adds_no_facts"
-      ]
-    },
-    {
-      "id": "QUERY-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestSessionActions::test_query04_reject_session_local"
-      ]
-    },
-    {
-      "id": "SESSION-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/integration/test_recall_runtime_parity.py::test_session01_mcp_full_loop",
-        "tests/unit/test_recall_session.py::TestSessionActions::test_session01_service_full_loop"
-      ]
-    },
-    {
-      "id": "SESSION-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/integration/test_recall_runtime_parity.py::test_session02_http_mcp_same_semantics"
-      ]
-    },
-    {
-      "id": "SESSION-03",
-      "status": "PASS_preliminary",
-      "evidence": [
-        "tests/acceptance/test_recall_v13.py::TestV13Session::test_session03_ref_and_validate"
+        "tests/unit/test_audit_cont_p1_p2.py::TestStaleReceipt::test_stale_receipt_rejected_for_recollection",
+        "tests/unit/test_audit_cont_p1_p2.py::TestStaleReceipt::test_fresh_receipt_after_update_allows_append",
+        "tests/unit/test_audit_cont_p1_p2.py::TestStaleReceipt::test_unconfirmed_old_receipt_rejected_after_update"
       ],
-      "note": "Mariposa 侧契约（session ref + memory.context.validate + receipts）已验；estómago 工程 live 换窗联调未做（宿主工程缺失，分层记录）"
+      "status": "PASS"
     },
     {
-      "id": "SESSION-04",
-      "status": "PASS",
+      "id": "V17-R2",
+      "title": "阶段策略现算（九分类整数周期/字段矩阵）",
+      "clause": "CURRENT §3",
       "evidence": [
-        "tests/integration/test_recall_recovery.py::TestRecovery::test_session04_survives_process_restart"
-      ]
+        "tests/unit/test_phase_policy.py::TestIntegerPhases",
+        "tests/unit/test_phase_policy.py::TestPermanentAndPlan::test_keep_beats_terminal_plan",
+        "tests/unit/test_v17_pipeline.py::TestStageFilteredRound1"
+      ],
+      "status": "PASS"
     },
     {
-      "id": "WORD-01",
-      "status": "PASS",
+      "id": "V17-R3",
+      "title": "Round1 管线（分字段索引/Jev 门/0-3 卡/ROUND1_COMPLETE 回执）",
+      "clause": "CURRENT §4",
       "evidence": [
-        "tests/unit/test_words_recall.py::TestWordsChannel::test_word01_event_only_not_hit_by_words_probe"
-      ]
+        "tests/unit/test_v17_pipeline.py::TestFieldProjection",
+        "tests/unit/test_v17_pipeline.py::TestRound2Gate::test_round1_receipt_auto_issued_by_start",
+        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_missing_round1_receipt_blocks"
+      ],
+      "status": "PASS"
     },
     {
-      "id": "WORD-02",
-      "status": "PASS",
+      "id": "V17-R4",
+      "title": "Round2 gate（八条件服务端事实 + raw 深搜仍经 Jev）",
+      "clause": "CURRENT §4",
       "evidence": [
-        "tests/unit/test_words_recall.py::TestWordsChannel::test_word02_words_channel_finds_word"
-      ]
+        "tests/unit/test_v17_pipeline.py::TestRound2Gate",
+        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_round1_then_round2_delivers_judged_raw"
+      ],
+      "status": "PASS"
     },
     {
-      "id": "WORD-03",
-      "status": "PASS",
+      "id": "V17-R5",
+      "title": "find_words 专项（跨阶段全量 our_words）",
+      "clause": "CURRENT §4",
       "evidence": [
-        "tests/unit/test_words_recall.py::TestWordsChannel::test_word03_speaker_uses_formal_field"
-      ]
+        "tests/unit/test_words_recall.py",
+        "tests/unit/test_closure_reaudit2_fixes.py::Test5FindWords"
+      ],
+      "status": "PASS"
     },
     {
-      "id": "WORD-04",
-      "status": "PASS",
+      "id": "V17-R6",
+      "title": "生产开关无例外（fresh/continuation/replay）",
+      "clause": "CURRENT §4",
       "evidence": [
-        "tests/unit/test_words_recall.py::TestWordsChannel::test_word04_mixed_keeps_channel_roles"
-      ]
+        "tests/unit/test_audit_cb009_015_recall.py::TestRawToggleLifecycle",
+        "tests/unit/test_audit_cb009_015_recall.py::TestRawToggleLifecycle::test_replay_blocked_after_words_toggle_off"
+      ],
+      "status": "PASS"
     },
     {
-      "id": "WORD-05",
-      "status": "PASS",
+      "id": "V17-R7",
+      "title": "「留」keep 唯一入口同事务绑定（v1.7 §5.5）",
+      "clause": "CURRENT §5",
       "evidence": [
-        "tests/unit/test_words_recall.py::TestWordsChannel::test_word05_words_recall_no_renewal_side_effect"
-      ]
+        "tests/unit/test_audit_cont_p1_p2.py::TestStaleReceipt::test_fresh_receipt_after_update_allows_append"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R8",
+      "title": "Source 原文层（流式导入/发布门禁/区间绑定/失败清场批次限定）",
+      "clause": "CURRENT §6",
+      "evidence": [
+        "tests/unit/test_source_layer.py",
+        "tests/unit/test_source_layer.py::TestImporter::test_failed_cleanup_is_batch_scoped"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R9",
+      "title": "删除链退役 + legacy 读侧 gap",
+      "clause": "CURRENT §2",
+      "evidence": [
+        "tests/unit/test_retired_capabilities_negative.py",
+        "tests/unit/test_ruling_provenance.py::TestReadSideSafetySemantics::test_memory_get_marks_legacy_summary_gap"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R10",
+      "title": "证据分级与安全包装（content_role/instruction_authority）",
+      "clause": "CURRENT §8（承 v1.4）",
+      "evidence": [
+        "tests/unit/test_audit_retrieval_domain.py::TestWordEvidenceProvenance",
+        "tests/unit/test_ruling_provenance.py::TestReadSideSafetySemantics::test_bootstrap_carries_safety_semantics"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R11",
+      "title": "Session 七动作/预算/幂等与线性接续（2026-10-04 裁定）",
+      "clause": "CURRENT §2 + 裁定",
+      "evidence": [
+        "tests/unit/test_recall_session.py::TestSessionActions",
+        "tests/unit/test_ruling_request_ref.py",
+        "tests/unit/test_audit_cb009_015_recall.py::TestCommitTimeRevalidation"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R12",
+      "title": "存储备份恢复集（库+母本+媒体对象）",
+      "clause": "审计 2026-10-03 F07",
+      "evidence": [
+        "tests/unit/test_migration_storage.py::TestStorage",
+        "tests/unit/test_migration_storage.py::TestF10F11F12AuditFixes"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R13",
+      "title": "provenance 来源收紧（零 dangling 写入）",
+      "clause": "裁定 2026-10-04",
+      "evidence": [
+        "tests/unit/test_ruling_provenance.py::TestWriteSideTightening",
+        "tests/unit/test_ruling_provenance.py::TestDeletionGateIgnoresDangling"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R14",
+      "title": "EXPLICIT_REJECT_AFTER_DELIVERY 只认真实出站交付包",
+      "clause": "裁定 2026-10-04",
+      "evidence": [
+        "tests/unit/test_ruling_delivery_receipt.py"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R15",
+      "title": "words scoped BM25（S05/S06 覆盖）",
+      "clause": "裁定 2026-10-04",
+      "evidence": [
+        "tests/unit/test_words_recall.py::TestScopedBm25WordsS05S06"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R16",
+      "title": "破坏性删除幂等（decide/direct 同 key 恢复同一结果）",
+      "clause": "裁定 2026-10-04",
+      "evidence": [
+        "tests/unit/test_ruling_provenance.py::TestDecideDestructiveIdempotency"
+      ],
+      "status": "PASS"
+    },
+    {
+      "id": "V17-R17",
+      "title": "E2E 隔离实例（认证通路 + 退役端点 404）",
+      "clause": "审计 2026-10-03 测试失效#3",
+      "evidence": [
+        "apps/web/e2e/forget-loop.spec.ts"
+      ],
+      "status": "PASS",
+      "note": "Playwright 隔离实例 2026-10-04 实跑通过"
+    },
+    {
+      "id": "V17-R18",
+      "title": "真实 Jev/dense 质量（C 组）",
+      "clause": "v1.4 继承",
+      "evidence": [],
+      "status": "NOT_RUN_REAL_MODEL",
+      "note": "credential/计费/非确定性；不作为静态修复验收阻断，不伪装 PASS"
     }
-  ],
-  "v14_incremental": [
-    {
-      "id": "HYBRID-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestHybrid::test_hybrid01_scope_before_topk"
-      ],
-      "note": "dense 真实路径待 provider 授权；当前验证过滤前置契约+诚实 unavailable"
-    },
-    {
-      "id": "HYBRID-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestFusion::test_hybrid02_same_resource_dedup_no_double_vote"
-      ]
-    },
-    {
-      "id": "HYBRID-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestFusion::test_hybrid03_rrf_1based_no_raw_score_sum"
-      ]
-    },
-    {
-      "id": "HYBRID-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_query_plan.py::TestCompilationSafety::test_hybrid04_fts_injection_inert",
-        "tests/unit/test_recall_query_plan.py::TestCompilationSafety::test_hybrid04_terms_noncontiguous_vs_phrase_order"
-      ]
-    },
-    {
-      "id": "HYBRID-05",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_hybrid05_judge_payload_whitelist"
-      ]
-    },
-    {
-      "id": "HYBRID-06",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestFusion::test_hybrid06_scoped_stats_isolation"
-      ]
-    },
-    {
-      "id": "HYBRID-07",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestHybrid::test_hybrid07_dense_unavailable_honest"
-      ]
-    },
-    {
-      "id": "HYBRID-08",
-      "status": "PASS_preliminary",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestHybrid::test_hybrid08_chinese_probes_kept"
-      ],
-      "note": "词面保留已验；dense 规范化变更的向量版本失效复用既有 projection_hash 机制（semantic.py），模型路径待授权评测"
-    },
-    {
-      "id": "HYBRID-09",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_query_plan.py::TestCompilationSafety::test_hybrid09_empty_query_browses"
-      ]
-    },
-    {
-      "id": "JEV-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev01_noul_no_confidence"
-      ]
-    },
-    {
-      "id": "JEV-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev02_zero_delivery_allowed"
-      ]
-    },
-    {
-      "id": "JEV-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev03_invalid_signals_are_unknown"
-      ]
-    },
-    {
-      "id": "JEV-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev04_timeout_batch_degrades"
-      ]
-    },
-    {
-      "id": "JEV-05",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev05_disabled_provider_no_network"
-      ]
-    },
-    {
-      "id": "JEV-06",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev06_hard_gates_by_code"
-      ]
-    },
-    {
-      "id": "JEV-07",
-      "status": "PASS_preliminary",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestBudget::test_runtime01_revision_conflict_diagnosable"
-      ],
-      "note": "以 revision CAS 机制复验迟到结果不覆盖；provider 级迟到安装路径随 C 组授权后补真测"
-    },
-    {
-      "id": "JEV-08",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestJev::test_jev08_no_unauthorized_payload"
-      ]
-    },
-    {
-      "id": "JEV-09",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestJev::test_jev09_payload_binds_candidate"
-      ]
-    },
-    {
-      "id": "JEV-10",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_judge.py::TestJudgeContract::test_jev10_low_score_deferred_not_global_rejected"
-      ]
-    },
-    {
-      "id": "PACK-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestSelection::test_pack01_deliver_at_most_3"
-      ]
-    },
-    {
-      "id": "PACK-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestSelection::test_pack02_single_candidate_needs_validation"
-      ]
-    },
-    {
-      "id": "PACK-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestSelection::test_pack03_no_duplicate_fills"
-      ]
-    },
-    {
-      "id": "PACK-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestSelection::test_pack04_conflict_disclosed"
-      ]
-    },
-    {
-      "id": "PACK-05",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestPack::test_pack05"
-      ]
-    },
-    {
-      "id": "PACK-06",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_fusion.py::TestSelection::test_pack06_truncation_flag"
-      ]
-    },
-    {
-      "id": "PACK-07",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_words_recall.py::TestEvidenceKinds::test_pack07_word_unverified_neither_paraphrase_nor_verbatim"
-      ]
-    },
-    {
-      "id": "RAWX-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_rawx01_paraphrase_triggers_fallback_path"
-      ]
-    },
-    {
-      "id": "RAWX-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_rawx02_beyond_500_reachable_with_continuation"
-      ]
-    },
-    {
-      "id": "RAWX-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_rawx03_scope_limited_finite_fragments",
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_scope_not_authorized_for_worker"
-      ]
-    },
-    {
-      "id": "RAWX-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_rawx04_event_only_no_raw"
-      ]
-    },
-    {
-      "id": "RAWX-05",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_words_recall.py::TestForgottenWords::test_rawx05_forgotten_words_disabled"
-      ]
-    },
-    {
-      "id": "RAWX-06",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_raw_recall_scope.py::TestScopedRaw::test_rawx06_speaker_not_guessed"
-      ]
-    },
-    {
-      "id": "RAWX-07",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestRawx::test_rawx07",
-        "tests/unit/test_words_recall.py::TestEvidenceKinds::test_evid03_verbatim_source_invalid_downgrades"
-      ]
-    },
-    {
-      "id": "RUNTIME-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestBudget::test_runtime01_revision_conflict_diagnosable"
-      ]
-    },
-    {
-      "id": "RUNTIME-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestBudget::test_runtime02_operation_id_idempotent"
-      ]
-    },
-    {
-      "id": "RUNTIME-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/integration/test_recall_recovery.py::TestRecovery::test_runtime03_attempts_survive_restart"
-      ]
-    },
-    {
-      "id": "RUNTIME-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/integration/test_recall_recovery.py::TestInvalidation::test_runtime04_formal_change_invalidates_receipts"
-      ]
-    },
-    {
-      "id": "RUNTIME-05",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestScopesAndTTL::test_runtime05_temporal_axes"
-      ]
-    },
-    {
-      "id": "RUNTIME-06",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestScopesAndTTL::test_runtime06_reject_target_word_vs_event"
-      ]
-    },
-    {
-      "id": "RUNTIME-07",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestBudget::test_runtime07_new_burst_needs_real_continue"
-      ]
-    },
-    {
-      "id": "RUNTIME-08",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestScopesAndTTL::test_runtime08_ttl_expiry"
-      ]
-    },
-    {
-      "id": "RUNTIME-09",
-      "status": "PASS",
-      "evidence": [
-        "tests/unit/test_recall_session.py::TestScopesAndTTL::test_runtime09_cross_conversation_blocked"
-      ]
-    },
-    {
-      "id": "OPS-RECALL-01",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestOpsRecall::test_ops_recall01_fail_fast"
-      ]
-    },
-    {
-      "id": "OPS-RECALL-02",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestOpsRecall::test_ops_recall02_test_root_fuse"
-      ]
-    },
-    {
-      "id": "OPS-RECALL-03",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestOpsRecall::test_ops_recall03_policy_versioned"
-      ]
-    },
-    {
-      "id": "OPS-RECALL-04",
-      "status": "PASS",
-      "evidence": [
-        "tests/acceptance/test_recall_v14.py::TestOpsRecall::test_ops_recall04_disable_withdraws"
-      ]
-    }
-  ],
-  "summary": {
-    "v13_total": 18,
-    "v13_pass": 15,
-    "v13_pass_preliminary": 3,
-    "v14_total": 46,
-    "v14_pass": 44,
-    "v14_pass_preliminary": 2,
-    "not_executed": 0,
-    "preliminary_notes": "PASS_preliminary = Mariposa 侧契约已真实执行并断言；依赖真实 provider/外部宿主的部分按授权状态分层留待（HYBRID-01/08, JEV-07, SESSION-03）",
-    "test_run": "pytest tests -q 分批前台执行；新套件 122 条全绿，存量 313 条回归全绿（435 collected）",
-    "verify_script": "python scripts/verify_recall_runtime.py → 9/9"
-  },
-  "superseded": {
-    "notice": "历史验收证据（v1.4 / 2026-09-26 / baseline 29b5e4f）。",
-    "reason": "审计 2026-10-03 证实 71 个唯一 evidence 引用中 12 个对应文件或函数已不存在（如 test_raw_recall_scope.py 已退役、words 测试已改名）——本文件只能作为 v1.4 当时的验收记录，不得当作 v1.7 现行通过证据。",
-    "current_status": "现行基线（b484908 及之后）的通过证据以当轮审计的 RESULTS/报告与全量分批重跑记录为准；v1.7 nodeid 映射待专项重建。"
-  }
+  ]
 }

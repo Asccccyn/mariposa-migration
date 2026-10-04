@@ -71,10 +71,17 @@ def blocking_relations(conn, memory_id: str) -> dict[str, int]:
         " WHERE memory_id=?", (memory_id,)).fetchone()["c"]
     if n:
         out["plan_links"] = n
+    # 裁定（2026-10-04）：dangling provenance 不算有效引用——只有
+    # 解析到当前已发布消息的 source_msg: 才进硬门计数；legacy
+    # raw_msg:/不存在的引用标 gap 但不得阻止删除
     n = conn.execute(
-        "SELECT COUNT(*) c FROM memory_our_words"
-        " WHERE memory_id=? AND source_ref IS NOT NULL"
-        " AND source_ref <> ''", (memory_id,)).fetchone()["c"]
+        "SELECT COUNT(*) c FROM memory_our_words w"
+        " WHERE w.memory_id=? AND w.source_ref IS NOT NULL"
+        " AND w.source_ref <> '' AND w.source_ref LIKE 'source_msg:%'"
+        " AND EXISTS (SELECT 1 FROM source_messages m WHERE"
+        " (m.id = substr(w.source_ref, 12) OR"
+        "  m.provider_message_id = substr(w.source_ref, 12))"
+        " AND m.published=1)", (memory_id,)).fetchone()["c"]
     if n:
         out["word_sources"] = n
     return out
@@ -260,9 +267,14 @@ def deletion_withdraw(principal_id: str, request_id: str) -> dict:
 
 
 def deletion_decide(principal_id: str, request_id: str, decision: str,
-                    rejection_reason: str | None = None) -> dict:
+                    rejection_reason: str | None = None,
+                    operation_key: str | None = None) -> dict:
     """周家明决定（P-D01）：approve 真删除（无理由要求；关系硬门通过
     才落 approved，被拦回滚保 pending）；reject 必填非空理由。
+
+    裁定（2026-10-04）：破坏性决定的业务变更与 operation 回执同一
+    事务（同 deletion_request/RA-019 模式）——同 key 同载荷网络重试
+    重放同一决定结果，不重复执行删除。
     """
     if principal_id != "jiaming":
         raise Forbidden("删除决定仅周家明", code="OWNER_MISMATCH")
@@ -272,9 +284,37 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
                         code="INVALID_ARGUMENT")
     if decision == "reject" and not (rejection_reason or "").strip():
         raise Forbidden("拒绝必须说明理由（P-D01）", code="INVALID_ARGUMENT")
+    import json as _json
+    import hashlib as _hl
+    ph = None
+    if operation_key:
+        ph = _hl.sha256(_json.dumps(
+            {"request_id": request_id, "decision": decision,
+             "rejection_reason": rejection_reason},
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if operation_key:
+                prior = conn.execute(
+                    "SELECT payload_hash, result_ref FROM"
+                    " idempotency_records WHERE principal_id=? AND"
+                    " capability='memory.deletion.decide' AND"
+                    " idempotency_key=?",
+                    (principal_id, f"op:{operation_key}")).fetchone()
+                if prior is not None:
+                    if prior["payload_hash"] not in (None, ph):
+                        from ..errors import IdempotencyConflict
+                        raise IdempotencyConflict(
+                            "same operation key with different payload",
+                            operation_key=operation_key)
+                    try:
+                        out = deletion_get(request_id)
+                        out["idempotent_replay"] = True
+                        conn.execute("COMMIT")
+                        return out
+                    except NotFound:
+                        pass  # 回执指向的申请已不存在：走正常决定路径
             row = conn.execute(
                 "SELECT * FROM deletion_requests WHERE request_id=?",
                 (request_id,)).fetchone()
@@ -295,6 +335,16 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
                     "UPDATE deletion_requests SET status='approved',"
                     " decided_at=? WHERE request_id=?",
                     (_iso(), request_id))
+            if operation_key:
+                # 决定与回执同事务：崩溃/重试后同 key 恢复同一结果
+                conn.execute(
+                    "INSERT INTO idempotency_records(principal_id,"
+                    " capability, idempotency_key, payload_hash, status,"
+                    " result_ref, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (principal_id, "memory.deletion.decide",
+                     f"op:{operation_key}", ph, "completed",
+                     _json.dumps({"request_id": request_id},
+                                 ensure_ascii=False), _iso()))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

@@ -161,14 +161,20 @@ def _word_evidence(row, conn=None) -> list[dict]:
             return [evidence_mod.make_evidence(
                 "word_verbatim", "our_words.text", text,
                 f"our_word:{wid}", source_version=version)]
-        # 来源版本变化/失效后不继续返回 verified word_verbatim
+        # 来源版本变化/失效后不继续返回 verified word_verbatim；
+        # 裁定（2026-10-04）：gap 细分——legacy raw 前缀/不可解析
+        # 引用不得伪装成有效 provenance
+        _state = ("legacy_raw_prefix"
+                  if isinstance(source_ref, str)
+                  and source_ref.startswith("raw_msg:")
+                  else "invalid_or_missing")
         return [evidence_mod.make_evidence(
             "word_unverified", "our_words.text", text,
             f"our_word:{wid}", source_version=version)] + [
             evidence_mod.make_evidence(
                 "structured_fact", "our_words.source_ref",
                 "", f"our_word:{wid}",
-                structured_value={"source_ref_state": "invalid_or_missing"})]
+                structured_value={"source_ref_state": _state})]
     if kind == "paraphrase":
         return [evidence_mod.make_evidence(
             "word_paraphrase", "our_words.text", text,
@@ -222,22 +228,48 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         where += pool_where
         params += pool_params
 
-    sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker, w.text,"
-           " w.expression_kind, w.source_ref,"
-           " w.source_binding_version, m.memory_date,"
-           " m.current_version_no, bm25(words_fts) AS rank"
-           " FROM words_fts"
-           " JOIN words_search_docs d ON d.word_id = words_fts.word_id"
-           " JOIN memory_our_words w ON w.word_id = d.word_id"
-           " JOIN memories m ON m.memory_id = w.memory_id")
+    # 裁定（2026-10-04 江乔生）：S05/S06 覆盖 words——任何不在当前
+    # 检索可见候选宇宙中的文档不得参与 BM25 corpus statistics/IDF。
+    # SQLite FTS5 的 bm25() 用全库统计，追加 scope 外话语会翻转可见
+    # 候选排名；改为与 event 通道同款 scoped_bm25（scope 池内存评分）。
+    # FTS MATCH 仍作召回下限（短语词法），排序与命中判定以 scoped
+    # 评分为准（term 组内相邻+有序，HYBRID-04 同步 F17）。
+    from . import scoped_bm25
+    pool_sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker,"
+                " w.text, w.expression_kind, w.source_ref,"
+                " w.source_binding_version, m.memory_date,"
+                " m.current_version_no"
+                " FROM memory_our_words w"
+                " JOIN memories m ON m.memory_id = w.memory_id")
     if expr:
-        sql += " WHERE words_fts MATCH ? AND " + " AND ".join(where)
-        params = [expr] + params
-        sql += " ORDER BY rank, w.word_id LIMIT ?"
+        pool_sql += (" JOIN words_fts ON words_fts.word_id = w.word_id"
+                     " JOIN words_search_docs d ON d.word_id = w.word_id")
+        pool_sql += " WHERE words_fts MATCH ? AND " + " AND ".join(where)
+        pool_params = [expr] + params
     else:
-        sql += " WHERE " + " AND ".join(where) + \
-            " ORDER BY m.memory_date DESC, w.word_id LIMIT ?"
-    rows = conn.execute(sql, params + [limit + 1]).fetchall()
+        pool_sql += " WHERE " + " AND ".join(where)
+        pool_params = list(params)
+    pool = conn.execute(pool_sql, pool_params).fetchall()
+
+    term_groups, phrase_groups = qp.plan_token_groups(plan)
+    scored_by_word: dict = {}
+    if term_groups or phrase_groups:
+        from . import projection as _proj
+        docs = [{"owner": r["word_id"], "field": "our_words",
+                 "tokens": scoped_bm25._doc_tokens(
+                     " ".join(_proj.tokenize(r["text"] or "")))}
+                for r in pool]
+        for e in scoped_bm25.score_documents(docs, term_groups,
+                                             phrase_groups):
+            scored_by_word[e["owner"]] = e["score"]
+        rows = sorted((r for r in pool if r["word_id"] in scored_by_word),
+                      key=lambda r: (-scored_by_word[r["word_id"]],
+                                     r["word_id"]))
+    else:
+        rows = sorted(pool,
+                      key=lambda r: (r["memory_date"] or "", r["word_id"]),
+                      reverse=True)
+    rows = rows[:limit + 1]
     # CB-013（2026-10-02 审计 P1）：limit+1 探测出的越界行表达
     # has_more——此前直接丢弃并把 coverage 恒签 complete_within_scope，
     # 截断浏览窗口冒充当前 scope 完成（可提前升级 Raw 并漏掉后部
@@ -261,7 +293,8 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
             "speaker": r["speaker"],
             "expression_kind": r["expression_kind"],
             "memory_date": r["memory_date"],
-            "matched_by": ["words_keyword"],
+            "matched_by": (["words_keyword"] if scored_by_word
+                           else []),
             "matched_fields": ["our_words.text"],
             "excerpt": excerpt_text,
             "truncated": truncated,
@@ -277,6 +310,7 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         "coverage": ("partial_topk_window" if has_more
                      else "complete_within_scope"),
         "has_more": has_more,
+        "lexical_scorer": scoped_bm25.SCORER_VERSION,
         "forgotten_words_count": forgotten,
         "forgotten_recall": config.WORDS_FORGOTTEN_RECALL,
         "forgotten_decision_state": config.WORDS_FORGOTTEN_DECISION_STATE,

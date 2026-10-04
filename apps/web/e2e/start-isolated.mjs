@@ -29,6 +29,9 @@ const env = {
   MARIPOSA_ROOT: isoRoot,
   PYTHONPATH: join(repo, "backend"),
   MARIPOSA_BIND: "127.0.0.1",
+  // 隔离根是"显式允许新建"的合同场景（OPS-RECALL-01）——测试专用
+  // 18799 实例的种子迁移需要显式开闸，与生产首建同一开关
+  MARIPOSA_ALLOW_CREATE: "1",
   MARIPOSA_PORT: String(PORT),
   // 不带语义 provider：E2E 不依赖模型，缺失时关键词路径照常
   MARIPOSA_SEMANTIC_PROVIDER: "",

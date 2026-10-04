@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from mariposa import db
@@ -413,3 +415,70 @@ class TestP26ReplayKeepsSourceMsg:
                 "P2-6：重放候选必须与首次一致（含 source_msg）"
         finally:
             cfg.RECALL_JUDGE_PROVIDER = old
+
+
+class TestF05RegistryLevelRoleGate:
+    """裁定（2026-10-04）：Registry/公开响应级集成回归——judge 层正确
+    不代表调用链不会绕过。复刻审计关键反例：许可只够发标题，fake
+    HTTP 回高置信，最终公开响应仍不得交付带事件正文的卡。"""
+
+    def test_title_cue_only_high_score_not_delivered(self, actors,
+                                                     monkeypatch):
+        from mariposa import config as cfg
+        from mariposa.memory import service as memory
+        from mariposa.retrieval.judges import typesafe_jev
+        from mariposa.capabilities import registry
+
+        memory.hold(actors["jiaming"], text="当晚在山里修电路",
+                    memory_date="2026-09-20", date_confidence="exact",
+                    original_title="中秋约会", categories=["daily"],
+                    creation_mode="contemporaneous", raw_pending=False)
+
+        class _Resp:
+            def __init__(self, body):
+                self._body = body.encode("utf-8")
+            def read(self):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            return _Resp(json.dumps({
+                "model": "fake-jev",
+                "answers": {"candidate_0": {"noul": 0.9}},
+            }))
+
+        old_provider = cfg.RECALL_JUDGE_PROVIDER
+        cfg.RECALL_JUDGE_PROVIDER = "fake_title_cue_jev"
+
+        class G(typesafe_jev.TypeSafeJevJudge):
+            name = "fake_title_cue_jev"
+            _api_key = "k"
+
+            def __init__(self):
+                super().__init__()
+                # 许可只够发标题——event 主体被 profile 剥除
+                self._data_profile = frozenset({"title_cue",
+                                                "structured_metadata"})
+                self._disabled_reason = None
+
+        from mariposa.retrieval.judges import base as jb
+        jb.register_for_tests("fake_title_cue_jev", G())
+        try:
+            monkeypatch.setattr(typesafe_jev.urllib.request, "urlopen",
+                                fake_urlopen)
+            packet = registry.invoke(
+                actors["jiaming"], "memory.recall.start",
+                {"query_plan": {
+                    "original_request": "中秋",
+                    "channels": ["event"],
+                    "lexical_terms": ["中秋"]},
+                 "operation_id": "f05-reg-1"}, None)["data"]["data"]
+            for c in packet["candidates"]:
+                body_bits = json.dumps(c, ensure_ascii=False)
+                assert "山里修电路" not in body_bits, \
+                    "缺事件主体的候选不得经公开响应交付正文"
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old_provider

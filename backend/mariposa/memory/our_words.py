@@ -37,6 +37,33 @@ def _validate_word(w: dict) -> dict:
             "source_ref": w.get("source_ref")}
 
 
+def require_resolvable_sources(conn, validated: list[dict]) -> None:
+    """裁定（2026-10-04 江乔生）：新写 provenance 零 dangling。
+
+    source_msg:<id> 必须解析到当前已发布消息；raw_msg: 无正式 raw
+    registry，不再作为随手逃逸口（历史导入先建来源实体再建
+    provenance edge）。写锁内调用（与 CB-037 同款并发安全）。
+    """
+    for w in validated:
+        ref = w.get("source_ref") or None
+        if ref is None:
+            continue
+        if not isinstance(ref, str) or not ref.startswith("source_msg:"):
+            raise Forbidden(
+                "source_ref 必须是现行 source_msg:<id> 身份"
+                "（raw 前缀已退役；无来源请省略字段）",
+                code="INVALID_SOURCE_REF", got=ref)
+        msg_id = ref[len("source_msg:"):]
+        if not conn.execute(
+                "SELECT 1 FROM source_messages WHERE"
+                " (id=? OR provider_message_id=?) AND published=1",
+                (msg_id, msg_id)).fetchone():
+            raise Forbidden(
+                "source_ref 指向的消息不存在或未发布——"
+                "不得写入 dangling provenance",
+                code="INVALID_SOURCE_REF", got=ref)
+
+
 def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
     """追加话语（hold 内联写入或事后追加；顺序按本次传入相对顺序续排）。"""
     if not isinstance(words, list) or not words:
@@ -53,6 +80,7 @@ def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
                     "SELECT 1 FROM memories WHERE memory_id=?",
                     (memory_id,)).fetchone():
                 raise NotFound("memory not found", memory_id=memory_id)
+            require_resolvable_sources(conn, validated)
             row = conn.execute(
                 "SELECT COALESCE(MAX(ordinal),0) AS m FROM memory_our_words"
                 " WHERE memory_id=?", (memory_id,)).fetchone()

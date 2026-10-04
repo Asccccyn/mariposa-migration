@@ -203,3 +203,51 @@ class TestForgottenWords:
         with pytest.raises(Forbidden) as ei:
             wmod.get_word(wid)
         assert ei.value.code == "WORDS_FORGOTTEN_DISABLED"
+
+
+class TestScopedBm25WordsS05S06:
+    """裁定（2026-10-04）：S05/S06 覆盖 words——scope 外文档不得参与
+    BM25 corpus statistics（审计反例：追加 50 条被排除 speaker 的话语
+    翻转可见 alpha/beta 排名）。"""
+
+    def _search(self, conn, terms=("锚词甲乙",)):
+        from mariposa.retrieval import words as words_mod
+        return words_mod.words_search(conn, {
+            "original_request": "找话语", "channels": ["words"],
+            "lexical_terms": list(terms),
+            "explicit_constraints": {"speaker": "qiaosheng"}})
+
+    def test_out_of_scope_corpus_cannot_flip_ranking(self, actors):
+        import mariposa.memory.service as mem
+        # 可见 scope：qiaosheng 两条话语，甲含查询词、乙也含
+        mem.hold(actors["jiaming"], text="scope排名事件一",
+                 memory_date="2026-09-20", date_confidence="exact",
+                 original_title="t", categories=["daily"],
+                 creation_mode="contemporaneous", raw_pending=False,
+                 our_words=[{"speaker": "qiaosheng", "text": "锚词甲乙出现在这里",
+                             "expression_kind": "verbatim"}])
+        mem.hold(actors["jiaming"], text="scope排名事件二",
+                 memory_date="2026-09-21", date_confidence="exact",
+                 original_title="t", categories=["daily"],
+                 creation_mode="contemporaneous", raw_pending=False,
+                 our_words=[{"speaker": "qiaosheng", "text": "也提到锚词甲乙",
+                             "expression_kind": "verbatim"}])
+        from mariposa import db
+        with db.formal() as conn:
+            first = [h["word_id"] for h in self._search(conn)["hits"]]
+        assert first, "前置：scope 内有命中"
+        # 追加 50 条 speaker 被排除的话语（含查询词，灌满 corpus 统计）
+        for i in range(50):
+            mem.hold(actors["jiaming"], text=f"排除话语事件{i}",
+                     memory_date="2026-09-22", date_confidence="exact",
+                     original_title="t", categories=["daily"],
+                     creation_mode="contemporaneous", raw_pending=False,
+                     our_words=[{"speaker": "jiaming",
+                                 "text": f"排除者说的锚词甲乙{i}",
+                                 "expression_kind": "verbatim"}])
+        with db.formal() as conn:
+            after = [h["word_id"]
+                     for h in self._search(conn)["hits"]]
+        # 可见候选集合与顺序不受 scope 外语料影响
+        assert after == first, (
+            f"scope 外语料翻转了可见排名：{first} -> {after}")

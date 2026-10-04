@@ -195,8 +195,10 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
                 "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
                 " VALUES(?,?)", (memory_id, tag))
     if our_words:
-        for i, w in enumerate(
-                (our_words_mod._validate_word(x) for x in our_words), start=1):
+        _validated_words = [our_words_mod._validate_word(x)
+                            for x in our_words]
+        our_words_mod.require_resolvable_sources(conn, _validated_words)
+        for i, w in enumerate(_validated_words, start=1):
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id,"
                 " ordinal, speaker, text, expression_kind, source_ref,"
@@ -369,6 +371,19 @@ def get(conn, memory_id: str) -> dict:
         "content_role": "retrieved_memory",
         "instruction_authority": "none",
         "text": body,
+        # 裁定（2026-10-04）：legacy/缺失正文的结构化 gap——不伪装成
+        # 完整内容（旧遗忘摘要/空正文的桶显式标缺口）
+        **({"content_gap": {
+                "code": "LEGACY_CONTENT_GAP",
+                "reason": "retired_forgotten_summary",
+                "note": "旧遗忘摘要：正文为批准摘要而非原文；"
+                        "遗忘/恢复已随 v1.7 退役"}}
+           if is_summary else
+           {"content_gap": {
+                "code": "LEGACY_CONTENT_GAP",
+                "reason": "empty_body",
+                "note": "当前 revision 无可读正文（v1 旧数据）"}}
+           if not (body or "").strip() else {}),
         "why_remember": v["why_remember"] if not is_summary else None,
         "pinned": bool(m["pinned"]),
         "protected": bool(m["protected"]),

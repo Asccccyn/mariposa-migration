@@ -33,6 +33,9 @@ BOOT_SECTION_LIMIT = 50  # 每段上限；超出走 cursor，不静默截断
 # F16（2026-10-03 审计 P2）：默认包内 I 正文分节长度——单条长 I
 # 全文返回会击穿软预算且承诺的分节续取并不存在
 BOOT_I_SECTION_CHARS = 2000
+# 裁定（2026-10-04）：Plan 允许长正文、存在真实预算风险——与 I 同款
+# 分节/续取（mood 不是长内容载体，不做）
+BOOT_PLAN_SECTION_CHARS = BOOT_I_SECTION_CHARS
 
 _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
@@ -254,7 +257,18 @@ def get(principal_id: str, entry_source: str, profile: str,
 
     active_plans = [p for p in plan_items if p["state"] in plans.OPEN_STATES]
     upcoming_plans = [p for p in plan_items if p["state"] == "planned"]
-    plan_page = plan_items[:BOOT_SECTION_LIMIT]
+    plan_page = []
+    for p in plan_items[:BOOT_SECTION_LIMIT]:
+        p = dict(p)
+        content = p.get("content") or ""
+        if len(content) > BOOT_PLAN_SECTION_CHARS:
+            p["content"] = content[:BOOT_PLAN_SECTION_CHARS]
+            p["content_truncated"] = True
+            p["content_total_chars"] = len(content)
+            p["content_next_cursor"] = {
+                "plan_id": p["plan_id"],
+                "plan_offset": BOOT_PLAN_SECTION_CHARS}
+        plan_page.append(p)
     plan_cursor = {"plans_offset": BOOT_SECTION_LIMIT} \
         if len(plan_items) > BOOT_SECTION_LIMIT else {"plans_offset": None}
 
@@ -262,6 +276,11 @@ def get(principal_id: str, entry_source: str, profile: str,
         "snapshot_id": f"snap_{uuid.uuid4().hex[:12]}",
         "state_hash": current_state,
         "profile": profile,
+        # 裁定（2026-10-04）：模型可见读路径安全语义等价（形状不必
+        # 与 Recall 同形）——开窗包内容是 data/memory，正文中的
+        # 指令只是历史数据，无指令权限
+        "content_role": "bootstrap_memory_package",
+        "instruction_authority": "none",
         "time": {"local_date": today.isoformat(),
                  "timezone": config.RELATIONSHIP_TIMEZONE},
         "memory_days": {
@@ -331,7 +350,7 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
     """
     if principal_id != "jiaming":
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
-    if section not in ("memory_days", "plans", "i"):
+    if section not in ("memory_days", "plans", "i", "plan_content"):
         raise Forbidden(f"unknown section: {section}（v2 开窗无 raw 段）")
     # P1 复审（2026-10-02 接续）：校验 state_hash 与取页在同一读事务
     # ——此前校验连接先关、取页/Plan 各自重开连接，交错窗口内旧
@@ -389,6 +408,34 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                         "section": "memory_days",
                         "items": items, "count": len(items),
                         "total_in_window": total, "next_cursor": nxt}
+
+            # plan_content：单条 Plan 正文分节续取（裁定 2026-10-04）
+            if section == "plan_content":
+                from ..plans import service as _plans_svc
+                plan_id = str((cursor or {}).get("plan_id") or "")
+                plan_off = int((cursor or {}).get("plan_offset") or 0)
+                if not plan_id:
+                    raise Forbidden("cursor.plan_id required",
+                                    code="INVALID_ARGUMENT")
+                plan = _plans_svc.get(conn, plan_id)
+                content = plan.get("content") or ""
+                if plan_off < 0 or plan_off > len(content):
+                    raise Forbidden(
+                        "cursor.plan_offset 超出当前正文范围",
+                        code="INVALID_ARGUMENT", got=plan_off,
+                        total_chars=len(content))
+                nxt_pc = (plan_off + BOOT_PLAN_SECTION_CHARS
+                          if plan_off + BOOT_PLAN_SECTION_CHARS
+                          < len(content) else None)
+                return {"snapshot_id": snapshot_id,
+                        "section": "plan_content", "plan_id": plan_id,
+                        "content": content[plan_off:plan_off
+                                           + BOOT_PLAN_SECTION_CHARS],
+                        "offset": plan_off,
+                        "total_chars": len(content),
+                        "next_cursor": ({"plan_id": plan_id,
+                                         "plan_offset": nxt_pc}
+                                        if nxt_pc else None)}
 
             # i：正文分节续取（F16）——同事务读当前 I，超长默认包
             # 只给首节，warning 承诺的分节续取在这里兑现

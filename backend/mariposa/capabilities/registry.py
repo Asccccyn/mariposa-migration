@@ -785,18 +785,39 @@ def _with_operation_id(principal: Principal, a: dict, fn) -> dict:
     不变，崩溃窗口重放安全）。
     """
     op = a.get("operation_id")
+    # 裁定（2026-10-04 江乔生）：request_ref = 一次具体请求的幂等身份。
+    # 未显式给 operation_id 时由 request_ref 派生（reqref: 前缀进入
+    # 同一 runtime 幂等空间）：同 ref 同 payload 网络重试重放原结果
+    # （start 回原 session、不重新领预算）；同 ref 异 payload 拒绝。
+    _plan = a.get("query_plan")
+    _req_ref = a.get("request_ref")
+    if not _req_ref and isinstance(_plan, dict):
+        _req_ref = _plan.get("request_ref")
+    from_req_ref = False
+    if not op and isinstance(_req_ref, str) and _req_ref.strip():
+        op = f"reqref:{_req_ref.strip()}"
+        from_req_ref = True
     if not op:
         return fn(principal, a)
     key = f"{fn.__name__}:{a.get('session_id', 'new')}:{op}"
     ph = memory.canonical_hash(a)
     ctx = {"principal_id": principal.principal_id, "operation_key": key,
            "payload_hash": ph}
-    return recall_store.run_operation(
-        principal.principal_id, key,
-        lambda: fn(principal, a, op_ctx=ctx),
-        payload_hash=ph,
-        replay_guard=lambda saved: recall_service.revalidate_replayed(
-            fn.__name__, saved, a))
+    try:
+        return recall_store.run_operation(
+            principal.principal_id, key,
+            lambda: fn(principal, a, op_ctx=ctx),
+            payload_hash=ph,
+            replay_guard=lambda saved: recall_service.revalidate_replayed(
+                fn.__name__, saved, a))
+    except IdempotencyConflict:
+        if from_req_ref:
+            raise Forbidden(
+                "request_ref 已绑定另一次不同内容的请求"
+                "（REF_REUSE_MISMATCH）：一个 request_ref 只代表一次"
+                "具体请求", code="REF_REUSE_MISMATCH",
+                request_ref=_req_ref) from None
+        raise
 
 
 def _recall_start(principal: Principal, a: dict) -> dict:
@@ -1150,7 +1171,9 @@ def _del_decide(principal: Principal, a: dict) -> dict:
     return deletion.deletion_decide(
         principal.principal_id, str(a.get("request_id", "")),
         str(a.get("decision", "")),
-        rejection_reason=a.get("rejection_reason"))
+        rejection_reason=a.get("rejection_reason"),
+        operation_key=(str(a.get("operation_id"))
+                       if a.get("operation_id") else None))
 
 
 def _del_list(principal: Principal, a: dict) -> dict:
