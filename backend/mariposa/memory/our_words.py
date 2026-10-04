@@ -122,7 +122,8 @@ def list_for(memory_id: str) -> list[dict]:
         row = conn.execute(
             "SELECT published FROM source_messages WHERE id=? OR"
             " provider_message_id=?",
-            (ref[len("source_msg:"):], ref[len("source_msg"):])).fetchone()
+            (ref[len("source_msg:"):],
+             ref[len("source_msg:") :])).fetchone()
         if row is None or not row["published"]:
             return "invalid_or_missing"
         return None

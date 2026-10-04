@@ -74,7 +74,8 @@ def _state_hash(conn) -> str:
             # unchanged（审计反例）。mood_tags 无时间列，聚合 tag 集
             # 合本体（排序拼接防顺序漂移）
             ("memory_moods", "captured_at", ""),
-            ("memory_categories", "created_at", "")):
+            ("memory_categories", "created_at", ""),
+            ("i_revision_memory_relations", "created_at", "")):
         row = conn.execute(
             f"SELECT COUNT(*) AS c, MAX({time_col}) AS m {extra} FROM {table}"
         ).fetchone()

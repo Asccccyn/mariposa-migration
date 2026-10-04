@@ -1,0 +1,274 @@
+{
+  "date": "2026-10-04",
+  "baseline": {
+    "source": "/Users/zhoujiaming/Projects/mariposa",
+    "head": "db16d2a371a8ce193695f09f9e9282f245601367",
+    "status": "",
+    "omitted_model_cache_paths": [
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/60938626ad1097a0c1a14be4f8340e32c714a056.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/a8b3208c2884c4efb86e49300fdd3dc877220cdf.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/cdb3043fc938fc918c06e66cf704c2ba58f88747.lock",
+      "D:\\mariposa\\runtime\\models/CACHEDIR.TAG",
+      "D:\\mariposa\\runtime\\models/blobs/.huggingface-shared-blobs",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.lock",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.refs",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/60938626ad1097a0c1a14be4f8340e32c714a056",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/a8b3208c2884c4efb86e49300fdd3dc877220cdf",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/cdb3043fc938fc918c06e66cf704c2ba58f88747",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/files_metadata.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/refs/main",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/model_optimized.onnx",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/special_tokens_map.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer_config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/trees/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59.json"
+    ],
+    "remote_main_verified": "db16d2a371a8ce193695f09f9e9282f245601367"
+  },
+  "closure_counts": {
+    "CLOSED": 10,
+    "PARTIAL": 1
+  },
+  "closure": [
+    {
+      "id": "RER-01",
+      "status": "CLOSED",
+      "summary": "start/refine铸造token先入packet，再把同一ref写operation与签发表；网络重放恢复完全相同continuation且可继续，预算不双耗。",
+      "evidence": [
+        "evidence/recall/test_replay_retains_issued_continuation[start].txt",
+        "evidence/recall/test_replay_retains_issued_continuation[refine].txt"
+      ]
+    },
+    {
+      "id": "RECALL-06",
+      "status": "CLOSED",
+      "summary": "原legacy来源缺口get三分支与list均已修复并通过；新list校验对合法provider_message_id来源误标缺失，另记DBR-RECALL-01，故本域并非全通过。",
+      "evidence": [
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_list.txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[verbatim].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[paraphrase].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[unspecified].txt",
+        "evidence/recall/test_words_list_does_not_mark_published_source_as_gap[provider_id].txt"
+      ],
+      "new_findings": [
+        "DBR-RECALL-01"
+      ]
+    },
+    {
+      "id": "RER-02",
+      "status": "CLOSED",
+      "summary": "有效导航结构卡在重放时保留，原event_time不在phase字段集导致丢卡的问题已消除；导航仍不消费/失效continuation。",
+      "evidence": [
+        "evidence/recall/test_navigation_replay_preserves_current_structured_cards.txt",
+        "evidence/recall/test_navigation_does_not_consume_or_invalidate_continuation.txt"
+      ]
+    },
+    {
+      "id": "RE-MEM-01",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-07.txt",
+        "evidence/memory/boundary-04.txt"
+      ],
+      "result": "plan.memory.correct已加入恢复白名单和payload builder；completed/无领域记录两个crash窗口均通过公开Registry重试。",
+      "summary": "plan.memory.correct已加入恢复白名单和payload builder；completed/无领域记录两个crash窗口均通过公开Registry重试。"
+    },
+    {
+      "id": "RE-MEM-02",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-09.txt",
+        "evidence/memory/boundary-01.txt"
+      ],
+      "result": "删除申请/决定从领域request_id重建完整结果；原header/body重试与首次完整结果相同。",
+      "summary": "删除申请/决定从领域request_id重建完整结果；原header/body重试与首次完整结果相同。"
+    },
+    {
+      "id": "RE-MEM-03",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/boundary-02.txt"
+      ],
+      "result": "含前后空白reason的删除申请原样crash重试成功，不误报payload冲突。",
+      "summary": "含前后空白reason的删除申请原样crash重试成功，不误报payload冲突。"
+    },
+    {
+      "id": "SRC-01-R1",
+      "status": "CLOSED",
+      "reason": "合法parent链不再被跨快照逆序sequence拒绝。",
+      "evidence": [
+        "evidence/source/probe-range_accepts_parent_order_when_first_seen_sequences_reverse.log",
+        "evidence/source/probe-open_range_preserves_all_parent_path_nodes_across_snapshots.log",
+        "evidence/source/probe-cross_snapshot_range_retains_codepoint_endpoint_offsets.log"
+      ],
+      "summary": "合法parent链不再被跨快照逆序sequence拒绝。"
+    },
+    {
+      "id": "SRC-01-R2",
+      "status": "CLOSED",
+      "reason": "补齐parent后重新执行数量限额，上限4不再返回5条。",
+      "evidence": [
+        "evidence/source/probe-range_budget_counts_supplemented_parent_members.log"
+      ],
+      "summary": "补齐parent后重新执行数量限额，上限4不再返回5条。"
+    },
+    {
+      "id": "SRC-03-R1",
+      "status": "CLOSED",
+      "reason": "正常恢复集可验证；缺失manifest、坏JSON、payload断链均拒绝。",
+      "evidence": [
+        "evidence/source/probe-backup_contains_raw_archive_manifest_needed_to_verify.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-remove.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-corrupt.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-retarget.log"
+      ],
+      "summary": "正常恢复集可验证；缺失manifest、坏JSON、payload断链均拒绝。"
+    },
+    {
+      "id": "SRC-05",
+      "status": "CLOSED",
+      "reason": "空raw_path在收集与验证两端一致排除，坏格式导入不再污染备份验证。",
+      "evidence": [
+        "evidence/source/probe-failed_format_detection_does_not_poison_backups.log"
+      ],
+      "summary": "空raw_path在收集与验证两端一致排除，坏格式导入不再污染备份验证。"
+    },
+    {
+      "id": "SRC-06",
+      "status": "PARTIAL",
+      "severity": "P3",
+      "reason": "dry_run→verify原例通过；新增实际apply闭环仍按basename读取而失败、零写入。",
+      "evidence": [
+        "evidence/source/probe-nested_migration_dry_run_verify_roundtrip.log",
+        "evidence/source/probe-nested_migration_verified_report_actually_applies.log"
+      ],
+      "summary": "dry_run→verify原例通过；新增实际apply闭环仍按basename读取而失败、零写入。"
+    }
+  ],
+  "i_minimalization": [
+    {
+      "id": "I-MINIMAL-CONTENT",
+      "status": "PASSED_WITH_NEW_FINDING",
+      "evidence": [
+        "evidence/memory/i-01.txt",
+        "evidence/memory/i-02.txt",
+        "evidence/memory/i-03.txt",
+        "evidence/memory/boundary-09.txt"
+      ],
+      "result": "首包和i分页只带当前正文，不泄漏旧正文/条目指针/绑定明细；历史与绑定详情仍可显式i.item.history读取。分页完整，安全标记保留。新增bound_memory_count没有纳入snapshot失效指纹，见DB-MEM-01。",
+      "summary": "首包和i分页只带当前正文，不泄漏旧正文/条目指针/绑定明细；历史与绑定详情仍可显式i.item.history读取。分页完整，安全标记保留。新增bound_memory_count没有纳入snapshot失效指纹，见DB-MEM-01。"
+    }
+  ],
+  "findings": [
+    {
+      "id": "DBR-RECALL-01",
+      "title": "新增 words.list 来源校验把合法 provider message 引用误标缺失",
+      "severity": "P2",
+      "classification": "repair_regression",
+      "prior_id": "RECALL-06",
+      "file": "backend/mariposa/memory/our_words.py",
+      "lines": [
+        122,
+        127
+      ],
+      "contract": "CURRENT §6：仅无法解析legacy来源标gap，有效source_msg来源必须为真实已发布消息；Source层既有内部ID/provider UUID双路引用，hold.require_resolvable_sources与words.get._source_ref_valid均接受并验证provider_message_id。",
+      "repro": "导入一条provider_message_id=provider-msg-id的已发布Source；通过正常hold写source_ref=source_msg:provider-msg-id的verbatim话语；调用memory.words.get和memory.our_words.list。相同流程用内部source id作正控制。",
+      "actual": "写入成功，words.get证据word_verbatim；words.list却多出source_gap=invalid_or_missing。第125行provider_message_id查询参数采用ref[len(\"source_msg\"):]，多保留了冒号，查成:provider-msg-id；内部id分支正确。",
+      "expected": "两种被正式支持且能解析到已发布消息的来源均不标gap；查询参数使用同一个正确解析后的msg_id。",
+      "old_baseline_control": "相同provider_id正控制针对旧78921d0通过（0.06s）；新db16d2a失败，确认本次list gap修复引入。",
+      "evidence": [
+        "evidence/recall/test_words_list_does_not_mark_published_source_as_gap[provider_id].txt",
+        "evidence/recall/test_words_list_does_not_mark_published_source_as_gap[internal_id].txt",
+        "evidence/recall/provider_gap_old_78921d0_control.txt"
+      ],
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/reaudit-db16d2a/probes/recall/test_gap_valid_source.py::test_words_list_does_not_mark_published_source_as_gap[provider_id]"
+    },
+    {
+      "id": "DB-MEM-01",
+      "origin": "new_regression_from_I_minimalization",
+      "original_id": null,
+      "severity": "P2",
+      "title": "I绑定计数变化未使Bootstrap快照失效，旧提示被标记unchanged",
+      "file": "backend/mariposa/bootstrap/service.py",
+      "lines": [
+        250,
+        253
+      ],
+      "contract": "CURRENT §8新增I最小化提示bound_memory_count；Bootstrap现行snapshot合同要求出站资源变化时失效，不能让已加载包继续宣称未变化。",
+      "repro": "用正式I接口创建一个带桶绑定的条目，bootstrap.get得到bound_memory_count=1；公开i.item.relations.correct移除唯一绑定；fresh bootstrap已无绑定提示；携原loaded_snapshot_id重取。",
+      "actual": "旧snapshot返回unchanged=true，fresh/old state_hash仍相同，消费者被要求继续使用已失真的bound_memory_count=1。新计数查询i_revision_memory_relations，但_state_hash未包含该表/计数，关系纠错也不改i_documents.updated_at。",
+      "expected": "对影响bound_memory_count的关系增删纠错使旧snapshot失效或返回更新包；即使I正文/version不变，也不能沿用旧计数提示。",
+      "evidence": [
+        "evidence/memory/i-02.txt"
+      ],
+      "test_node": "test_i_binding_hint_change_invalidates_loaded_snapshot",
+      "classification_note": "这是f92b28b新增出站提示与既有快照机制的接线回归，不是db16d2a原3恢复问题未修。未将当前/历史绑定的计数范围自行推导为缺陷。"
+    },
+    {
+      "id": "SRC-06",
+      "prior_id": "SRC-06",
+      "severity": "P3",
+      "status": "PARTIAL",
+      "title": "迁移verify已支持相对path，但apply仍按basename读取并失败",
+      "file": "backend/mariposa/migration.py",
+      "lines": [
+        398,
+        402
+      ],
+      "contract": "CURRENT §10明确migration.py为离线维护工具，P3/deferred；当前dry_run→verify→apply演练工具链仍需一致消费报告中的相对path。",
+      "repro": "fresh隔离测试根创建fixtures/daily/2026-09-28 nested_abc123def456.md，dry_run写入path=daily/文件名，verify同报告通过；将该未经改动报告传apply_from_report。",
+      "actual": "dry_run.ok=true、verify.ok=true，但apply仍fdir/e[legacy_id]，返回ok=false、applied=0、problems=[file_missing]，数据库memories count=0。",
+      "expected": "apply与verify一致使用已保存的相对path（兼容无path旧报告）；隔离合成样例应成功创建1条记录。",
+      "probe": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/reaudit-db16d2a/probes/source/test_source_fix_boundaries.py::test_nested_migration_verified_report_actually_applies",
+      "evidence": [
+        "evidence/source/probe-nested_migration_dry_run_verify_roundtrip.log",
+        "evidence/source/probe-nested_migration_verified_report_actually_applies.log"
+      ]
+    }
+  ],
+  "severity_counts": {
+    "P2": 2,
+    "P3": 1
+  },
+  "tests": {
+    "collected": 909,
+    "files": 92,
+    "cases": {
+      "passed": 903,
+      "skipped": 1
+    },
+    "deselected_real_model": 5,
+    "max_sampled_tree_rss_bytes": 96387072,
+    "seconds": 79.49
+  },
+  "test_quality_observations": [
+    {
+      "id": "TEST-01",
+      "file": "tests/unit/test_audit1004_batch2.py",
+      "lines": [
+        218,
+        234
+      ],
+      "detail": "新增导航回归仅创建一条事件再向earlier导航，并允许候选为空；核心断言置于if nav[candidates]下，不能保证真的验证了结构卡重放。本轮独立probe用两个事件且先断言首次非空，已验证产品修复通过。"
+    },
+    {
+      "id": "TEST-02",
+      "file": "tests/unit/test_audit1004_batch2.py",
+      "lines": [
+        257,
+        277
+      ],
+      "detail": "新增删除恢复回归把stale transport claim写给jiaming，却用qiaosheng调用；该请求不会遇到此stale claim，因而不能证明新transport恢复分支生效。本轮独立同主体crash探针已通过，产品修复与正式测试覆盖质量分开判断。"
+    }
+  ],
+  "json_slimming": {
+    "status": "DEFERRED_UNTIL_REAUDIT_PASSES",
+    "reason": "用户明确本轮通过后再看；当前仍有两个新增运行时P2及离线P3残留。未开展尺寸测量、未变更响应schema或业务源码。"
+  }
+}
