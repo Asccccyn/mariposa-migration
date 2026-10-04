@@ -9,7 +9,7 @@ from __future__ import annotations
 from .. import config, db
 from ..errors import Forbidden, StaleOperation
 from . import budget, phase_policy, store
-from .service import _query_fp, _require_enabled
+from .shared import _query_fp, _require_enabled
 
 def _norm_recall_field(field: str) -> str:
     """候选卡字段名归一化：words 通道写 our_words.text，阶段字段集用
