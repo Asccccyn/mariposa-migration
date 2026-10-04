@@ -280,6 +280,44 @@ class TestImporter:
         assert r["stats"]["conversations_empty"] == 1
         assert r["stats"]["messages_total"] == 0
 
+    def test_failed_cleanup_is_batch_scoped(self, clean, tmp_path):
+        """F06（2026-10-03 审计 P1）：历史成功导入的合法空会话挂着
+        不可变快照；另一会话失败清场不得全库 DELETE 无消息会话——
+        否则 FK IntegrityError 让失败批次卡在 running、消息残留、
+        重试被 lease 阻挡。清场只限本批。"""
+        import_ok("jiaming", "empty_conv.json")
+        bad = tmp_path / "bad.json"
+        bad.write_text(json.dumps([
+            {"uuid": "audit-f06-conv", "chat_messages": [{
+                "uuid": "f06-m1", "sender": "human",
+                "created_at": "2026-10-03T00:00:00Z",
+                "content": [{"type": "text", "text": "合成失败批消息"}]}]},
+            42,
+        ], ensure_ascii=False), encoding="utf-8")
+        try:
+            r2 = importer.import_file("jiaming", str(bad))
+            assert r2["status"] == "failed", r2
+        except MariposaError:
+            pass  # 结构化失败异常同样合法；基线上是裸 IntegrityError
+        with db.formal() as c:
+            leftover = c.execute(
+                "SELECT COUNT(*) AS n FROM source_messages WHERE"
+                " provider_conversation_id='audit-f06-conv'").fetchone()["n"]
+            batch = c.execute(
+                "SELECT status FROM source_import_batches ORDER BY"
+                " import_started_at DESC").fetchone()
+            empty_kept = c.execute(
+                "SELECT COUNT(*) AS n FROM source_conversations c WHERE"
+                " NOT EXISTS (SELECT 1 FROM source_messages m WHERE"
+                " m.conversation_id=c.id)").fetchone()["n"]
+            snap_kept = c.execute(
+                "SELECT COUNT(*) AS n FROM source_conversation_snapshots"
+            ).fetchone()["n"]
+        assert batch["status"] == "failed", "失败必须定稿，不得卡 running"
+        assert leftover == 0, "失败批次不得残留消息"
+        assert empty_kept >= 1, "历史合法空会话必须存活"
+        assert snap_kept >= 1, "其不可变快照必须存活"
+
     def test_same_text_different_uuid_both_stored(self, clean):
         import_ok("jiaming", "same_text_diff_uuid.json")
         with db.formal() as c:

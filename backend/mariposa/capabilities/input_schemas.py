@@ -449,7 +449,23 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "relations.list": {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "resource": {"type": "object"},
+            # F21（2026-10-03 审计 P2）：resource 嵌套字段定型——id 为
+            # 数组/未知字段此前越过 schema 在路由层变 500；未知 type
+            # 由路由层结构化 4xx 拒绝
+            "resource": {"type": "object", "additionalProperties": False,
+                         "properties": {
+                             "type": {"type": "string"},
+                             "memory_id": {"type": "string"},
+                             "item_id": {"type": "string"},
+                             "revision": {"type": "integer"},
+                             "plan_id": {"type": "string"},
+                             "word_id": {"type": "string"},
+                             "conversation_id": {"type": "string"},
+                             "start_message_id": {"type": "string"},
+                             "end_message_id": {"type": "string"},
+                             "start_char_offset": {"type": "integer"},
+                             "end_char_offset": {"type": "integer"},
+                             "ref": {"type": "string"}}},
             "memory_id": {"type": "string"},
             "plan_id": {"type": "string"},
             "word_id": {"type": "string"},

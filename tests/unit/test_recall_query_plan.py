@@ -115,7 +115,8 @@ class TestCompilationSafety:
         """HYBRID-04：恶意 FTS 输入不变查询语法。"""
         evil = '搬家" OR 1=1 -- NEAR(a b) * ^ :'
         compiled = qp.compile_terms([evil])
-        assert 'OR 1=1' not in compiled.replace('" OR "', '§') or True
+        # 恒真断言修正（审计 2026-10-03）：or True 让本行永不失败
+        assert 'OR 1=1' not in compiled.replace('" OR "', '§')
         # 所有 token 都被引号包裹成 phrase，无裸露操作符
         import re
         assert not re.search(r'(?<!")\b(OR|AND|NOT|NEAR)\b(?!")',

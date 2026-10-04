@@ -442,8 +442,12 @@ class TestOpsRecall:
              "from mariposa import schema; schema.migrate()"],
             env=env2, capture_output=True, text=True, cwd=".")
         assert r2.returncode != 0 and "ALLOW_CREATE" in r2.stderr
+        # 恒真断言修正（审计 2026-10-03）：or True 使文件存在性检查
+        # 永不失败——"不静默建库"的"库"是数据库文件本身（目录骨架
+        # 由 ensure_dirs 先建、与建库与否无关）
         assert not (tmp_path / "fresh-root" / "runtime" / "formal"
-                    ).exists() or True  # 不静默建库
+                    / "mariposa.sqlite3").exists(), \
+            "拒绝启动时不得静默创建正式库文件"
 
     def test_ops_recall02_test_root_fuse(self):
         from pathlib import Path as _P

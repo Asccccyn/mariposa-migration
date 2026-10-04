@@ -120,11 +120,26 @@ class TestBootstrapV2:
                           loaded_snapshot_id=first["snapshot_id"])
 
     def test_three_days_not_rolling_72h_boot07(self, actors):
-        # 业务今天 00:05：9月19日虽距当前不足 72 小时，仍不在普通近期桶
-        row = bootstrap._state_hash  # noqa: F841  （引用模块）
-        import mariposa.bootstrap.service as bs
+        """BOOT-07（审计 2026-10-03 重写：原用例自造日期列表不调用实现，
+        AST 替换 bootstrap.get 为抛错也能通过）。改为真实 bootstrap.get
+        + 相对真实今天的边界桶：0..2 天在窗，第 3 天出窗——按业务
+        日期而非 72 小时滚动。"""
+        tz = ZoneInfo(TZ)
+        today = datetime.now(timezone.utc).astimezone(tz).date()
+        in_ids = {hold_v2(actors, (today - timedelta(days=i)).isoformat())
+                  ["memory_id"]
+                  for i in range(bootstrap.BOOT_MEMORY_DAYS)}
+        out_id = hold_v2(
+            actors,
+            (today - timedelta(days=bootstrap.BOOT_MEMORY_DAYS))
+            .isoformat())["memory_id"]
+        pkg = bootstrap.get("jiaming", "cc", "cc")
+        seen = {it["memory_id"]
+                for it in pkg["memory_days"]["items"]}
+        assert in_ids <= seen, "0..2 天边界桶必须全部在开窗内"
+        assert out_id not in seen, "第 3 天（距现在可能不足 72h）不得凭滚动入窗"
+        # 纯逻辑部分保留：窗口日期按事件日生成（不滚动）
         from datetime import date as _date
-        # 纯逻辑验证：三天窗口按事件日期生成
         fake_today = _date(2026, 9, 22)
         days = [(fake_today - timedelta(days=i)).isoformat()
                 for i in range(bootstrap.BOOT_MEMORY_DAYS)]
@@ -163,3 +178,30 @@ class TestBootstrapV2:
         item = next(i for i in out["memory_days"]["items"]
                     if i["memory_id"] == m["memory_id"])
         assert item.get("late_entry") is True  # 新收录标记，不冒充刚发生
+
+
+class TestF16LongISectioning:
+    """F16（2026-10-03 审计 P2）：单条长 I 默认包分节，warning 承诺
+    的续取必须存在且可走完。"""
+
+    def test_long_i_sectioned_with_continuation(self, actors):
+        from mariposa.identity_i import service as i_svc
+        long_body = "长文锚词。" + "这是很长的 I 正文段落。" * 2200
+        i_svc.item_create("jiaming", long_body)
+        out = bootstrap.get("jiaming", "cc", "cc")
+        i_sec = out["i"]
+        assert i_sec["truncated"] is True
+        assert len(i_sec["content"]) <= bootstrap.BOOT_I_SECTION_CHARS
+        assert i_sec["next_cursor"]["i_offset"] == bootstrap.BOOT_I_SECTION_CHARS
+        assert out["estimated_tokens"] <= bootstrap.BOOT_SOFT_TOKEN_BUDGET, \
+            "分节后默认包不得再超软预算"
+        # 续取走完全文
+        cursor, got_all = i_sec["next_cursor"], [i_sec["content"]]
+        guard = 0
+        while cursor and guard < 100:
+            page = bootstrap.next_page("jiaming", "cc", out["snapshot_id"],
+                                       cursor, "i")
+            got_all.append(page["content"])
+            cursor = page["next_cursor"]
+            guard += 1
+        assert "".join(got_all) == long_body, "分节续取拼回必须等于全文"

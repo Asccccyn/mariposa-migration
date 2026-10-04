@@ -286,3 +286,138 @@ class TestWordAppendTxCheck:
             ow.append("jiaming", "mem_nonexistent",
                       [{"speaker": "qiaosheng", "text": "x",
                         "expression_kind": "verbatim"}])
+
+
+# ------------------------------------------------- F08/F21（2026-10-03）
+
+class TestF08IntervalSemantics:
+
+    def _bound(self, actors, conv, msgs):
+        mid = _hold(actors, "F08 区间语义")["memory_id"]
+        return mid
+
+    def test_adjacent_halfopen_ranges_do_not_overlap(self, actors):
+        """[0,4) 与 [4,8) 邻接不重叠：同消息绑定互相排斥。"""
+        conv, msgs = _seed_conv("f08a", ["邻接甲消息", "邻接乙消息"])
+        m1 = _hold(actors, "区间零到四")["memory_id"]
+        m2 = _hold(actors, "区间四到八")["memory_id"]
+        binding.bind("jiaming", m1, conv, msgs[0], msgs[0], 0, 3)
+        binding.bind("jiaming", m2, conv, msgs[0], msgs[0], 3, 5)
+        out = routing.list_relations({"resource": {
+            "type": "source_range", "conversation_id": conv,
+            "start_message_id": msgs[0], "end_message_id": msgs[0],
+            "start_char_offset": 0, "end_char_offset": 3}})
+        got = {r["other"]["memory_id"] for r in out["relations"]
+               if r["domain"] == "source_binding"}
+        assert got == {m1}, f"邻接区间不得互相命中：{got}"
+
+    def test_cross_message_offsets_trim_boundary(self, actors):
+        """跨消息查询的起止偏移参与判定：绑定终点与查询起点同消息
+        且绑定终点偏移不越过查询起点偏移 → 不命中。"""
+        conv, msgs = _seed_conv("f08b", ["跨消息甲", "跨消息乙", "跨消息丙"])
+        m_wide = _hold(actors, "整段绑定")["memory_id"]
+        binding.bind("jiaming", m_wide, conv, msgs[0], msgs[2])
+        # 查询 [m1@4 .. m2]：绑定 [m0..m2] 与之重叠（消息区间相交且
+        # 起点偏移不排斥——绑定起点在更早的消息上）
+        out = routing.list_relations({"resource": {
+            "type": "source_range", "conversation_id": conv,
+            "start_message_id": msgs[1], "end_message_id": msgs[2],
+            "start_char_offset": 4, "end_char_offset": None}})
+        got = {r["other"]["memory_id"] for r in out["relations"]
+               if r["domain"] == "source_binding"}
+        assert m_wide in got, "跨消息带偏移的重叠区间应命中"
+        # 查询 [m0@0 .. m0@4) vs 绑定 [m0..m2]（同起点消息，绑定无
+        # 起点偏移=消息粒度）：命中；但查询 [m2@9999 .. m2@10000)
+        # 与 [m0..m2] 在末端同消息，查询起点越过消息末尾 → 仍按消息
+        # 粒度命中（绑定末端无偏移），不得抛错
+        out2 = routing.list_relations({"resource": {
+            "type": "source_range", "conversation_id": conv,
+            "start_message_id": msgs[2], "end_message_id": msgs[2],
+            "start_char_offset": 9999, "end_char_offset": 10000}})
+        got2 = {r["other"]["memory_id"] for r in out2["relations"]
+                if r["domain"] == "source_binding"}
+        assert m_wide in got2
+
+    def test_anchor_from_other_conversation_never_matches(self, actors):
+        """锚定消息属于另一会话（同 sequence）不得命中本会话绑定。"""
+        conv_a, msgs_a = _seed_conv("f08c1", ["会话甲消息"])
+        conv_b, msgs_b = _seed_conv("f08c2", ["会话乙消息"])
+        assert msgs_a[0] != msgs_b[0]
+        m = _hold(actors, "会话甲绑定")["memory_id"]
+        binding.bind("jiaming", m, conv_a, msgs_a[0], msgs_a[0])
+        # 查询指向会话甲，但锚定消息是会话乙的（sequence 同为 1）
+        out = routing.list_relations({"resource": {
+            "type": "source_range", "conversation_id": conv_a,
+            "start_message_id": msgs_b[0], "end_message_id": msgs_b[0]}})
+        got = {r["other"]["memory_id"] for r in out["relations"]
+               if r["domain"] == "source_binding"}
+        assert not got, "他 conversation 的锚定消息不得命中本会话绑定"
+
+    def test_boundary_sibling_not_covered(self, actors):
+        """memories_referencing：绑定边界序号上的同号 sibling（不同
+        消息身份）不算被覆盖；严格区间内部与端点身份一致的算。"""
+        conv, msgs = _seed_conv("f08d", ["兄弟甲", "兄弟乙", "兄弟丙"])
+        m = _hold(actors, "兄弟绑定")["memory_id"]
+        binding.bind("jiaming", m, conv, msgs[0], msgs[2])
+        # 中间消息（严格区间内部）
+        assert any(r["memory_id"] == m
+                   for r in binding.memories_referencing(msgs[1]))
+        # 端点消息身份一致
+        assert any(r["memory_id"] == m
+                   for r in binding.memories_referencing(msgs[0]))
+        # 同会话同序号 sibling：手工造一条 sequence 冲突行
+        with db.formal() as conn:
+            sib_id = "f08-sibling-msg"
+            conv_row = conn.execute(
+                "SELECT id, provider FROM source_conversations WHERE"
+                " provider_conversation_id=? OR id=?",
+                (conv, conv)).fetchone()
+            start_seq = conn.execute(
+                "SELECT sequence FROM source_messages WHERE id=? OR"
+                " provider_message_id=?",
+                (msgs[0], msgs[0])).fetchone()["sequence"]
+            conn.execute(
+                "INSERT INTO source_messages(id, conversation_id, provider,"
+                " provider_conversation_id, provider_message_id,"
+                " normalized_sender, created_at, text, sequence,"
+                " import_batch_id, published)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,1)",
+                (sib_id, conv_row["id"], conv_row["provider"], conv,
+                 sib_id,
+                 "human", "2026-09-28T12:00:00Z", "同号 sibling 消息",
+                 start_seq, "f08-batch", ))
+        refs = binding.memories_referencing(sib_id)
+        assert not any(r["memory_id"] == m for r in refs), \
+            "边界序号上的 sibling 不凭序号相等算覆盖"
+
+
+class TestF21StructuredErrors:
+
+    def test_unknown_type_structured_rejection(self, actors):
+        with pytest.raises(Forbidden) as ei:
+            routing.list_relations({"resource": {"type": "spaceship"}})
+        assert ei.value.code == "INVALID_ARGUMENT"
+
+    def test_missing_fields_structured_rejection(self, actors):
+        with pytest.raises(Forbidden) as ei:
+            routing.list_relations({"resource": {"type": "memory"}})
+        assert ei.value.code == "INVALID_ARGUMENT"
+
+    def test_id_as_array_rejected_by_schema(self, actors):
+        from mariposa.capabilities.input_schemas import validate
+        with pytest.raises(Forbidden):
+            validate("relations.list", {
+                "resource": {"type": "memory", "memory_id": ["m1"]}})
+
+    def test_endpoint_roundtrip_still_works(self, actors):
+        """F08 验证项：返回的 other 端点对象可原样续查。"""
+        a = _hold(actors, "续查甲")["memory_id"]
+        b = _hold(actors, "续查乙")["memory_id"]
+        rel.link("jiaming", a, b, "related_to")
+        out = routing.list_relations({"resource": {"type": "memory",
+                                                   "memory_id": a}})
+        other = next(r["other"] for r in out["relations"]
+                     if r["domain"] == "memory_relation")
+        back = routing.list_relations({"resource": other})
+        assert any(r["domain"] == "memory_relation"
+                   for r in back["relations"]), "other 应可原样续查"

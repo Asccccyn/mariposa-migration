@@ -24,7 +24,8 @@ _SUB_TABLES = ("memory_categories", "memory_tags", "memory_moods",
                "memory_mood_tags", "memory_our_words", "memory_recollections",
                "memory_view_receipts", "memory_reengagements", "memory_keeps",
                "field_search_docs", "field_fts", "search_fts",
-               "retrieval_documents", "memory_versions")
+               "retrieval_documents", "memory_versions",
+               "memory_embeddings")
 
 
 def _now() -> datetime:
@@ -96,6 +97,11 @@ def _execute_delete(conn, memory_id: str, actor: str) -> None:
     """
     _gate_or_raise(conn, memory_id)
     projection.remove(conn, memory_id)
+    # F09：向量派生表由检索侧惰性建表——未启用过 dense 的库上删除
+    # 也要能跑，先幂等确保 schema 存在再清理
+    from ..retrieval import semantic as _sem, words_semantic as _wsem
+    _sem.ensure_schema(conn)
+    _wsem.ensure_schema(conn)
     # RA-020（2026-10-02 复审 P2）：先取 word IDs——our_words 删除后
     # words 派生表（words_search_docs/words_fts）按 word_id 同事务清理
     #（此前正文副本留存到下次全量重建）
@@ -108,6 +114,8 @@ def _execute_delete(conn, memory_id: str, actor: str) -> None:
         conn.execute("DELETE FROM words_search_docs WHERE word_id=?",
                      (wid,))
         conn.execute("DELETE FROM words_fts WHERE word_id=?", (wid,))
+        # F09（2026-10-03 审计 P2）：words 向量派生索引同事务真删除
+        conn.execute("DELETE FROM word_embeddings WHERE word_id=?", (wid,))
     conn.execute("DELETE FROM memories WHERE memory_id=?", (memory_id,))
     audit.record(conn, "memory.deleted", actor,
                  resource_id=memory_id, resource_version=0,

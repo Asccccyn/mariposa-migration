@@ -36,21 +36,40 @@ def _endpoint(res: dict) -> tuple[str, str]:
         if res.startswith("ow_"):
             return "word", res
         return "memory", res.split(":")[-1]
+    # F21（2026-10-03 审计 P2）：端点字段类型校验——id 为数组/缺字段/
+    # 未知 type 此前裸 KeyError/ValueError 变 HTTP 500，统一结构化 4xx
+    def _req_str(field: str) -> str:
+        v = res.get(field)
+        if not isinstance(v, str) or not v:
+            raise Forbidden(
+                f"resource.{field} 必须是非空字符串",
+                code="INVALID_ARGUMENT", field=field,
+                got_type=type(v).__name__)
+        return v
+
     t = res.get("type")
     if t == "memory":
-        return "memory", res["memory_id"]
+        return "memory", _req_str("memory_id")
     if t == "i_revision":
-        return "i_revision", f"{res['item_id']}@{res['revision']}"
+        item = _req_str("item_id")
+        rev = res.get("revision")
+        if not isinstance(rev, int) or isinstance(rev, bool):
+            raise Forbidden("resource.revision 必须是整数",
+                            code="INVALID_ARGUMENT", field="revision",
+                            got_type=type(rev).__name__)
+        return "i_revision", f"{item}@{rev}"
     if t == "plan":
-        return "plan", res["plan_id"]
+        return "plan", _req_str("plan_id")
     if t == "word":
-        return "word", res["word_id"]
+        return "word", _req_str("word_id")
     if t == "source_range":
-        return "source_range", str(res.get("conversation_id", ""))
+        return "source_range", _req_str("conversation_id")
     if t == "source_ref":
-        return "source_ref", str(res.get("ref", ""))
-    raise ValueError("resource must carry type/memory_id/item_id+revision/"
-                     "plan_id/word_id/source_range/source_ref")
+        return "source_ref", _req_str("ref")
+    raise Forbidden("resource.type 必须是 memory/i_revision/plan/word/"
+                    "source_range/source_ref 之一",
+                    code="INVALID_ARGUMENT",
+                    got=t if isinstance(t, str) else type(t).__name__)
 
 
 def _wants(direction: str, edge_dir: str) -> bool:
@@ -207,9 +226,24 @@ def list_relations(a: dict) -> dict:
                     " JOIN source_messages ce ON ce.id=b.end_message_id"
                     " WHERE c.id=? OR c.provider_conversation_id=?",
                     (conv_id, conv_id)).fetchall()
+
+                # F08（2026-10-03 审计 P2）：区间重叠按半开语义统一判定
+                # ——"a 整体在 b 前"= a 的末端不晚于 b 的首端（同消息时
+                # 按字符偏移，跨消息按消息序，偏移缺失视为消息粒度）。
+                # 旧实现 <= 把 [0,4) 与 [4,8) 判为重叠；且跨消息查询的
+                # 起止字符偏移被整个丢弃。
+                def _entirely_before(e_seq, e_off, b_seq, b_off):
+                    if e_seq is None or b_seq is None:
+                        return False
+                    if e_seq < b_seq:
+                        return True
+                    return (e_seq == b_seq
+                            and e_off is not None and b_off is not None
+                            and e_off <= b_off)
+
                 def _ov(a0, a1, b0, b1):
-                    return (a0 is None or b1 is None or a0 <= b1) and \
-                           (b0 is None or a1 is None or b0 <= a1)
+                    return (a0 is None or b1 is None or a0 < b1) and \
+                           (b0 is None or a1 is None or b0 < a1)
                 for r in rows:
                     if not (r["cseq"] is not None and r["eseq"] is not None):
                         continue
@@ -217,21 +251,33 @@ def list_relations(a: dict) -> dict:
                     msg_overlap = True
                     if s_mid and e_mid:
                         srow = conn.execute(
-                            "SELECT sequence FROM source_messages WHERE"
-                            " id=? OR provider_message_id=?",
+                            "SELECT sequence, conversation_id FROM"
+                            " source_messages WHERE id=? OR"
+                            " provider_message_id=?",
                             (s_mid, s_mid)).fetchone()
                         erow = conn.execute(
-                            "SELECT sequence FROM source_messages WHERE"
-                            " id=? OR provider_message_id=?",
+                            "SELECT sequence, conversation_id FROM"
+                            " source_messages WHERE id=? OR"
+                            " provider_message_id=?",
                             (e_mid, e_mid)).fetchone()
                         if srow is None or erow is None:
                             continue
-                        msg_overlap = (srow["sequence"] <= r["eseq"]
-                                       and r["cseq"] <= erow["sequence"])
-                        same_msg = (srow["sequence"] == erow["sequence"]
-                                    == r["cseq"] == r["eseq"])
-                        if msg_overlap and same_msg and (
-                                s_off is not None or e_off is not None):
+                        # F08：锚定消息必须属于绑定所在会话——不同会话
+                        # 撞 sequence 不得互相匹配
+                        _bconv = r["conversation_id"]
+                        if (srow["conversation_id"] != _bconv
+                                or erow["conversation_id"] != _bconv):
+                            continue
+                        q_s, q_e = srow["sequence"], erow["sequence"]
+                        msg_overlap = not _entirely_before(
+                            q_e, e_off, r["cseq"],
+                            r["start_char_offset"]) and \
+                            not _entirely_before(
+                                r["eseq"], r["end_char_offset"],
+                                q_s, s_off)
+                        if msg_overlap and q_s == q_e \
+                                and r["cseq"] == r["eseq"] and (
+                                    s_off is not None or e_off is not None):
                             msg_overlap = _ov(
                                 s_off, e_off,
                                 r["start_char_offset"],

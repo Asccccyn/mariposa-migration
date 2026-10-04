@@ -14,6 +14,7 @@ POST /v1/systemone
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -87,7 +88,19 @@ class TypeSafeJevJudge(base.JudgeProvider):
                 candidate, anchors)
             # 闭环复审 P1-5：必要证据段全空（profile 剥空/无来源）→
             # 不发送该候选、标 unavailable——没有证据就没有有效判断
-            if not candidate_projection["segments"]:
+            # F05（2026-10-03 审计 P1）：非空还不够——按候选类型核对
+            # 主体证据角色在场。普通事件必须有 event_evidence（标题
+            # 不能替代事件主体，r2 S09）；words/raw 必须有 primary_
+            # evidence。许可只够发标题时明确 unavailable，不放行
+            # 未经主体判断的正文。
+            _ch = candidate.get("channel") or "event"
+            _need_primary = _ch in ("words", "word", "raw", "source")
+            _need_role = ("primary_evidence" if _need_primary
+                          else "event_evidence")
+            _roles = {r for s in candidate_projection["segments"]
+                      for r in s.get("roles") or []}
+            if (not candidate_projection["segments"]
+                    or _need_role not in _roles):
                 items_by_ref[candidate.get("candidate_ref")
                              or candidate["resource_ref"]] = \
                     self._unavailable_item(candidate)
@@ -259,6 +272,10 @@ class TypeSafeJevJudge(base.JudgeProvider):
         return {
             "original_request": query_plan.get("original_request", ""),
             "semantic_query": query_plan.get("semantic_query", ""),
+            # F18（2026-10-03 审计 P2）：词法目标进投影与缓存身份——
+            # 只改 lexical_terms（海边→山里）构成新判断，不得命中
+            # 供应商侧旧缓存（query_fp 补偿不了本层缓存键）
+            "lexical_terms": query_plan.get("lexical_terms", []),
             "explicit_constraints": query_plan.get(
                 "explicit_constraints", {}),
             "explicit_negative_constraints": query_plan.get(
@@ -584,6 +601,12 @@ class TypeSafeJevJudge(base.JudgeProvider):
             except (urllib.error.URLError, TimeoutError, ValueError,
                     UnicodeDecodeError):
                 raise JudgeUnavailable("transport_or_json") from None
+            except http.client.HTTPException:
+                # F19（2026-10-03 审计 P2）：IncompleteRead/坏分块等
+                # 传输层中断同属"本次判断不可得"——不转结构化降级会让
+                # 整轮 start 裸异常（原事务回滚，无部分提交）
+                raise JudgeUnavailable("transport_http_interrupted") \
+                    from None
 
     def _unavailable_item(self, candidate: dict) -> base.JudgeItem:
         return base.JudgeItem(

@@ -86,6 +86,8 @@ class TestB02CrashWindow:
             "categories": ["daily"]}
 
     def _seed_running(self, key, age_seconds):
+        # 审计 2026-10-03：RA-004 后 registry 读 _transport_key(key)
+        # （t: 前缀）——fixture 必须种现行键空间，裸键根本不会被命中
         old = (datetime.now(timezone.utc)
                - timedelta(seconds=age_seconds)).strftime("%Y-%m-%d %H:%M:%S")
         with db.formal() as conn:
@@ -93,7 +95,8 @@ class TestB02CrashWindow:
                 "INSERT INTO idempotency_records(principal_id, capability,"
                 " idempotency_key, payload_hash, status, result_ref, created_at)"
                 " VALUES('jiaming','memory.hold',?,?, 'running', NULL, ?)",
-                (key, registry._payload_hash(self.ARGS), old))
+                (registry._transport_key(key),
+                 registry._payload_hash(self.ARGS), old))
 
     def test_stale_running_raises_outcome_unknown_not_replay(self, actors):
         self._seed_running("crash-key", 120)
