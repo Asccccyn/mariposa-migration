@@ -191,13 +191,14 @@ class TestArchivedParseSource:
     def test_manifest_pins_payload_path(self, actors, tmp_path):
         r = imp(write(tmp_path, "原始名 conversations.json",
                       [conv("c1", [msg("m1")])]))
-        d = Path(r["raw_path"]).parent
+        d = Path(importer.batch_status(r["batch_id"])["raw_path"]).parent
         manifest = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["payload"] == Path(r["raw_path"]).name
+        _rp = importer.batch_status(r["batch_id"])["raw_path"]
+        assert manifest["payload"] == Path(_rp).name
         # 内部文件名不得使用原始文件名（隔离注入面）
-        assert Path(r["raw_path"]).name.startswith("payload-")
+        assert Path(_rp).name.startswith("payload-")
         # 归档校验按 manifest 精确路径
-        sha, _ = archive.sha256_file(Path(r["raw_path"]))
+        sha, _ = archive.sha256_file(Path(_rp))
         assert archive.verify_archived("claude", r["batch_id"], sha)["ok"]
 
     def test_ambiguous_zip_rejected(self, actors, tmp_path):

@@ -214,9 +214,12 @@ class TestImporter:
         assert s["messages_new"] == 2
         assert s["sender_human"] == 1 and s["sender_assistant"] == 1
         assert s["messages_with_thinking"] == 1
-        assert r["verification"]["ok"] is True
-        assert s["min_created_at"] == "2026-03-01T02:00:00+00:00"
-        assert s["max_created_at"] == "2026-03-01T02:05:00+00:00"
+        assert r["verified"] is True  # 瘦身后聚合位；完整 verification 在 batch_status
+        _bs = importer.batch_status(r["batch_id"])
+        _full = _bs["stats"] if isinstance(_bs["stats"], dict) \
+            else json.loads(_bs["stats"])
+        assert _full["min_created_at"] == "2026-03-01T02:00:00+00:00"
+        assert _full["max_created_at"] == "2026-03-01T02:05:00+00:00"
 
     def test_idempotent_reimport(self, clean):
         import_ok("jiaming", "standard.json")
@@ -404,7 +407,7 @@ class TestImporter:
 
     def test_raw_archive_immutable_original(self, clean):
         r = import_ok("jiaming", "standard.json")
-        raw_path = Path(r["raw_path"])
+        raw_path = Path(importer.batch_status(r["batch_id"])["raw_path"])
         assert raw_path.exists()
         manifest = json.loads(
             (raw_path.parent / "manifest.json").read_text(encoding="utf-8"))
@@ -606,4 +609,5 @@ class TestRealExportOptional:
             pytest.skip("未设置 MARIPOSA_SOURCE_REAL_EXPORT（本机真实导出路径）")
         r = importer.import_file("qiaosheng", path)
         assert r["status"] in ("completed", "already_imported")
-        assert r["stats"]["sender_unknown"] >= 0  # 仅断言结构，不落敏感断言
+        full = importer.batch_status(r["batch_id"])
+        assert json.loads(full["stats"])["sender_unknown"] >= 0  # 仅结构
