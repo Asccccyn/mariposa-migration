@@ -137,5 +137,5 @@ ALTER。
 ## 8. 基线
 
 - 修复前基线：`b484908`（审计）→ 第一批修复 `15213a2`。
-- 本批 commit：`4e58bd5`（baseline_head 同步登记于
-  ACCEPTANCE.json）。
+- 本批 commit：`f734a81`（amend 前代码树为 4e58bd5，二者仅差
+  本登记字符串；baseline_head 指向最终哈希）。
