@@ -485,9 +485,45 @@ def _revalidate_replayed_response(principal: Principal, capability: str,
 
 #: 走 relations.corrections.atomic_write 的能力（领域回执键
 #: op:<operation_id>，与业务副作用同事务）——F23 崩溃窗口恢复面
+#: MEM-05（2026-10-04 二批）：补齐全部带领域回执的纠错/删除入口——
+#: word 来源纠错（atomic_write）、直删（atomic_write）、删除申请
+#: （RA-019 op: 回执）、删除决定（2026-10-04 同事务回执）
 _DOMAIN_IDEMPOTENT_CAPS = frozenset({
     "memory.relations.correct", "i.item.relations.correct",
-    "source.binding.correct"})
+    "source.binding.correct", "memory.our_words.source.correct",
+    "memory.delete", "memory.deletion.request",
+    "memory.deletion.decide"})
+
+#: MEM-07（2026-10-04 二批）：各能力的领域归一化 payload 构造——
+#: 崩溃恢复必须比对领域 payload 身份，不得把另一项操作的结果缓存
+#: 为本请求完成。与各 handler 传给 atomic_write/deletion 的 payload
+#: 字段保持一致（改 handler 时同步改这里）。
+_DOMAIN_PAYLOAD_BUILDERS = {
+    "memory.relations.correct": lambda a: {
+        "relation_id": a.get("relation_id"),
+        "correction_action": a.get("correction_action"),
+        "replacement": a.get("replacement"), "note": a.get("note")},
+    "i.item.relations.correct": lambda a: {
+        "relation_id": a.get("relation_id"),
+        "correction_action": a.get("correction_action"),
+        "replacement": a.get("replacement"), "note": a.get("note")},
+    "source.binding.correct": lambda a: {
+        "binding_id": a.get("binding_id"),
+        "correction_action": a.get("correction_action"),
+        "replacement": a.get("replacement"), "note": a.get("note")},
+    "memory.our_words.source.correct": lambda a: {
+        "word_id": a.get("word_id"),
+        "expected_source_ref": a.get("expected_source_ref"),
+        "expected_source_version": a.get("expected_source_version"),
+        "correction_action": a.get("correction_action"),
+        "replacement": a.get("replacement"), "note": a.get("note")},
+    "memory.delete": lambda a: {"memory_id": a.get("memory_id")},
+    "memory.deletion.request": lambda a: {
+        "memory_id": a.get("memory_id"), "reason": a.get("reason")},
+    "memory.deletion.decide": lambda a: {
+        "request_id": a.get("request_id"), "decision": a.get("decision"),
+        "rejection_reason": a.get("rejection_reason")},
+}
 
 
 def _recover_transport_from_domain(principal: Principal, cap: Capability,
@@ -502,11 +538,29 @@ def _recover_transport_from_domain(principal: Principal, cap: Capability,
     op = arguments.get("operation_id")
     if not isinstance(op, str) or not op:
         return None, None
+    # MEM-07：领域归一化 payload 身份——与领域侧回执的 payload_hash
+    # 同一口径（json 排序 sha256），不一致即另一项操作，判冲突而非
+    # 把它的结果缓存为本请求完成
+    import hashlib as _hl
+    import json as _json
+    _builder = _DOMAIN_PAYLOAD_BUILDERS.get(cap.name)
+    _ph = None
+    if _builder is not None:
+        _ph = _hl.sha256(_json.dumps(
+            _builder(arguments), ensure_ascii=False, sort_keys=True,
+            default=str).encode()).hexdigest()
     with db.formal() as conn:
         row = conn.execute(
-            "SELECT status, result_ref FROM idempotency_records WHERE"
+            "SELECT status, result_ref, payload_hash FROM"
+            " idempotency_records WHERE"
             " principal_id=? AND capability=? AND idempotency_key=?",
             (principal.principal_id, cap.name, f"op:{op}")).fetchone()
+        if row is not None and _ph is not None and \
+                row["payload_hash"] not in (None, _ph):
+            from ..errors import IdempotencyConflict
+            raise IdempotencyConflict(
+                "领域回执属于另一次不同内容的操作（payload 身份不"
+                "符）", operation_key=op)
         if row is not None and row["status"] == "completed":
             try:
                 result = json.loads(row["result_ref"])
@@ -882,7 +936,7 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
         principal.principal_id,
         str(a.get("record_principal", principal.principal_id)),
         str(a.get("capability", "")),
-        _transport_key(str(a.get("idempotency_key", ""))),
+        str(a.get("idempotency_key", "")),
         int(a.get("stale_seconds", 60)))
 
 

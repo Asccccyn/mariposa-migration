@@ -303,7 +303,10 @@ def verify(report_path: str) -> dict:
     problems = []
     fdir = Path(report.get("fixture_dir", ""))
     for e in report.get("entries", []):
-        f = fdir / e["legacy_id"]
+        # SRC-06（2026-10-04 二批，P3）：按保留的相对路径定位——
+        # legacy_id 只是文件名，子目录成员会被丢掉路径导致
+        # file_missing（旧报告无 path 字段时回退 legacy_id）
+        f = fdir / e.get("path", e["legacy_id"])
         if not f.exists():
             problems.append({"legacy_id": e["legacy_id"], "issue": "file_missing"})
             continue

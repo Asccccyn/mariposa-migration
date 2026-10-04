@@ -577,6 +577,15 @@ async function sourceImport(path, filename) {
   try {
     const d = await api('source.import', { path, filename }, 'srcimp-' + Date.now());
     const s = d.stats;
+    // SRC-04（2026-10-04 二批）：先判 status——failed 批次已清场，
+    // 不得显示"完成/校验通过"冒充成功
+    if (d.status === 'failed') {
+      setStatus(`导入失败（批次 ${d.batch_id || ''}）：${d.error || '未知错误'}` +
+        (d.blocking && d.blocking.length ? `；阻断 ${d.blocking.length} 项` : '') +
+        (s && s.parse_failures ? `；解析失败 ${s.parse_failures}` : ''), true);
+      $('srcBatchesBtn').onclick();
+      return;
+    }
     setStatus(`导入${d.status === 'already_imported' ? '（已存在，幂等返回）' : '完成'}：` +
       `${s.conversations_total} 会话 / ${s.messages_new} 新消息 / ` +
       `human ${s.sender_human} · assistant ${s.sender_assistant} · ` +

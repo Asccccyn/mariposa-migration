@@ -110,6 +110,10 @@ def since(principal_id: str) -> dict:
         t = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
     except ValueError:
         return {**ctx, "since_last_contact": None, "note": "时间戳不可解析"}
+    # SRC-02（2026-10-04 二批）：合法的无时区时间戳按 UTC 归一（与
+    # context/_parse_instant 同一规则），不再 TypeError
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
     return {**ctx, "since_last_contact": (_now() - t).total_seconds(),
             "note": "以已收录记录为准，未导入期间不计"}
 

@@ -395,28 +395,61 @@ def set_candidate_state_tx(conn, session_id: str, candidate_ref: str,
                        candidate_ref=candidate_ref)
 
 
-def consume_continue_ref(conn, session_id: str, ref: str,
-                         from_revision: int) -> None:
-    """线性接续消费（裁定 2026-10-04）：同一 continue_request_ref 每
-    session 恰好消费一次，与 burst 授予同事务提交。
+def issue_continue_ref(conn, session_id: str, ref: str,
+                       for_revision: int) -> None:
+    """签发接续引用（RECALL-02，2026-10-04 二批）：与该轮交付同事务。
 
-    第一次 refine 成功后 head 前移；旧 ref 再发起领 burst 的 refine
-    在此判 stale（同 request_ref 的网络重试走 operation 幂等重放，
-    不会二次进入本函数）。回滚时消费一并撤销。
+    签出的 ref 绑定 for_revision（本轮交付的 revision）；客户端下一
+    次 refine 用它申领 burst。未签发过的任意字符串不构成有效接续。
     """
-    import sqlite3 as _sq
+    conn.execute(
+        "INSERT INTO recall_continue_refs(session_id,"
+        " continue_request_ref, from_revision, created_at,"
+        " consumed_at) VALUES(?,?,?,?,NULL)",
+        (session_id, str(ref), int(for_revision), _now()))
+
+
+def consume_continue_ref(conn, session_id: str, ref: str,
+                         head_revision: int) -> None:
+    """消费接续引用（裁定 2026-10-04 + RECALL-02）。
+
+    合同：服务端必须验证 continue_request_ref 与当前 session 最新
+    已交付且可继续 revision 的绑定——签发记录不存在（从未签发）、
+    已消费、或绑定 revision 落后于当前 head，均判 stale；通过则与
+    burst 授予同事务标记消费。同 request_ref 的网络重试走 operation
+    幂等重放，不会二次进入本函数；回滚时消费一并撤销。
+    """
     from ..errors import StaleOperation
-    try:
-        conn.execute(
-            "INSERT INTO recall_continue_refs(session_id,"
-            " continue_request_ref, from_revision, created_at)"
-            " VALUES(?,?,?,?)",
-            (session_id, str(ref), int(from_revision), _now()))
-    except _sq.IntegrityError:
+    row = conn.execute(
+        "SELECT from_revision, consumed_at FROM recall_continue_refs"
+        " WHERE session_id=? AND continue_request_ref=?",
+        (session_id, str(ref))).fetchone()
+    if row is None:
+        raise StaleOperation(
+            "continue_request_ref 从未签发：接续引用由服务端随交付"
+            "签发（见响应 continuation 字段），不接受任意字符串",
+            session_id=session_id, continue_request_ref=str(ref))
+    if row["consumed_at"] is not None:
         raise StaleOperation(
             "continue_request_ref 已消费（线性接续）：不得从旧节点"
             " 重复申领 burst", session_id=session_id,
             continue_request_ref=str(ref))
+    if int(row["from_revision"]) != int(head_revision):
+        raise StaleOperation(
+            "continue_request_ref 已过时：绑定 revision"
+            f" {row['from_revision']} 不是当前最新已交付 revision"
+            f" {head_revision}（head 已前移，请用最新交付签发的引用）",
+            session_id=session_id, continue_request_ref=str(ref),
+            bound_revision=int(row["from_revision"]),
+            head_revision=int(head_revision))
+    cur = conn.execute(
+        "UPDATE recall_continue_refs SET consumed_at=? WHERE"
+        " session_id=? AND continue_request_ref=? AND consumed_at"
+        " IS NULL", (_now(), session_id, str(ref)))
+    if cur.rowcount != 1:
+        raise StaleOperation(
+            "continue_request_ref 消费竞争失败（已被并发消费）",
+            session_id=session_id, continue_request_ref=str(ref))
 
 
 def require_session_in_tx(conn, session_id: str) -> dict:

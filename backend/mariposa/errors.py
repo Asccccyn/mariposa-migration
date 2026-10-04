@@ -13,6 +13,13 @@ class MariposaError(Exception):
         # （既有调用方/测试按 detail["code"] 读取）。
         if detail.get("code"):
             self.code = detail["code"]
+        # ROOT-03（2026-10-04 二批）：显式 http_status 生效——此前
+        # 被吞进 detail，声明长度超限等结构化状态码退回类默认 400
+        if detail.get("http_status") is not None:
+            try:
+                self.http_status = int(detail["http_status"])
+            except (TypeError, ValueError):
+                pass
         self.detail = detail
 
 

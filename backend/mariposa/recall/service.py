@@ -793,11 +793,16 @@ def _commit_round_effects(conn, session_id: str, revision: int,
                           effects: dict, *, plan: dict | None = None,
                           scope: str = "", kind: str = "memory") -> None:
     """最终事务内的本轮派生行写入（candidates/receipts/状态/回执/
-    Round1 成功回执——S13）。"""
+    Round1 成功回执——S13）。返回本轮签发的 continue_request_ref。"""
     store.upsert_candidates(conn, session_id, effects["candidates"],
                             revision)
     store.add_receipts(conn, session_id, effects["receipts"],
                        revision=revision)
+    # RECALL-02：接续引用随交付同事务签发（绑定本轮 revision），
+    # 下一次 refine 申领 burst 必须用它且须仍指向最新 head
+    import uuid as _uuid
+    cref = f"cont_{_uuid.uuid4().hex[:12]}"
+    store.issue_continue_ref(conn, session_id, cref, revision)
     if plan is not None:
         js = effects.get("judge_stats") or {}
         cov = dict(effects.get("coverage") or {})
@@ -833,6 +838,7 @@ def _commit_round_effects(conn, session_id: str, revision: int,
 
 
 # ---------- 七个 session 动作 ----------
+    return cref
 
 def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
     """commit-at-end：计算全部完成前不落任何正式状态。
@@ -873,15 +879,19 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                        else "memory")
             store.record_round(conn, sid, burst_no=1,
                                operation_key=op_key, kind=r1_kind)
-            _commit_round_effects(conn, sid, 1, effects, plan=plan,
-                                  scope=draft["conversation_scope"],
-                                  kind=r1_kind)
+            cref = _commit_round_effects(conn, sid, 1, effects, plan=plan,
+                                         scope=draft["conversation_scope"],
+                                         kind=r1_kind)
             store.record_attempt(conn, sid, op_key or _op_id("round"), 1, 1,
                                  "retrieve", "completed")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    packet["continuation"] = {
+        "continue_request_ref": cref,
+        "for_revision": 1,
+    }
     return packet
 
 
@@ -944,10 +954,9 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                 budget.ensure_round_available_conn(conn, sid, vsession)
                 store.record_round(conn, sid, burst_no=burst_no,
                                    operation_key=op_key, kind="memory")
-                _commit_round_effects(conn, sid, expected_revision + 1,
-                                      effects, plan=plan,
-                                      scope=session["conversation_scope"],
-                                      kind="memory")
+                cref = _commit_round_effects(
+                    conn, sid, expected_revision + 1, effects, plan=plan,
+                    scope=session["conversation_scope"], kind="memory")
                 store.record_attempt(conn, sid, op_key or _op_id("round"),
                                      expected_revision + 1, burst_no,
                                      "retrieve", "completed")
@@ -955,6 +964,10 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+        packet["continuation"] = {
+            "continue_request_ref": cref,
+            "for_revision": expected_revision + 1,
+        }
         return packet
     # burst 轮次已尽且无显式继续请求：允许修订条件（revision 前进、
     # 保存新查询计划），但不发起有成本的新检索（v1.4 §9.3——自动
@@ -994,6 +1007,16 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                 "UPDATE recall_sessions SET status='BUDGET_EXHAUSTED',"
                 " updated_at=? WHERE session_id=? AND current_revision=?",
                 (_now_iso(), a["session_id"], expected_revision + 1))
+            # RECALL-02：BUDGET_EXHAUSTED 也是一次已交付 revision——
+            # 同事务签发接续引用（无候选包同样可续），head 绑定一致
+            import uuid as _u2
+            _cref = f"cont_{_u2.uuid4().hex[:12]}"
+            store.issue_continue_ref(conn, a["session_id"], _cref,
+                                     expected_revision + 1)
+            out_packet["continuation"] = {
+                "continue_request_ref": _cref,
+                "for_revision": expected_revision + 1,
+            }
             _record_op_in_tx(conn, op_ctx, out_packet)
             conn.execute("COMMIT")
         except Exception:
@@ -2144,6 +2167,19 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                   "state": "seen", "scores": {}}
                  for c in raw_cards],
                 session["current_revision"])
+            # RECALL-04（2026-10-04 二批）：Round2 首页与续页的实际
+            # 出站卡同事务保存带 revision 的交付回执——后续
+            # EXPLICIT_REJECT_AFTER_DELIVERY 等拒绝理由才有出站事实
+            import uuid as _u
+            store.add_receipts(
+                conn, sid,
+                [{"receipt_id": f"rr_{_u.uuid4().hex[:14]}",
+                  "resource_ref": c["resource_ref"],
+                  "content_version": c.get("content_version"),
+                  "representation_version": c.get(
+                      "representation_version")}
+                 for c in packet.get("candidates", [])],
+                revision=session["current_revision"])
             if not cont_token:
                 store.record_attempt(conn, sid, op_key or _op_id("round2"),
                                      session["current_revision"],
