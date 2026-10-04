@@ -109,14 +109,40 @@ def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
 
 
 def list_for(memory_id: str) -> list[dict]:
+    # RECALL-06（2026-10-04 复审）：显式列表读取也独立报告来源解析
+    # 缺口——dangling source_ref 标 source_gap，不伪装有效 provenance
+    def _gap_state(conn, ref):
+        if not ref:
+            return None
+        if not isinstance(ref, str) or not ref.startswith("source_msg:"):
+            return ("legacy_raw_prefix"
+                    if isinstance(ref, str)
+                    and ref.startswith("raw_msg:")
+                    else "invalid_or_missing")
+        row = conn.execute(
+            "SELECT published FROM source_messages WHERE id=? OR"
+            " provider_message_id=?",
+            (ref[len("source_msg:"):], ref[len("source_msg"):])).fetchone()
+        if row is None or not row["published"]:
+            return "invalid_or_missing"
+        return None
+
     with db.formal() as conn:
         rows = conn.execute(
             "SELECT word_id, ordinal, speaker, text, expression_kind,"
             " source_ref, created_by, created_at FROM memory_our_words"
             " WHERE memory_id=? ORDER BY ordinal", (memory_id,)).fetchall()
+        gaps = {r["word_id"]: _gap_state(conn, r["source_ref"])
+                for r in rows}
     # 话语正文属检索内容：content_role/instruction_authority（v1.3 §10）
-    return [dict(r, content_role="retrieved_memory",
-                 instruction_authority="none") for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r, content_role="retrieved_memory",
+                 instruction_authority="none")
+        if gaps.get(r["word_id"]):
+            d["source_gap"] = gaps[r["word_id"]]
+        out.append(d)
+    return out
 
 
 def has_shared_expression(rows: list[dict]) -> list[dict]:
