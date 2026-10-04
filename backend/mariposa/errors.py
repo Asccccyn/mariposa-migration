@@ -68,6 +68,16 @@ class LockedResource(MariposaError):
     http_status = 403
 
 
+class Busy(MariposaError):
+    """同幂等键的执行仍在进行（并发的另一方尚未回填终态）。"""
+
+    code = "IDEMPOTENCY_IN_PROGRESS"
+    http_status = 409
+
+    def __init__(self):
+        super().__init__("idempotent execution still in progress; retry")
+
+
 class ProviderUnavailable(MariposaError):
     code = "PROVIDER_UNAVAILABLE"
     http_status = 503
