@@ -212,6 +212,13 @@ def open_range(conversation_id: str, start_message_id: str,
                 f" conversation_id=? AND id IN ({marks}){pubflt}"
                 " ORDER BY sequence ASC",
                 (start["conversation_id"], *path_missing)).fetchall())
+            # SRC-01-R2（2026-10-04 复审）：补齐的 path 成员同样计入
+            # 数量预算——不得借补齐绕过区间资源门
+            if len(rows) > config.SOURCE_RANGE_MAX_MESSAGES:
+                raise Forbidden(
+                    f"含 parent 补齐的区间消息数超限（{len(rows)} > "
+                    f"{config.SOURCE_RANGE_MAX_MESSAGES}）；请缩小范围",
+                    code="SOURCE_RANGE_TOO_LARGE")
     # CB-029：字节预算按 UTF-8 实际编码计——预算名义单位是字节，
     # len(str) 按 code point 计数会让中文/emoji 输出达 3/4 倍预算
     #（char offset 口径不变，仍是 code point 半开区间）
@@ -340,9 +347,9 @@ def _parent_path_ids(conn, start, end, pubflt: str) -> set[str]:
     """从 end 沿 parent 回溯到 start；失败即 SOURCE_RANGE_NOT_PATH。"""
     if start["id"] == end["id"]:
         return {start["id"]}
-    if start["sequence"] > end["sequence"]:
-        raise Forbidden("start message is after end message",
-                        code="SOURCE_RANGE_NOT_PATH", kind="order")
+    # SRC-01-R1（2026-10-04 复审）：跨快照 sequence 冲突会让首见序
+    # 倒置——顺序以真实 parent 链为准，walk 失败即报（不再按首见
+    # sequence 预判逆序拒绝合法区间）
     path = {end["id"]}
     cur = end
     steps = 0

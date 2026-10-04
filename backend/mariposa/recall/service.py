@@ -791,17 +791,21 @@ def _with_round_preview(session: dict) -> dict:
 
 def _commit_round_effects(conn, session_id: str, revision: int,
                           effects: dict, *, plan: dict | None = None,
-                          scope: str = "", kind: str = "memory") -> None:
+                          scope: str = "", kind: str = "memory",
+                          cref: str | None = None) -> str:
     """最终事务内的本轮派生行写入（candidates/receipts/状态/回执/
     Round1 成功回执——S13）。返回本轮签发的 continue_request_ref。"""
     store.upsert_candidates(conn, session_id, effects["candidates"],
                             revision)
     store.add_receipts(conn, session_id, effects["receipts"],
                        revision=revision)
-    # RECALL-02：接续引用随交付同事务签发（绑定本轮 revision），
-    # 下一次 refine 申领 burst 必须用它且须仍指向最新 head
-    import uuid as _uuid
-    cref = f"cont_{_uuid.uuid4().hex[:12]}"
+    # RECALL-02 + RER-01（2026-10-04 复审）：接续引用随交付同事务
+    # 签发（绑定本轮 revision）；cref 由调用方在记录 operation 结果
+    # 之前铸造传入——保证同 operation 重放返回的响应包含同一个
+    # 仍有效的接续引用，不新发 ref 也不重复授予预算
+    if cref is None:
+        import uuid as _uuid
+        cref = f"cont_{_uuid.uuid4().hex[:12]}"
     store.issue_continue_ref(conn, session_id, cref, revision)
     if plan is not None:
         js = effects.get("judge_stats") or {}
@@ -864,6 +868,12 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
     packet["query_fingerprint"] = _query_fp(plan)
     sid = draft["session_id"]
     op_key = op_ctx["operation_key"] if op_ctx else None
+    # RER-01：先铸造接续引用并入 packet，operation 结果与首次响应
+    # 携带同一个 ref（重放不丢、不新发）
+    import uuid as _u_start
+    _cref = f"cont_{_u_start.uuid4().hex[:12]}"
+    packet["continuation"] = {"continue_request_ref": _cref,
+                              "for_revision": 1}
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -879,19 +889,15 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                        else "memory")
             store.record_round(conn, sid, burst_no=1,
                                operation_key=op_key, kind=r1_kind)
-            cref = _commit_round_effects(conn, sid, 1, effects, plan=plan,
-                                         scope=draft["conversation_scope"],
-                                         kind=r1_kind)
+            _commit_round_effects(conn, sid, 1, effects, plan=plan,
+                                  scope=draft["conversation_scope"],
+                                  kind=r1_kind, cref=_cref)
             store.record_attempt(conn, sid, op_key or _op_id("round"), 1, 1,
                                  "retrieve", "completed")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    packet["continuation"] = {
-        "continue_request_ref": cref,
-        "for_revision": 1,
-    }
     return packet
 
 
@@ -930,6 +936,11 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
         packet["query_fingerprint"] = _query_fp(plan)
         sid = a["session_id"]
         op_key = op_ctx["operation_key"] if op_ctx else None
+        # RER-01：接续引用先入 packet 再记录 operation 结果
+        import uuid as _u_refine
+        _cref = f"cont_{_u_refine.uuid4().hex[:12]}"
+        packet["continuation"] = {"continue_request_ref": _cref,
+                                  "for_revision": expected_revision + 1}
         with db.recall_runtime() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -954,9 +965,10 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                 budget.ensure_round_available_conn(conn, sid, vsession)
                 store.record_round(conn, sid, burst_no=burst_no,
                                    operation_key=op_key, kind="memory")
-                cref = _commit_round_effects(
+                _commit_round_effects(
                     conn, sid, expected_revision + 1, effects, plan=plan,
-                    scope=session["conversation_scope"], kind="memory")
+                    scope=session["conversation_scope"], kind="memory",
+                    cref=_cref)
                 store.record_attempt(conn, sid, op_key or _op_id("round"),
                                      expected_revision + 1, burst_no,
                                      "retrieve", "completed")
@@ -964,10 +976,6 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-        packet["continuation"] = {
-            "continue_request_ref": cref,
-            "for_revision": expected_revision + 1,
-        }
         return packet
     # burst 轮次已尽且无显式继续请求：允许修订条件（revision 前进、
     # 保存新查询计划），但不发起有成本的新检索（v1.4 §9.3——自动
@@ -1641,6 +1649,13 @@ def revalidate_replayed(fn_name: str, saved: dict,
                 continue
             if saved.get("intent") == "find_words":
                 # 专项 words 跨阶段（S02/S18）：不套 event phase 过滤
+                kept.append(c)
+                continue
+            if fn_name.endswith("navigate"):
+                # RER-02（2026-10-04 复审）：导航卡的时间轴字段
+                #（event_time/hold_time）不属 event phase 白名单——
+                # 结构卡仍有效时重放不得过滤为空；可见性/版本/身份
+                # 检查在上游已过
                 kept.append(c)
                 continue
             allowed = phase_policy.eligible_fields(

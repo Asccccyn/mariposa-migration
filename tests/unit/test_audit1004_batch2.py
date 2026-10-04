@@ -173,3 +173,124 @@ class TestSrcRootFixes:
             )
             assert r.status_code in (401, 413), r.status_code
             # 带有效 token 时必须是 413 本身（ROOT-03）
+
+
+class TestReauditRound:
+    """Codex 78921d0 复审（11 条）修复回归——关键行为抽样。"""
+
+    def test_rer01_replay_retains_issued_continuation(self, actors):
+        """重放返回的响应包含同一个仍有效的接续引用（不新发/不丢）。"""
+        _hold(actors, "重放保留接续正文")
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": {
+                                 "original_request": "找重放保留",
+                                 "channels": ["event"],
+                                 "lexical_terms": ["重放保留"],
+                                 "request_ref": "rer1-s"}}, None
+                             )["data"]["data"]
+        ref1 = r1["continuation"]["continue_request_ref"]
+        r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": {
+                                 "original_request": "找重放保留",
+                                 "channels": ["event"],
+                                 "lexical_terms": ["重放保留"],
+                                 "request_ref": "rer1-s"}}, None
+                             )["data"]["data"]
+        assert r2["continuation"]["continue_request_ref"] == ref1, \
+            "同 operation 重放必须携带同一接续引用"
+        # 且该 ref 仍可消费（未因重放被消耗/重复签发）
+        from mariposa import config as cfg
+        old = cfg.RECALL_BURST_ROUNDS
+        cfg.RECALL_BURST_ROUNDS = 1
+        try:
+            rr = registry.invoke(actors["jiaming"], "memory.recall.refine",
+                                 {"session_id": r2["recall_session_id"],
+                                  "continue_request_ref": ref1,
+                                  "query_plan": {
+                                      "original_request": "再找重放保留",
+                                      "channels": ["event"],
+                                      "lexical_terms": ["重放保留"]},
+                                  "request_ref": "rer1-r"}, None)["data"]["data"]
+            assert rr["revision"] == 2
+        finally:
+            cfg.RECALL_BURST_ROUNDS = old
+
+    def test_rer02_navigation_replay_keeps_structured_cards(self, actors):
+        from mariposa.recall import service as recall_service
+        _hold(actors, "导航重放结构卡正文")
+        p = recall_service.start(actors["jiaming"], {
+            "query_plan": {"original_request": "找导航重放",
+                           "channels": ["event"],
+                           "lexical_terms": ["导航重放"]}})
+        sid = p["recall_session_id"]
+        nav = recall_service.navigate(actors["jiaming"], {
+            "session_id": sid, "direction": "earlier"})
+        assert not nav["candidates"] or \
+            all(c.get("matched_fields") for c in nav["candidates"])
+        replay = recall_service.revalidate_replayed("navigate", nav, None)
+        # 结构卡不为空时重放不得过滤为空（时间轴字段非 phase 白名单）
+        if nav["candidates"]:
+            assert replay["candidates"], \
+                "导航重放不得把仍有效的结构卡过滤为空"
+
+    def test_remem02_deletion_recovery_returns_real_result(self, actors):
+        """RE-MEM-02：删除申请的崩溃恢复返回 deletion_get 真实结果，
+        不是裸指针。"""
+        from mariposa import db
+        from mariposa.deletion import service as deletion
+        import hashlib as _hl
+        import json as _json
+        import datetime as _dt
+        out = _hold(actors, "恢复真实结果正文")
+        req = deletion.deletion_submit("qiaosheng", out["memory_id"],
+                                       "恢复结果测试", action="delete")
+        args = {"memory_id": out["memory_id"], "reason": "恢复结果测试",
+                "operation_id": "remem2-1"}
+        ph = _hl.sha256(_json.dumps(
+            {"memory_id": args["memory_id"],
+             "reason": args["reason"].strip()},
+            ensure_ascii=False, sort_keys=True,
+            default=str).encode()).hexdigest()
+        old = (_dt.datetime.now(_dt.timezone.utc)
+               - _dt.timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S")
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO idempotency_records(principal_id,"
+                " capability, idempotency_key, payload_hash, status,"
+                " result_ref, created_at) VALUES('jiaming',"
+                "'memory.deletion.request',?,?,'running',NULL,?)",
+                ("t:remem2-t", ph, old))
+            # 领域回执（指针形态）已存在
+            conn.execute(
+                "INSERT INTO idempotency_records(principal_id,"
+                " capability, idempotency_key, payload_hash, status,"
+                " result_ref, created_at) VALUES('qiaosheng',"
+                "'memory.deletion.request',?,?, 'completed', ?,"
+                " datetime('now'))",
+                ("op:remem2-1", ph,
+                 _json.dumps({"memory_id": out["memory_id"],
+                              "request_id": req["request_id"]})))
+        from tests.unit.test_ruling_provenance import _seed_published_msg
+        qiaosheng = identity.Principal(
+            "qiaosheng", "江乔生", "human", "web", "bq")
+        r = registry.invoke(qiaosheng, "memory.deletion.request",
+                            args, "remem2-t")
+        data = r["data"]
+        assert data.get("request_id") == req["request_id"]
+        assert "status" in data, "恢复必须返回正常结果字段（含状态）"
+
+    def test_recall06_words_list_reports_gap(self, actors):
+        from mariposa.memory import our_words as ow
+        out = _hold(actors, "列表gap正文")
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
+                " speaker, text, expression_kind, source_ref, created_by,"
+                " created_at) VALUES('ow-lgap', ?, 1, 'qiaosheng',"
+                " '列表gap话语', 'verbatim', 'raw_msg:legacy-x',"
+                " 'jiaming', datetime('now'))",
+                (out["memory_id"],))
+        words = ow.list_for(out["memory_id"])
+        hit = [w for w in words if w["word_id"] == "ow-lgap"]
+        assert hit and hit[0].get("source_gap") == "legacy_raw_prefix", \
+            "words.list 必须独立报告来源解析缺口"

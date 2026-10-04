@@ -492,7 +492,9 @@ _DOMAIN_IDEMPOTENT_CAPS = frozenset({
     "memory.relations.correct", "i.item.relations.correct",
     "source.binding.correct", "memory.our_words.source.correct",
     "memory.delete", "memory.deletion.request",
-    "memory.deletion.decide"})
+    "memory.deletion.decide",
+    # RE-MEM-01（2026-10-04 复审）：plan 链接纠错同走 atomic_write
+    "plan.memory.correct"})
 
 #: MEM-07（2026-10-04 二批）：各能力的领域归一化 payload 构造——
 #: 崩溃恢复必须比对领域 payload 身份，不得把另一项操作的结果缓存
@@ -518,11 +520,20 @@ _DOMAIN_PAYLOAD_BUILDERS = {
         "correction_action": a.get("correction_action"),
         "replacement": a.get("replacement"), "note": a.get("note")},
     "memory.delete": lambda a: {"memory_id": a.get("memory_id")},
+    # RE-MEM-03（2026-10-04 复审）：与领域侧同一归一化——request
+    # 的 reason strip、decide 的 decision strip().lower()，否则同
+    # header/body 的 crash 重试会被误报幂等冲突
     "memory.deletion.request": lambda a: {
-        "memory_id": a.get("memory_id"), "reason": a.get("reason")},
+        "memory_id": a.get("memory_id"),
+        "reason": (a.get("reason") or "").strip()},
     "memory.deletion.decide": lambda a: {
-        "request_id": a.get("request_id"), "decision": a.get("decision"),
+        "request_id": a.get("request_id"),
+        "decision": (a.get("decision") or "").strip().lower(),
         "rejection_reason": a.get("rejection_reason")},
+    "plan.memory.correct": lambda a: {
+        "link_id": a.get("link_id"),
+        "correction_action": a.get("correction_action"),
+        "replacement": a.get("replacement"), "note": a.get("note")},
 }
 
 
@@ -566,6 +577,17 @@ def _recover_transport_from_domain(principal: Principal, cap: Capability,
                 result = json.loads(row["result_ref"])
             except (ValueError, TypeError):
                 return None, None
+            # RE-MEM-02（2026-10-04 复审）：删除申请/决定的领域回执
+            # 只存指针——按 request_id 重建正常结果字段
+            # （deletion_get），不把裸指针当完成结果回放
+            if cap.name in ("memory.deletion.request",
+                            "memory.deletion.decide") and \
+                    isinstance(result, dict) and result.get("request_id"):
+                from ..deletion import service as _del_svc
+                try:
+                    result = _del_svc.deletion_get(result["request_id"])
+                except Exception:
+                    return None, None
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
