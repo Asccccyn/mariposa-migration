@@ -250,3 +250,76 @@ class TestF10F11F12AuditFixes:
         assert v["ok"] is False
         assert any(p["issue"] == "identity_mismatch"
                    for p in v["problems"]), v["problems"]
+
+
+class TestF10CrossChunkBoundaryLimit:
+    """裁定（2026-10-04）：跨读取块边界的元素——限额按当前元素自身
+    UTF-8 字节判定，不因跨块而误判。"""
+
+    def test_element_split_across_chunks_passes(self, tmp_path,
+                                                monkeypatch):
+        """限额 100：一个 ~66 字节的合法元素被 chunk 边界劈成两半，
+        必须完整解析通过（不是"缓冲里字节数超限"）。"""
+        from mariposa.source import json_stream as js
+        from mariposa import config as _cfg
+        items = [{"k": "跨块元素内容正好六十六字节左右ok", "n": 1}]
+        f = tmp_path / "cross.json"
+        f.write_text(json.dumps(items, ensure_ascii=False),
+                     encoding="utf-8")
+        old_limit = _cfg.SOURCE_MAX_ELEMENT_BYTES
+        _cfg.SOURCE_MAX_ELEMENT_BYTES = 100
+        old_chunk = js._CHUNK
+        js._CHUNK = 20  # 强制多次 fill，元素跨块
+        try:
+            with open(f, encoding="utf-8") as fh:
+                got = list(js.iter_top_level_array(fh))
+        finally:
+            js._CHUNK = old_chunk
+            _cfg.SOURCE_MAX_ELEMENT_BYTES = old_limit
+        assert got == items, "跨块元素必须完整解析，不得误判超限"
+
+    def test_element_split_across_chunks_rejected_when_over(self, tmp_path):
+        """限额 30：跨块的 66 字节元素按自身字节超限拒绝（结构化
+        SOURCE_ELEMENT_TOO_LARGE，不是 malformed）。"""
+        from mariposa.source import json_stream as js
+        from mariposa import config as _cfg
+        items = [{"k": "跨块超限元素内容超过三十字节肯定超", "n": 1}]
+        f = tmp_path / "cross2.json"
+        f.write_text(json.dumps(items, ensure_ascii=False),
+                     encoding="utf-8")
+        old_limit = _cfg.SOURCE_MAX_ELEMENT_BYTES
+        _cfg.SOURCE_MAX_ELEMENT_BYTES = 30
+        old_chunk = js._CHUNK
+        js._CHUNK = 8
+        try:
+            with pytest.raises(js.JsonStreamError) as ei:
+                with open(f, encoding="utf-8") as fh:
+                    list(js.iter_top_level_array(fh))
+        finally:
+            js._CHUNK = old_chunk
+            _cfg.SOURCE_MAX_ELEMENT_BYTES = old_limit
+        assert ei.value.code == "SOURCE_ELEMENT_TOO_LARGE"
+
+
+class TestCliExitCode:
+    """裁定（2026-10-04）：轻量直接验证——CLI shell 退出码与函数
+    返回一致（backup 成功 0；坏目录 restore 1），不建大套件。"""
+
+    def test_backup_exit_zero_and_bad_restore_exit_one(self, actors):
+        import os
+        import subprocess
+        import sys as _sys
+        from pathlib import Path as _P
+        repo = _P(__file__).resolve().parents[2]
+        env = dict(os.environ)
+        r1 = subprocess.run(
+            [_sys.executable, "-B", "-m", "mariposa.storage", "backup"],
+            cwd=repo / "backend", env=env, capture_output=True,
+            text=True, timeout=120)
+        assert r1.returncode == 0, r1.stderr[-300:]
+        r2 = subprocess.run(
+            [_sys.executable, "-B", "-m", "mariposa.storage", "restore",
+             "--from", "/nonexistent-backup-dir-xyz"],
+            cwd=repo / "backend", env=env, capture_output=True,
+            text=True, timeout=120)
+        assert r2.returncode == 1, r2.stdout[-200:]

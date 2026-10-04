@@ -106,6 +106,13 @@ export function Memories({ note }: { note: (s: string, err?: boolean) => void })
   );
 }
 
+type Plan = {
+  plan_id: string; title: string; state: string; version: number;
+  content?: string | null;
+  date_start?: string | null; date_end?: string | null;
+  starts_at?: string | null; due_at?: string | null;
+};
+
 type Proposal = {
   proposal_id: string; target_memory_id: string; state: string; revision: number;
   created_by: string; proposal_hash: string; base_memory_version: number | null;
@@ -176,6 +183,7 @@ type Quote = {
 
 type DelReq = {
   id: string;                // request_id
+  request_id?: string;
   memory_id: string;
   human_reason: string;
   rejection_reason?: string | null;
@@ -267,6 +275,11 @@ type SelfEntry = {
 type DiaryEntry = {
   diary_id: string; title: string; author: string; version: number;
   covers_from: string | null; covers_to: string | null; content: string;
+};
+
+type MediaObj = {
+  content_hash: string; mime: string; size: number; created_by: string;
+  created_at: string; owned_by?: string;
 };
 
 export function MediaLib({ note }: { note: (s: string, e?: boolean) => void }) {

@@ -126,7 +126,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "request_id": {"type": "string", "minLength": 1},
             "decision": {"type": "string", "enum": ["approve", "reject"]},
-            "rejection_reason": {"type": "string"}},
+            "rejection_reason": {"type": "string"},
+            "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.deletion.get": {
         "type": "object", "required": ["request_id"],
@@ -742,16 +743,21 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1}},
     },
     "memory.recall.start": {
-        "type": "object", "required": ["query_plan", "operation_id"],
+        "type": "object",
+        # 裁定（2026-10-04）：operation_id 与 request_ref 二选一——
+        # request_ref 本身就是一次具体请求的幂等身份
+        "required_oneof": [["operation_id", "request_ref"]],
         "additionalProperties": False,
-        "conversation_scope": {"type": "string"},
-            "properties": {
+        "properties": {
             "query_plan": {"type": "object"},
             "conversation_scope": {"type": "string"},
-            "operation_id": {"type": "string", "minLength": 1}},
+            "operation_id": {"type": "string", "minLength": 1},
+            "request_ref": {"type": "string", "minLength": 1}},
     },
     "memory.recall.refine": {
-        "type": "object", "required": ["session_id", "query_plan", "operation_id"],
+        "type": "object",
+        "required": ["session_id", "query_plan"],
+        "required_oneof": [["operation_id", "request_ref"]],
         "additionalProperties": False,
         "properties": {
             "session_id": {"type": "string", "minLength": 1},
@@ -759,7 +765,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "expected_revision": {"type": "integer"},
             "continue_request_ref": {"type": "string", "minLength": 1},
             "conversation_scope": {"type": "string"},
-            "operation_id": {"type": "string", "minLength": 1}},
+            "operation_id": {"type": "string", "minLength": 1},
+            "request_ref": {"type": "string", "minLength": 1}},
     },
     "memory.recall.reject": {
         "type": "object", "required": ["session_id", "operation_id"],
@@ -921,6 +928,20 @@ def validate(capability: str, arguments: dict) -> None:
         raise Forbidden("arguments must be an object",
                         code="SCHEMA_VIOLATION", capability=capability)
     props = sch.get("properties", {})
+    # 裁定（2026-10-04）：二选一必填组——组内至少一个非空字段；
+    # request_ref 的既有合法位置含 query_plan 内（QueryPlan 字段）
+    def _group_value(field: str):
+        v = arguments.get(field)
+        if v in (None, "") and field == "request_ref" and                 isinstance(arguments.get("query_plan"), dict):
+            v = arguments["query_plan"].get("request_ref")
+        return v
+
+    for group in sch.get("required_oneof", []):
+        if not any(_group_value(g) not in (None, "") for g in group):
+            raise Forbidden(
+                f"missing required field (one of {group})",
+                code="SCHEMA_VIOLATION", capability=capability,
+                fields=list(group))
     for req in sch.get("required", []):
         if req not in arguments or arguments[req] in (None, ""):
             raise Forbidden(f"missing required field: {req}",

@@ -205,3 +205,28 @@ class TestF16LongISectioning:
             cursor = page["next_cursor"]
             guard += 1
         assert "".join(got_all) == long_body, "分节续取拼回必须等于全文"
+
+
+class TestPlanContentSectioning:
+    """裁定（2026-10-04）：Plan 与 I 同款分节/续取（mood 不做）。"""
+
+    def test_long_plan_content_sectioned_and_continuable(self, actors):
+        long_body = "计划长文锚词。" + "这是很长的计划正文。" * 1600
+        p = plans.create("jiaming", "长正文计划", content=long_body,
+                         state="active")
+        out = bootstrap.get("jiaming", "cc", "cc")
+        item = next(x for x in out["plans"]["items"]
+                    if x["plan_id"] == p["plan_id"])
+        assert item.get("content_truncated") is True
+        assert len(item["content"]) <= bootstrap.BOOT_PLAN_SECTION_CHARS
+        cursor = item["content_next_cursor"]
+        parts = [item["content"]]
+        guard = 0
+        while cursor and guard < 100:
+            page = bootstrap.next_page("jiaming", "cc",
+                                       out["snapshot_id"], cursor,
+                                       "plan_content")
+            parts.append(page["content"])
+            cursor = page["next_cursor"]
+            guard += 1
+        assert "".join(parts) == long_body, "分节续取拼回必须等于全文"

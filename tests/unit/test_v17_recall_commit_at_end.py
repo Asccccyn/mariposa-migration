@@ -166,7 +166,7 @@ class TestDFinalTransactionAtomicity:
         """D：session/round INSERT 成功后 receipts 写入抛异常 → 整体回滚。"""
         hold(actors)
 
-        def boom(conn, session_id, receipts):
+        def boom(conn, session_id, receipts, revision=None):
             raise RuntimeError("receipts insert failed")
 
         monkeypatch.setattr(store, "add_receipts", boom)
