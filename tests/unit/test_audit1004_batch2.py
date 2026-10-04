@@ -294,3 +294,116 @@ class TestReauditRound:
         hit = [w for w in words if w["word_id"] == "ow-lgap"]
         assert hit and hit[0].get("source_gap") == "legacy_raw_prefix", \
             "words.list 必须独立报告来源解析缺口"
+
+
+class TestReview3Fixes:
+    """db16d2a 复审三残留：words.list 冒号切片 / I 绑定指纹 /
+    apply 子目录路径。"""
+
+    def test_words_list_resolves_provider_message_id(self, actors):
+        """source_ref 用 provider message id（非内部 id）时
+        words.list 不得误报 source_gap（第二查询参数曾多留冒号）。"""
+        import tempfile
+        from mariposa.memory import our_words as ow
+        from mariposa.source import importer
+        tmp = tempfile.mkdtemp()
+        f = Path(tmp) / "pv3.json"
+        f.write_text(json.dumps([{
+            "uuid": "c-pv3", "chat_messages": [{
+                "uuid": "pv3-m1", "sender": "human",
+                "created_at": "2026-09-20T10:00:00.000Z",
+                "content": [{"type": "text", "text": "提供者id引用原文"}]}]}],
+            ensure_ascii=False), encoding="utf-8")
+        importer.import_file("jiaming", str(f))
+        out = _hold(actors, "提供者id引用正文")
+        words = ow.list_for(out["memory_id"])  # 前置：无话语也行
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
+                " speaker, text, expression_kind, source_ref, created_by,"
+                " created_at) VALUES('ow-pvid', ?, 1, 'qiaosheng',"
+                " '按提供者id引用的话语', 'verbatim', 'source_msg:pv3-m1',"
+                " 'jiaming', datetime('now'))",
+                (out["memory_id"],))
+        words = ow.list_for(out["memory_id"])
+        hit = [w for w in words if w["word_id"] == "ow-pvid"]
+        assert hit and not hit[0].get("source_gap"), \
+            "provider message id 引用必须解析为已发布来源，不得误报缺口"
+
+    def test_binding_removal_invalidates_snapshot(self, actors):
+        """移除最后一个 I↔桶绑定后，旧快照不得 unchanged=true。"""
+        from mariposa import db as _db
+        from mariposa.identity_i import service as i_svc
+        from mariposa.memory import service as mem
+        from mariposa.memory import relations as rel
+        from mariposa.bootstrap import service as boot
+        from mariposa.errors import SnapshotStale
+        from tests.conftest import reset_all
+        item = i_svc.item_create("jiaming", "绑定失效正文")
+        m = mem.hold(actors["jiaming"], text="绑定桶正文",
+                     memory_date="2026-09-20", date_confidence="exact",
+                     original_title="t", categories=["daily"],
+                     creation_mode="contemporaneous", raw_pending=False)
+        # 建立 I↔桶绑定（item 修订级关系——用 item_revise 带 relations）
+        i_svc.item_revise("jiaming", item["item_id"], "绑定失效正文二",
+                          expected_revision=1,
+                          relations=[{"memory_id": m["memory_id"],
+                                      "relation_type": "related_to"}])
+        first = boot.get("jiaming", "cc", "cc")
+        assert first["i"].get("bound_memory_count") == 1
+        # 解除绑定：再修订一次不带 relations 会分叉——走关系纠错
+        # （remove_wrong_binding）删除该修订的关系
+        rid = None
+        with _db.formal() as conn:
+            row = conn.execute(
+                "SELECT relation_id FROM i_revision_memory_relations"
+                " WHERE item_id=? AND memory_id=?",
+                (item["item_id"], m["memory_id"])).fetchone()
+            rid = row["relation_id"] if row else None
+        assert rid, "前置：绑定已建立"
+        registry.invoke(actors["jiaming"], "i.item.relations.correct",
+                        {"relation_id": rid,
+                         "correction_action": "remove_wrong_binding",
+                         "operation_id": "rv3-unbind"}, None)
+        # 失效的两种合法形态：SnapshotStale（推荐，强制重取）或
+        # 非 unchanged 的全新包——都证明旧快照不再冒充未变化
+        try:
+            second = boot.get("jiaming", "cc", "cc",
+                              loaded_snapshot_id=first["snapshot_id"])
+            assert second.get("unchanged") is not True, \
+                "移除最后一个绑定后旧快照必须失效（提示需刷新）"
+            assert "bound_memory_count" not in second["i"] or \
+                second["i"].get("bound_memory_count") == 0
+        except SnapshotStale:
+            pass
+
+    def test_migration_apply_handles_subdirectory(self, actors):
+        """apply 按保留的相对路径定位子目录成员（不再 file_missing）。"""
+        import tempfile
+        from mariposa import migration
+        tmp = Path(tempfile.mkdtemp())
+        sub = tmp / "nested"
+        sub.mkdir()
+        (sub / "2026-07-01 10-00-00 子目录样本_ab12cd34ef56.md").write_text(
+            "---\ntype: note\ndate: 2026-07-01\n---\n子目录迁移正文内容",
+            encoding="utf-8")
+        r = migration.dry_run(str(tmp), None)
+        assert r["counts"]["total"] == 1
+        v = migration.verify(_last_report_path(tmp, r))
+        assert v["ok"] is True, v["problems"]
+        out = migration.apply_from_report(_last_report_path(tmp, r))
+        assert out["ok"] is True, out.get("problems")
+        assert out.get("applied"), "子目录成员必须被 apply 落库"
+
+
+def _last_report_path(tmp, r):
+    # dry_run 的 out 未指定时报告写到临时目录——从返回里找不到则
+    # 用 dry_run(out=) 重跑一次固定路径
+    from mariposa import migration
+    p = Path(str(tmp)) / "report.json"
+    migration.dry_run(str(tmp), str(p))
+    return str(p)
+
+
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402

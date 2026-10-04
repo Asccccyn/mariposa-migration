@@ -396,7 +396,9 @@ def apply_from_report(report_path: str) -> dict:
     from datetime import datetime as _dt
     from .retrieval import projection as _pj
     for e in entries:
-        f = fdir / e["legacy_id"]
+        # 残留 P3（2026-10-04 复审二）：apply 与 verify 同口径——按
+        # 保留的相对路径定位，子目录成员不再 file_missing
+        f = fdir / e.get("path", e["legacy_id"])
         if not f.exists():
             problems.append({"legacy_id": e["legacy_id"], "issue": "file_missing"})
             continue

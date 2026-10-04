@@ -19,3 +19,14 @@
 
 验证：909 收集 908 passed + 1 skipped 0 failed（分批前台/隔离根）；
 新增回归 4 例（重放保留接续引用/导航重放/删除恢复真实结果/列表 gap）。
+
+## 复审二残留三件（db16d2a 复审，2026-10-04 三）
+
+| 条 | 处置 |
+| - | - |
+| 新 P2 words.list 冒号切片 | `_gap_state` 第二查询参数补上冒号（`ref[len("source_msg"):]`→`ref[len("source_msg:"):]`）——provider message id 引用不再误报 invalid_or_missing |
+| 新 P2 I 绑定提示不刷新 | `i_revision_memory_relations` 入 `_state_hash`（COUNT+MAX(created_at)）——移除最后一个绑定后旧快照失效（SnapshotStale），bound_memory_count 必刷新 |
+| 残留 P3 apply 子目录 | `apply_from_report` 按保留相对路径定位（与 verify 同口径） |
+
+验证：912 收集 911 passed + 1 skipped 0 failed；新增回归 3 例
+（provider id 解析 / 绑定移除失效快照 / 子目录 dry-run→verify→apply 全链）。
