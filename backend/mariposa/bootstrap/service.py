@@ -248,6 +248,9 @@ def get(principal_id: str, entry_source: str, profile: str,
             # 指纹可来自不同快照（审计反例 bootstrap_mixed_snapshot）
             from ..identity_i import service as _i_svc
             i_doc = _i_svc.get(conn=conn)
+            _i_bound = conn.execute(
+                "SELECT COUNT(DISTINCT memory_id) AS c FROM"
+                " i_revision_memory_relations").fetchone()["c"]
             plan_items = plans.bootstrap_plans(
                 today, BOOT_UPCOMING_DAYS, conn=conn)
             anniv = _anniversaries_upcoming(today, BOOT_UPCOMING_DAYS,
@@ -255,6 +258,11 @@ def get(principal_id: str, entry_source: str, profile: str,
         finally:
             conn.execute("COMMIT")
 
+    # 裁定（2026-10-04 三）：I 开窗提示预计算——has_history/绑定数
+    _i_items = i_doc.get("items", [])
+    _has_hist = (i_doc["version"] > 1
+                 or any(int(it.get("revision", 1)) > 1
+                        for it in _i_items))
     active_plans = [p for p in plan_items if p["state"] in plans.OPEN_STATES]
     upcoming_plans = [p for p in plan_items if p["state"] == "planned"]
     plan_page = []
@@ -291,17 +299,16 @@ def get(principal_id: str, entry_source: str, profile: str,
                        "categories"],
             "note": "三天桶只出标题+心情；事件正文须明确打开该桶",
         },
+        # 裁定（2026-10-04 三，乔生）：I 开窗出站最小化——只返回
+        # 当前的话 + 两个极简提示（历史/绑定）；条目指针、历史明细、
+        # 绑定明细不出站（存储全保留，按需 i.items.list /
+        # i.item.history / relations.list 显式读取）
         "i": {"content": (i_doc["content"] or "")[:BOOT_I_SECTION_CHARS],
-              "version": i_doc["version"],
-              # MEM-03（2026-10-04 二批）：items 只留条目/修订指针
-              # 元数据——完整正文已由分节 content 承载，重复携带会
-              # 绕开分节预算
-              "items": [{k: v for k, v in it.items() if k != "content"}
-                        for it in i_doc.get("items", [])],
-              "history_policy": "旧 revision 默认不注入；has_history="
-                               "true 时可按需调用 i.item.history",
-              "source": ("i_documents"
-                         if i_doc["content"] is not None else None),
+              **({"version": i_doc["version"]} if _has_hist else {}),
+              **({"has_history": True} if _has_hist else {}),
+              **({"bound_memory_count": _i_bound} if _i_bound else {}),
+              "detail_on_demand": "i.items.list / i.item.history /"
+                                  " relations.list",
               "note": None if i_doc["content"] is not None else
                       "I 尚未落笔（无旧Self自动映射，V2-I-03）",
               **({"truncated": True,

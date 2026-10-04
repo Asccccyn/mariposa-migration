@@ -73,7 +73,8 @@ class TestBootstrapV2:
         i_svc.write("jiaming", "I 的完整正本内容，不被标题化。")
         out = bootstrap.get("jiaming", "cc", "cc")
         assert out["i"]["content"] == "I 的完整正本内容，不被标题化。"
-        assert out["i"]["version"] == 1
+        # 裁定（2026-10-04 三）：无历史时连版本号都不出（省 token）
+        assert "version" not in out["i"]
 
     def test_no_30_raw_messages_boot03(self, actors):
         """BOOT-03：默认开窗不含原文（30 条内）；Source 层铺底后同判。"""

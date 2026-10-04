@@ -178,6 +178,13 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   模型上下文边界时都必须能明确证明该页内容是 memory/data 且无
   instruction authority——页级 envelope 或统一 ContextAssembler
   包装均可；**不要求逐项复制 Recall 字段或 JSON 形状统一**。
+- **I 开窗出站最小化（2026-10-04 三，乔生裁定）**：I 的条目/版本/
+  历史/溯源机器在存储层全部保留，但开窗包（Bootstrap）的 i 段
+  **只返回当前的话**，外加两个极简提示——有历史版本提示版本号
+  （`has_history`）、有桶绑定提示存在（`bound_memory_count`）；
+  条目指针/历史明细/绑定明细一律不出站，按需走 `i.items.list` /
+  `i.item.history` / `relations.list` 显式读取。非必要信息不返回
+  给模型侧。
 
 ## 9. 删除与破坏性幂等（2026-10-04 裁定）
 

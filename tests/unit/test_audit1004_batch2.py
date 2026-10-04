@@ -44,19 +44,47 @@ class TestBootstrapContinuationContract:
                 "snapshot_id": "snap-x", "cursor": {"i_offset": 0},
                 "section": section})
 
-    def test_i_items_stripped_and_envelope_on_pages(self, actors):
+    def test_i_outbound_minimal(self, actors):
+        """裁定（2026-10-04 三）：I 开窗只出当前的话+极简提示；
+        条目指针/明细一律不出站。"""
         from mariposa.identity_i import service as i_svc
         from mariposa.bootstrap import service as boot
         i_svc.item_create("jiaming", "条目一正文" * 50)
-        i_svc.item_create("jiaming", "条目二正文" * 50)
         pkg = boot.get("jiaming", "cc", "cc")
-        for it in pkg["i"]["items"]:
-            assert "content" not in it, "MEM-03：items 不得重复携带正文"
-            assert it.get("item_id")
+        i_sec = pkg["i"]
+        assert "items" not in i_sec, "条目指针不出站"
+        assert i_sec["content"], "当前的话必须在场"
+        assert "has_history" not in i_sec, "单条目无修订时不出提示"
         page = boot.next_page("jiaming", "cc", pkg["snapshot_id"],
                               {"i_offset": 0}, "i")
         assert page["content_role"] == "bootstrap_memory_package"
         assert page["instruction_authority"] == "none"
+
+    def test_i_history_and_binding_hints_minimal(self, actors):
+        from mariposa.identity_i import service as i_svc
+        from mariposa.bootstrap import service as boot
+        from mariposa import db
+        from mariposa.memory import service as memory
+        item = i_svc.item_create("jiaming", "初版正文")
+        i_svc.item_revise("jiaming", item["item_id"], "第二版正文",
+                          expected_revision=1)
+        m = memory.hold(actors["jiaming"], text="绑定桶正文",
+                        memory_date="2026-09-20", date_confidence="exact",
+                        original_title="t", categories=["daily"],
+                        creation_mode="contemporaneous",
+                        raw_pending=False)
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO i_revision_memory_relations(item_id,"
+                " revision, memory_id, relation_type, created_at)"
+                " VALUES(?, 2, ?, 'related_to', datetime('now'))",
+                (item["item_id"], m["memory_id"]))
+        pkg = boot.get("jiaming", "cc", "cc")
+        i_sec = pkg["i"]
+        assert i_sec["has_history"] is True, "有历史提示版本"
+        assert i_sec.get("version"), "提示版本号"
+        assert i_sec.get("bound_memory_count") == 1, "有桶绑定提示存在"
+        assert "items" not in i_sec
 
     def test_plan_list_page_sections_and_envelope(self, actors):
         from mariposa.plans import service as plans
