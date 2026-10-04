@@ -293,7 +293,11 @@ def get(principal_id: str, entry_source: str, profile: str,
         },
         "i": {"content": (i_doc["content"] or "")[:BOOT_I_SECTION_CHARS],
               "version": i_doc["version"],
-              "items": i_doc.get("items", []),
+              # MEM-03（2026-10-04 二批）：items 只留条目/修订指针
+              # 元数据——完整正文已由分节 content 承载，重复携带会
+              # 绕开分节预算
+              "items": [{k: v for k, v in it.items() if k != "content"}
+                        for it in i_doc.get("items", [])],
               "history_policy": "旧 revision 默认不注入；has_history="
                                "true 时可按需调用 i.item.history",
               "source": ("i_documents"
@@ -406,6 +410,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                            "memory_last_id": last["memory_id"]}
                 return {"snapshot_id": snapshot_id,
                         "section": "memory_days",
+                        "content_role": "bootstrap_memory_package",
+                        "instruction_authority": "none",
                         "items": items, "count": len(items),
                         "total_in_window": total, "next_cursor": nxt}
 
@@ -429,6 +435,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                           < len(content) else None)
                 return {"snapshot_id": snapshot_id,
                         "section": "plan_content", "plan_id": plan_id,
+                        "content_role": "bootstrap_memory_package",
+                        "instruction_authority": "none",
                         "content": content[plan_off:plan_off
                                            + BOOT_PLAN_SECTION_CHARS],
                         "offset": plan_off,
@@ -452,6 +460,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                          if i_off + BOOT_I_SECTION_CHARS < len(content)
                          else None)
                 return {"snapshot_id": snapshot_id, "section": "i",
+                        "content_role": "bootstrap_memory_package",
+                        "instruction_authority": "none",
                         "content": content[i_off:i_off
                                            + BOOT_I_SECTION_CHARS],
                         "offset": i_off, "total_chars": len(content),
@@ -463,11 +473,28 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
             offset = int((cursor or {}).get("plans_offset") or 0)
             all_plans = plans.bootstrap_plans(
                 today, BOOT_UPCOMING_DAYS, conn=conn)
-            page = all_plans[offset:offset + BOOT_SECTION_LIMIT]
+            page = []
+            for p_ in all_plans[offset:offset + BOOT_SECTION_LIMIT]:
+                p_ = dict(p_)
+                content = p_.get("content") or ""
+                # MEM-04（2026-10-04 二批）：列表续页与首页同款长正文
+                # 分节——后续正文走 plan_content 游标，不得绕过预算
+                if len(content) > BOOT_PLAN_SECTION_CHARS:
+                    p_["content"] = content[:BOOT_PLAN_SECTION_CHARS]
+                    p_["content_truncated"] = True
+                    p_["content_total_chars"] = len(content)
+                    p_["content_next_cursor"] = {
+                        "plan_id": p_["plan_id"],
+                        "plan_offset": BOOT_PLAN_SECTION_CHARS}
+                page.append(p_)
             nxt = (offset + BOOT_SECTION_LIMIT
                    if offset + BOOT_SECTION_LIMIT < len(all_plans)
                    else None)
+            # MEM-06（2026-10-04 二批）：所有续页与首页同权——进模型
+            # 上下文边界必须有 data 身份与无指令权限标记
             return {"snapshot_id": snapshot_id, "section": "plans",
+                    "content_role": "bootstrap_memory_package",
+                    "instruction_authority": "none",
                     "items": page, "count": len(page),
                     "total": len(all_plans),
                     "next_cursor": {"plans_offset": nxt}}

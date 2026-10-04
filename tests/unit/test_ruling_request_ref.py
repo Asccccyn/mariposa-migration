@@ -83,6 +83,8 @@ class TestRequestRefIdempotency:
 class TestLinearContinuation:
 
     def test_old_continue_ref_is_stale(self, actors, monkeypatch):
+        """RECALL-02 签发模型：接续引用由服务端随交付签发——已消费/
+        已过时/从未签发的 ref 都不得领 burst，最新签发的可以。"""
         monkeypatch.setattr(cfg, "RECALL_BURST_ROUNDS", 1)
         _hold(actors, "线性接续正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
@@ -92,30 +94,43 @@ class TestLinearContinuation:
                                  "lexical_terms": ["窗帘"],
                                  "request_ref": "lc-start"}}, None)["data"]["data"]
         sid = r1["recall_session_id"]
-        # burst1 轮次已用（BURST_ROUNDS=1）→ refine 需要 continue_ref
+        r1_ref = r1["continuation"]["continue_request_ref"]
+        assert r1["continuation"]["for_revision"] == 1
+        # burst1 轮次已用（BURST_ROUNDS=1）→ refine 需要已签发 ref
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine", {
             "session_id": sid,
             "query_plan": {"original_request": "再找窗帘",
                            "channels": ["event"],
                            "lexical_terms": ["窗帘"]},
-            "continue_request_ref": "cont-one",
+            "continue_request_ref": r1_ref,
             "request_ref": "lc-r1"}, None)["data"]["data"]
         assert r2["revision"] == 2, "第一次接续应成功领 burst2"
-        # burst2 也用尽后：旧 cont-one 再申领 → stale；新 ref 可续
+        r2_ref = r2["continuation"]["continue_request_ref"]
+        # 已消费的旧 ref → stale
         with pytest.raises(StaleOperation):
             registry.invoke(actors["jiaming"], "memory.recall.refine", {
                 "session_id": sid,
                 "query_plan": {"original_request": "三找窗帘",
                                "channels": ["event"],
                                "lexical_terms": ["窗帘"]},
-                "continue_request_ref": "cont-one",
+                "continue_request_ref": r1_ref,
                 "request_ref": "lc-r2-old"}, None)
+        # 从未签发的任意字符串 → stale（RECALL-02 核心）
+        with pytest.raises(StaleOperation):
+            registry.invoke(actors["jiaming"], "memory.recall.refine", {
+                "session_id": sid,
+                "query_plan": {"original_request": "三找窗帘",
+                               "channels": ["event"],
+                               "lexical_terms": ["窗帘"]},
+                "continue_request_ref": "made-up-string-never-issued",
+                "request_ref": "lc-r2-fake"}, None)
+        # 最新签发的 ref 可续
         r3 = registry.invoke(actors["jiaming"], "memory.recall.refine", {
             "session_id": sid,
             "query_plan": {"original_request": "三找窗帘",
                            "channels": ["event"],
                            "lexical_terms": ["窗帘"]},
-            "continue_request_ref": "cont-two",
+            "continue_request_ref": r2_ref,
             "request_ref": "lc-r2-new"}, None)["data"]["data"]
         assert r3["revision"] == 3
 
@@ -137,7 +152,8 @@ class TestLinearContinuation:
                 "query_plan": {"original_request": "再找窗帘",
                                "channels": ["event"],
                                "lexical_terms": ["窗帘"]},
-                "continue_request_ref": "cont-x",
+                "continue_request_ref": r1["continuation"][
+                    "continue_request_ref"],
                 "request_ref": "rc-r1"}
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
                              args, None)["data"]["data"]

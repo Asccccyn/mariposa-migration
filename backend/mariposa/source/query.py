@@ -193,13 +193,25 @@ def open_range(conversation_id: str, start_message_id: str,
                 f"区间消息数超限（{n_rows} > "
                 f"{config.SOURCE_RANGE_MAX_MESSAGES}）；请缩小范围或分页",
                 code="SOURCE_RANGE_TOO_LARGE")
-        rows = conn.execute(
+        rows = list(conn.execute(
             f"SELECT {_COLS}, content_json FROM source_messages WHERE"
             f" conversation_id=?"
             f" AND sequence>=? AND sequence<=?{pubflt}"
             " ORDER BY sequence ASC",
             (start["conversation_id"], start["sequence"],
-             end["sequence"])).fetchall()
+             end["sequence"])).fetchall())
+        # SRC-01（2026-10-04 二批）：path 成员按身份取齐——跨快照
+        # sequence 冲突会让中间消息的序号落在窗口外，按序号截取会把
+        # 已验证 parent 路径的成员丢掉；补齐后再按链序输出
+        window_ids = {r["id"] for r in rows}
+        path_missing = [i for i in path_ids if i not in window_ids]
+        if path_missing:
+            marks = ",".join("?" * len(path_missing))
+            rows += list(conn.execute(
+                f"SELECT {_COLS}, content_json FROM source_messages WHERE"
+                f" conversation_id=? AND id IN ({marks}){pubflt}"
+                " ORDER BY sequence ASC",
+                (start["conversation_id"], *path_missing)).fetchall())
     # CB-029：字节预算按 UTF-8 实际编码计——预算名义单位是字节，
     # len(str) 按 code point 计数会让中文/emoji 输出达 3/4 倍预算
     #（char offset 口径不变，仍是 code point 半开区间）
@@ -209,20 +221,39 @@ def open_range(conversation_id: str, start_message_id: str,
                         code="SOURCE_RANGE_TOO_LARGE")
 
     start_row_id, end_row_id = start["id"], end["id"]
-    messages, off_path = [], []
-    for r in rows:
+    # SRC-01：输出顺序 = parent 链序（start→end），不是跨快照 sequence
+    by_id = {r["id"]: r for r in rows}
+    by_pmid = {r["provider_message_id"]: r for r in rows}
+    chain = []
+    _cur = by_id[end_row_id]
+    _guard = 0
+    while True:
+        chain.append(_cur)
+        if _cur["id"] == start_row_id or _guard > 10000:
+            break
+        _pid = _cur["parent_provider_message_id"]
+        if not _pid or _pid not in by_pmid:
+            break
+        _cur = by_pmid[_pid]
+        _guard += 1
+    chain.reverse()
+    path_row_ids = [r["id"] for r in chain]
+
+    def _item(r):
         s_off = start_char_offset if r["id"] == start_row_id else None
         e_off = end_char_offset if r["id"] == end_row_id else None
-        on_path = r["id"] in path_ids
-        item = _serialize(
-            r, include_content=include_content and on_path,
+        return _serialize(
+            r, include_content=include_content and r["id"] in path_ids,
             char_offsets=(s_off, e_off),
             is_start=r["id"] == start_row_id,
             is_end=r["id"] == end_row_id,
             slice_offsets=(s_off, e_off))
-        if on_path:
-            messages.append(item)
-        else:
+
+    messages = [_item(by_id[i]) for i in path_row_ids]
+    off_path = []
+    for r in rows:
+        if r["id"] not in path_ids:
+            item = _item(r)
             item["sibling_branch"] = True  # 区间内但不在 parent 路径（SL-06）
             off_path.append(item)
     return {
