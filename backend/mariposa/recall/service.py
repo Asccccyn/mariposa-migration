@@ -796,7 +796,8 @@ def _commit_round_effects(conn, session_id: str, revision: int,
     Round1 成功回执——S13）。"""
     store.upsert_candidates(conn, session_id, effects["candidates"],
                             revision)
-    store.add_receipts(conn, session_id, effects["receipts"])
+    store.add_receipts(conn, session_id, effects["receipts"],
+                       revision=revision)
     if plan is not None:
         js = effects.get("judge_stats") or {}
         cov = dict(effects.get("coverage") or {})
@@ -926,6 +927,11 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                 # 则整体回滚，不复活终态
                 _revalidate_session_in_tx(conn, sid, expected_revision,
                                           "refine")
+                if cont_ref:
+                    # 裁定（2026-10-04）：线性接续——burst 授予与
+                    # continue_ref 消费同事务；旧 ref 重发在此 stale
+                    store.consume_continue_ref(conn, sid, cont_ref,
+                                               expected_revision)
                 if op_ctx:
                     store.record_operation_row(
                         conn, op_ctx["principal_id"], op_ctx["operation_key"],
@@ -1625,6 +1631,33 @@ def revalidate_replayed(fn_name: str, saved: dict,
 # ---------- Round 2（S13 完整门禁 + commit-at-end，WP04 重写） ----------
 
 #: S13 冻结闭集
+def _reason_fact_supported(sid: str, reason: str, facts: dict) -> bool:
+    """Round2 理由的服务端事实支持（闭环复审 P1-3 + 裁定 2026-10-04）。
+
+    EXPLICIT_REJECT_AFTER_DELIVERY 的 delivery = 候选真实进入过
+    模型侧可见的出站交付包（有交付回执且绑定出站轮）——内部 seen、
+    检索池出现、judge 看过都不算；不限定当前 revision（用户可拒绝
+    前一轮真实交付过的候选），但必须能证明曾经出站。
+    """
+    delivered_n = facts.get("delivered_count", 0)
+    req_met = facts.get("requirement_met")
+    conflicts_n = facts.get("conflicts_count", 0)
+    rejected = store.rejected_resource_refs(sid)
+    delivered_refs = {r["resource_ref"]
+                      for r in store.list_receipts(sid)}
+    return (
+        (reason == "NO_DELIVERABLE_CANDIDATE" and delivered_n == 0)
+        or (reason == "EVIDENCE_INSUFFICIENT"
+            and delivered_n > 0 and req_met is False)
+        or (reason == "VERBATIM_REQUIRED_NOT_MET"
+            and facts.get("evidence_requirement")
+            == "verbatim_required" and req_met is False)
+        or (reason == "SOURCE_DISAMBIGUATION_NEEDED"
+            and conflicts_n > 0)
+        or (reason == "EXPLICIT_REJECT_AFTER_DELIVERY"
+            and bool(rejected & delivered_refs)))
+
+
 _ROUND2_REASONS = frozenset({
     "NO_DELIVERABLE_CANDIDATE", "EVIDENCE_INSUFFICIENT",
     "VERBATIM_REQUIRED_NOT_MET", "SOURCE_DISAMBIGUATION_NEEDED",
@@ -1690,23 +1723,9 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
         # 6. 理由的服务端事实支持（闭环复审 P1-3：按真实证据状态
         # 判定，不用通用 needs_validation——rank_only 下一切正常
         # 交付都是 needs_validation，不构成升级理由）
-        facts = receipt["coverage"].get("_first_round_facts") or {}
-        delivered_n = facts.get("delivered_count", 0)
-        req_met = facts.get("requirement_met")
-        conflicts_n = facts.get("conflicts_count", 0)
-        rejected = store.rejected_resource_refs(sid)
-        fact_ok = (
-            (reason == "NO_DELIVERABLE_CANDIDATE" and delivered_n == 0)
-            or (reason == "EVIDENCE_INSUFFICIENT"
-                and delivered_n > 0 and req_met is False)
-            or (reason == "VERBATIM_REQUIRED_NOT_MET"
-                and facts.get("evidence_requirement")
-                == "verbatim_required" and req_met is False)
-            or (reason == "SOURCE_DISAMBIGUATION_NEEDED"
-                and conflicts_n > 0)
-            or (reason == "EXPLICIT_REJECT_AFTER_DELIVERY"
-                and bool(rejected)))
-        gate["reason_fact_supported"] = fact_ok
+        gate["reason_fact_supported"] = _reason_fact_supported(
+            sid, reason,
+            receipt["coverage"].get("_first_round_facts") or {})
 
     # 4. raw 搜索 + 当前 Jev 供应商外发授权（S15：无 source_excerpt
     #    许可则 raw 不开始）

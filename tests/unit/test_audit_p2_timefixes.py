@@ -80,3 +80,17 @@ def test_f15_mixed_offsets_compare_by_instant(actors):
     out = tctx.context("jiaming")
     assert out["last_user_message_at"] == "2026-10-01T15:00:00Z", \
         "混合 offset 必须按瞬时比较，20:00+08 不是更晚"
+
+
+# ------------------------------------------------- 裁定 2026-10-04
+
+def test_negative_offset_crossing_business_day(actors):
+    """负 offset 跨日：`2026-10-06T22:00:00-05:00` = UTC 10-07 03:00
+    = 上海 10-07（第 4 天）——字符串前 10 位是 10-06（书写地日期），
+    不得据此纳入 0..3 窗口。"""
+    p = plans.create("jiaming", "负offset第四天", state="planned",
+                     starts_at="2026-10-06T22:00:00-05:00")
+    ids = {p["plan_id"]
+           for p in plans.bootstrap_plans(date(2026, 10, 3), 3)}
+    assert p["plan_id"] not in ids, \
+        "-05:00 书法的上海第 4 天不得进窗口（方向相反的跨日）"

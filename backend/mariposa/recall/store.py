@@ -395,6 +395,30 @@ def set_candidate_state_tx(conn, session_id: str, candidate_ref: str,
                        candidate_ref=candidate_ref)
 
 
+def consume_continue_ref(conn, session_id: str, ref: str,
+                         from_revision: int) -> None:
+    """线性接续消费（裁定 2026-10-04）：同一 continue_request_ref 每
+    session 恰好消费一次，与 burst 授予同事务提交。
+
+    第一次 refine 成功后 head 前移；旧 ref 再发起领 burst 的 refine
+    在此判 stale（同 request_ref 的网络重试走 operation 幂等重放，
+    不会二次进入本函数）。回滚时消费一并撤销。
+    """
+    import sqlite3 as _sq
+    from ..errors import StaleOperation
+    try:
+        conn.execute(
+            "INSERT INTO recall_continue_refs(session_id,"
+            " continue_request_ref, from_revision, created_at)"
+            " VALUES(?,?,?,?)",
+            (session_id, str(ref), int(from_revision), _now()))
+    except _sq.IntegrityError:
+        raise StaleOperation(
+            "continue_request_ref 已消费（线性接续）：不得从旧节点"
+            " 重复申领 burst", session_id=session_id,
+            continue_request_ref=str(ref))
+
+
 def require_session_in_tx(conn, session_id: str) -> dict:
     """写锁内重读 session 当前行（F03：动作最终事务统一复查）。
 
@@ -479,22 +503,29 @@ def record_attempt(conn, session_id: str, operation_id: str, revision: int,
          error, now, now))
 
 
-def add_receipts(conn, session_id: str, receipts: list[dict]) -> None:
-    """交付回执写入；在调用方事务内执行。"""
+def add_receipts(conn, session_id: str, receipts: list[dict],
+                 revision: int | None = None) -> None:
+    """交付回执写入；在调用方事务内执行。
+
+    revision 记录本回执对应的出站交付轮（裁定 2026-10-04：拒绝
+    理由须能证明候选在哪一轮真实出站）。
+    """
     now = _now()
     for r in receipts:
         conn.execute(
             "INSERT INTO recall_receipts(session_id, receipt_id,"
             " resource_ref, content_version, representation_version,"
-            " permission_version, valid_at, expires_at, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?)"
+            " permission_version, valid_at, expires_at, created_at,"
+            " revision)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(receipt_id) DO UPDATE SET"
             " content_version=excluded.content_version,"
             " representation_version=excluded.representation_version,"
-            " valid_at=excluded.valid_at",
+            " valid_at=excluded.valid_at,"
+            " revision=excluded.revision",
             (session_id, r["receipt_id"], r["resource_ref"],
              r.get("content_version"), r.get("representation_version"),
-             r.get("permission_version"), now, None, now))
+             r.get("permission_version"), now, None, now, revision))
 
 
 def list_receipts(session_id: str) -> list[dict]:
