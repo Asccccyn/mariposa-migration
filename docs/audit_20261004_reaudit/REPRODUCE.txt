@@ -1,0 +1,28 @@
+78921d0 复审证据
+
+snapshot/ 是修复后的精确代码，manifest.json为SHA-256清单。
+baseline.json列出未打包的历史模型缓存；无node_modules/.venv/测试数据库。
+evidence/suite-final.json是898 pass/1 skip/5 NOT_RUN；收集总数904。
+所有测试日志保留。closure/findings为分域证据，顶层报告为主审裁定。
+RER-01主审定级P2；域内原始findings保留审查过程，勿用其优先级覆盖顶层报告。
+
+依赖复用原仓 .venv（Python3.12/pytest9.1.1）；解包后cd snapshot，
+将run_batches.py的PY改为本机虚拟环境绝对路径，即可按92文件有界重放。
+按AGENTS.md禁止后台悬挂，每批180秒/进程树1.5GiB保险；5真实模型明确排除。
+若测试调用./.venv/bin/python，给snapshot链接同一依赖环境。
+
+独立探针：使用PYTHONPATH=<snapshot>/backend:<snapshot>，配置全新
+MARIPOSA_ROOT临时目录（或显式MARIPOSA_TEST_ROOTS等值白名单），
+MARIPOSA_ALLOW_CREATE=1，HF_HUB_OFFLINE=1，semantic provider留空。
+以同虚拟环境python -m pytest -c <snapshot>/pyproject.toml
+-p tests.conftest -x -q <probe-file>::<nodeid> --basetemp=<独有临时目录>
+逐节点运行，subprocess.run(..., timeout=60/90)托管。
+memory目录已有conftest注册，按其run_probes/run_boundaries使用避免重复插件。
+各runner记录本机绝对路径；异机重放先替换到当前解包目录。
+
+浏览器复现spec位于probes/source/audit-source-ui.spec.ts；它使用配置的隔离18799
+服务。修正证据输出路径后在snapshot/apps/web运行；workers=1/150秒上限并结束清理。
+不要运行正式数据根、生产恢复或真实模型。所有夹具均为合成数据。
+
+说明：旧五反例脚本终态分支的status字段输出CANCELLED，表示期望终态成立；
+脚本退出0已独立核实。旧snapshot的导航和消息预算对照日志分开记录。

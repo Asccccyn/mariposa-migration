@@ -247,6 +247,7 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
             body.strip().encode("utf-8")).hexdigest()
         if not (is_letter or is_retired_content) and not _known_memory_type:
             entries.append({
+                "path": str(f.relative_to(fdir)).replace("\\", "/"),
                 "legacy_id": legacy_id,
                 "target": "unmapped",
                 "reason": f"retired_or_unknown_type:{bucket_type or 'none'}",
@@ -257,6 +258,7 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
         if is_letter or is_retired_content:
             # 信件已出 mariposa 范围：仅登记存在性与哈希，正文不进报告
             entries.append({
+                "path": str(f.relative_to(fdir)).replace("\\", "/"),
                 "legacy_id": legacy_id,
                 "target": "out_of_scope",
                 "payload_hash": payload_hash,
@@ -264,7 +266,8 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
             })
             continue
         plan = {
-            "legacy_id": legacy_id,
+            "path": str(f.relative_to(fdir)).replace("\\", "/"),
+                "legacy_id": legacy_id,
             "target": "memories",
             "mapping": {
                 "memory_date": meta.get("date") or name[:10],

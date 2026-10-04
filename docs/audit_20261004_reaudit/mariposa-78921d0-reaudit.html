@@ -1,0 +1,204 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mariposa 78921d0 修复复审</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:1160px;margin:36px auto;padding:0 22px;color:#21303d;background:#f7f9fb;line-height:1.65}h1{font-size:30px}h2{margin-top:36px}table{width:100%;border-collapse:collapse;background:white}td,th{border:1px solid #d8e0e7;text-align:left;vertical-align:top;padding:9px}th{background:#edf2f7}code,pre{font-family:ui-monospace,monospace;font-size:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2f7;padding:12px}.card{background:white;border:1px solid #d8e0e7;padding:20px;margin:16px 0;border-radius:8px}.ok{color:#237646}.open{color:#b44822}a{color:#1b669d}.muted{color:#617282}</style><h1>Mariposa 78921d0 修复复审</h1><p class="muted">2026-10-04 · 原项逐条复验 + 改动边界回归</p>
+<p>结论：不能确认“22条全部修完”。按最新CURRENT及独立反例复审，原22项中15项具备关闭证据，7项仍未达到完整关闭条件。两项原P1（request_ref身份绕过、Judge关闭后正文重放）已通过复验。</p>
+<p>代码：78921d0a232a4c45388f0dc2422ca5cd5e26b8f3，本地/远端main一致，工作树clean。以07032bd后的CURRENT为准：幂等恢复同operation/result identity，出站内容重校验；continue_ref须绑定最新已交付可续revision；Bootstrap页级安全等价；migration按P3维护工具。</p>
+<p>现有pytest：904项收集，按既有NOT_RUN_REAL_MODEL约束排除5项真实模型，实际执行899项：898通过、1跳过、0失败。分92个文件运行，固定PYTHONHASHSEED=0。因未运行这5项，本轮不将报告中的“903通过”当作已独立复验的结果。</p>
+<p>既有五反例脚本退出0；终态用例保持CANCELLED，其他四项输出PASS。React生产构建通过；既有Playwright smoke及真实“失败导入UI”回归合计2通过。ACCEPTANCE中pytest引用均存在。</p>
+<p>独立验证：Recall 23节点19通过/4失败，另对旧基线验证导航失败；Memory 21节点16通过/5失败；Source原Python反例5节点3通过/2失败，范围/备份边界6节点2通过/4失败，另旧版消息预算对照通过；ROOT四个公开入口反例/控制均通过。不同失败按根因合并，不能把失败节点数量当缺陷数量。</p>
+<p>复审没有回退新合同或修改产品源码。所有数据均为隔离合成fixture，未调用真实模型、未执行生产迁移/恢复。测试受超时和内存上限控制；Playwright隔离18799进程已清理。</p>
+<h2>原22项关闭矩阵</h2><table><tr><th>ID</th><th>结论</th><th>复核结果</th></tr>
+<tr><td>RECALL-01</td><td class="ok">已关闭</td><td><strong>request_ref 幂等身份可被 operation_id 或 session_id 绕开</strong><br>request_ref优先且幂等键不再按operation_id/session_id分裂。更换transport id重放原session；跨session相同业务payload回原结果而不在第二session执行；业务payload改变正确REF_REUSE_MISMATCH。</td></tr>
+<tr><td>RECALL-02</td><td class="open">未闭合</td><td><strong>continue_request_ref 只去重，没有验证所指 revision 是否为最新交付</strong><br>server-issued token对正常/旧revision/已消费/未签发/总预算边界检查已修；但start与有检索refine的token在保存operation响应之后才放入packet，网络重试丢token，完整生命周期未闭合（RER-01）。无新检索的BUDGET_EXHAUSTED分支同事务保存token，重放与续接通过。</td></tr>
+<tr><td>RECALL-03</td><td class="ok">已关闭</td><td><strong>关闭 Judge 后 operation replay 仍交付正文</strong><br>Judge disabled后旧正文被抑制，coverage.judge=unavailable并有degraded reason；逻辑session/预算不变。</td></tr>
+<tr><td>RECALL-04</td><td class="ok">已关闭</td><td><strong>Round2 实际交付的原文没有出站回执</strong><br>Round2首页与续页实际出站卡均写revision回执；reject有事实支持；续页重放不重写回执或计轮。</td></tr>
+<tr><td>RECALL-05</td><td class="ok">已关闭</td><td><strong>words BM25 在词法命中后才统计语料，与 scope 全池评分不一致</strong><br>words现在用完整结构scope池统计BM25，与全池公式排名相同；scope外speaker追加不影响当前排名。</td></tr>
+<tr><td>RECALL-06</td><td class="open">未闭合</td><td><strong>legacy 来源缺口只在部分 words 读路显示</strong><br>words.get的paraphrase/unspecified已修（连同verbatim三类均标gap）；memory.our_words.list仍直接返回source_ref与expression_kind，无legacy来源缺口，原发现未全部关闭。当前无真实legacy存量，本探针只构造合成记录验证合同。</td></tr>
+<tr><td>MEM-01</td><td class="ok">已关闭</td><td><strong>来源纠错入口仍可写入未发布 source message</strong><br>公开纠错拒绝unpublished，旧来源/版本未变、无纠错/operation回执；恢复published后正常改绑。</td></tr>
+<tr><td>MEM-02</td><td class="ok">已关闭</td><td><strong>Bootstrap 签发的 I/Plan 正文续取游标被公开 schema 拒绝</strong><br>i/plan_content服务端游标可通过公开schema消费；多页拼回原始内容无丢失。</td></tr>
+<tr><td>MEM-03</td><td class="ok">已关闭</td><td><strong>Bootstrap 的 I.items 重复携带未分节的完整长正文</strong><br>I.items仅留元数据，原50,000字默认包旁路探针通过。</td></tr>
+<tr><td>MEM-04</td><td class="ok">已关闭</td><td><strong>Plan 列表续页绕过长正文分节</strong><br>默认limit=50、51项Plan的真实次页已分节；长正文游标完整可读。</td></tr>
+<tr><td>MEM-05</td><td class="open">未闭合</td><td><strong>四个已具领域回执的纠错/删除入口遗漏 transport 崩溃恢复</strong><br>word source.correct及memory.delete完成/未执行crash恢复通过；plan.memory.correct仍遗漏（两窗口均OUTCOME_UNKNOWN）；deletion.decide不再UNKNOWN但恢复仅request_id，未恢复完整操作结果。新纳入的deletion.request同样把领域指针当完整结果。</td></tr>
+<tr><td>MEM-06</td><td class="ok">已关闭</td><td><strong>Bootstrap 续页丢失内容身份与无指令权限标记</strong><br>plans/memory_days/i/plan_content续页均有页级data身份与instruction_authority=none，符合当前不要求逐项形状一致的裁定。</td></tr>
+<tr><td>MEM-07</td><td class="ok">已关闭</td><td><strong>崩溃恢复未校验领域 payload，可能把另一项纠错当作本请求完成</strong><br>原关系A/B异payload crash探针正确冲突，不错回放另一关系结果；但新加deletion.request builder产生独立归一化回归RE-MEM-03。</td></tr>
+<tr><td>SRC-01</td><td class="open">未闭合</td><td><strong>跨快照 sequence 冲突使已验证的原文 parent 区间丢失中间消息</strong><br>原缺中间消息已修；端点sequence倒置仍误拒，且补齐引入数量预算绕过。</td></tr>
+<tr><td>SRC-02</td><td class="ok">已关闭</td><td><strong>合法无时区 Source 时间戳使 time.since 抛出 TypeError</strong><br>naive时间戳归一UTC，time.since正常。</td></tr>
+<tr><td>SRC-03</td><td class="open">未闭合</td><td><strong>备份漏掉 Raw Archive manifest，却宣称恢复集验证通过</strong><br>正常manifest已复制，删manifest会拒绝；但已存在的坏manifest及失效payload路径仍通过verify。</td></tr>
+<tr><td>SRC-04</td><td class="ok">已关闭</td><td><strong>原文导入失败且清场后，实际网页显示“导入完成…校验通过”</strong><br>真实Chromium上传相同坏元素42，data.status=failed且页面正确显示导入失败与解析失败数量。</td></tr>
+<tr><td>SRC-05</td><td class="open">未闭合</td><td><strong>一次格式错误导入会令此后所有备份的恢复校验失败</strong><br>只修了收集端，restore验证DB引用端仍收空路径。</td></tr>
+<tr><td>SRC-06</td><td class="open">未闭合</td><td><strong>迁移 dry-run 丢弃子目录路径，导致自有报告无法 verify/apply</strong><br>只改verify消费者，dry_run未写path，按CURRENT维护工具裁定P3。</td></tr>
+<tr><td>ROOT-01</td><td class="ok">已关闭</td><td><strong>幂等对账双重添加 t: 前缀，会清除另一请求的记录</strong><br>原双t:前缀反例通过：只清指定t:k，不触及t:t:k。</td></tr>
+<tr><td>ROOT-02</td><td class="ok">已关闭</td><td><strong>能力发现端点未捕获鉴权异常，缺 token 返回 500</strong><br>无token能力发现返回结构化401。</td></tr>
+<tr><td>ROOT-03</td><td class="ok">已关闭</td><td><strong>MariposaError 忽略显式 http_status，超大 JSON 预检返回 400</strong><br>有效token声明超限返回413；不是以未认证401冒充大小限制验证。</td></tr>
+</table><h2>尚存缺陷与新增回归</h2>
+<section class="card" id="RER-01"><h3>[P2] RER-01 · 签发的 continuation 未写入 operation 结果，start/refine 网络重放丢失接续引用</h3>
+<p>定位：backend/mariposa/recall/service.py:870–884</p>
+<p>归类：repair_regression；关联原项：RECALL-02</p>
+<p><strong>合同：</strong>CURRENT §4：同request_ref网络重试重放同一已完成operation/result identity；服务端签发且绑定最新revision的continuation是申领下一burst所必需。§10召回幂等/崩溃安全要求完整成功发生、响应丢失后同op可恢复。</p>
+<p><strong>复现：</strong>RECALL_BURST_ROUNDS=1；分别完成start、使用首包token完成refine；保留首次响应但模拟网络丢包语义再次用完全相同request_ref及payload调用。前后不改状态、权限、Judge或内容。</p>
+<p><strong>实际：</strong>首次continuation={continue_request_ref:cont_...,for_revision:1/2}，同operation重放continuation=None。数据库预算不重复，但客户端正常重试无法恢复该轮接续ref。store.record_operation_row在SQL事务内先json.dumps(packet)，token直到_commit_round_effects后才签发且COMMIT后才放packet。</p>
+<p><strong>预期：</strong>签发token及其完整出站响应在同一最终事务保存；第一次响应和同operation重放包含同一个仍有效的接续ref，既不新发ref也不重复授予预算。</p>
+<details><summary>代码和证据</summary><pre> 870              if op_ctx:
+ 871                  store.record_operation_row(
+ 872                      conn, op_ctx[&quot;principal_id&quot;], op_ctx[&quot;operation_key&quot;],
+ 873                      op_ctx[&quot;payload_hash&quot;], packet)
+ 874              store.insert_session(conn, draft)
+ 875              budget.ensure_round_available_conn(conn, sid, draft)
+ 876              # S17：logical kind——纯 words 专项轮记 words
+ 877              r1_kind = (&quot;words&quot;
+ 878                         if (plan.get(&quot;channels&quot;) or []) == [&quot;words&quot;]
+ 879                         else &quot;memory&quot;)
+ 880              store.record_round(conn, sid, burst_no=1,
+ 881                                 operation_key=op_key, kind=r1_kind)
+ 882              cref = _commit_round_effects(conn, sid, 1, effects, plan=plan,
+ 883                                           scope=draft[&quot;conversation_scope&quot;],
+ 884                                           kind=r1_kind)</pre><p>evidence/recall/test_replay_retains_issued_continuation[start].txt</p><p>evidence/recall/test_replay_retains_issued_continuation[refine].txt</p></details></section>
+<section class="card" id="RECALL-06"><h3>[P2] RECALL-06 · words.list 的 legacy 来源缺口仍未修复</h3>
+<p>定位：backend/mariposa/memory/our_words.py:111–119</p>
+<p>归类：still_open；关联原项：RECALL-06</p>
+<p><strong>合同：</strong>CURRENT §6：legacy无法解析来源读侧标legacy_raw_prefix/invalid_or_missing；§8安全语义统一，序列化形状不限。</p>
+<p><strong>复现：</strong>通过SQL只构造一条合成legacy存量记录：expression_kind=verbatim，source_ref=raw_msg:unresolvable；公开调用memory.our_words.list。</p>
+<p><strong>实际：</strong>列表返回原source_ref与verbatim表达种类，未含任何来源缺口；本次只修了retrieval.words._word_evidence的get/Recall分支，list_for实现未变。</p>
+<p><strong>预期：</strong>该显式读取路线也应独立标明来源解析缺口。</p>
+<details><summary>代码和证据</summary><pre> 111  def list_for(memory_id: str) -&gt; list[dict]:
+ 112      with db.formal() as conn:
+ 113          rows = conn.execute(
+ 114              &quot;SELECT word_id, ordinal, speaker, text, expression_kind,&quot;
+ 115              &quot; source_ref, created_by, created_at FROM memory_our_words&quot;
+ 116              &quot; WHERE memory_id=? ORDER BY ordinal&quot;, (memory_id,)).fetchall()
+ 117      # 话语正文属检索内容：content_role/instruction_authority（v1.3 §10）
+ 118      return [dict(r, content_role=&quot;retrieved_memory&quot;,
+ 119                   instruction_authority=&quot;none&quot;) for r in rows]</pre><p>evidence/recall/test_legacy_source_gap_is_present_on_words_list.txt</p></details></section>
+<section class="card" id="RER-02"><h3>[P2] RER-02 · 导航 operation 重放把仍有效的结构卡过滤为空</h3>
+<p>定位：backend/mariposa/recall/service.py:1646–1652</p>
+<p>归类：preexisting_newly_exposed；关联原项：新增暴露</p>
+<p><strong>合同：</strong>CURRENT §2七动作沿用session/幂等机制；§4相同逻辑operation可按当前权限/版本/阶段重校验，未发生变化时不应凭字段名不匹配消失。§10召回幂等文档：navigate为幂等upsert，同key重试恢复同一结果。</p>
+<p><strong>复现：</strong>建立10月1日/2日两个合法事件，start纳入候选；以1日桶为锚navigate(later)交付2日结构卡；立即同operation_id重试，不改日期、版本、权限或阶段。</p>
+<p><strong>实际：</strong>首次candidate存在，重放candidates=[]。navigate卡matched_fields=[event_time]（hold_time同理）；_norm_recall_field保持轴名，但eligible_fields含event_date而无event_time/hold_time，故所有导航卡被剔除。</p>
+<p><strong>预期：</strong>导航结构字段按合法时间轴映射/验证，未过期卡应仍可重放；保留当前可见性和版本保护。</p>
+<details><summary>代码和证据</summary><pre>1646              allowed = phase_policy.eligible_fields(
+1647                  phase_policy.phase_of(mid))
+1648              orig_fields = [_norm_recall_field(f)
+1649                             for f in (c.get(&quot;matched_fields&quot;) or [])]
+1650              fields = [f for f in orig_fields if f in allowed]
+1651              if orig_fields and not fields:
+1652                  continue  # 命中字段全部不再被当前 phase 允许</pre><p>evidence/recall/test_navigation_replay_preserves_current_structured_cards.txt</p><p>evidence/recall/navigation_old_8b6b1c8_control.txt</p></details></section>
+<section class="card" id="RE-MEM-01"><h3>[P2] RE-MEM-01 · Plan纠错仍未注册领域崩溃恢复</h3>
+<p>定位：backend/mariposa/capabilities/registry.py:491–495</p>
+<p>归类：original_issue_still_open；关联原项：MEM-05</p>
+<p><strong>合同：</strong>CURRENT §9：atomic_write纠错 completed领域回执恢复同结果；无领域记录则安全重试。</p>
+<p><strong>复现：</strong>公开plan.memory.correct同时给operation_id/header key；分别模拟领域已completed、领域尚未执行的stale transport running，重试原请求。</p>
+<p><strong>实际：</strong>两个窗口都OUTCOME_UNKNOWN；_DOMAIN_IDEMPOTENT_CAPS及_DOMAIN_PAYLOAD_BUILDERS仍无plan.memory.correct。</p>
+<p><strong>预期：</strong>完成窗口恢复原纠错结果、未执行窗口执行一次，不产生重复纠错。</p>
+<details><summary>代码和证据</summary><pre> 491  _DOMAIN_IDEMPOTENT_CAPS = frozenset({
+ 492      &quot;memory.relations.correct&quot;, &quot;i.item.relations.correct&quot;,
+ 493      &quot;source.binding.correct&quot;, &quot;memory.our_words.source.correct&quot;,
+ 494      &quot;memory.delete&quot;, &quot;memory.deletion.request&quot;,
+ 495      &quot;memory.deletion.decide&quot;})</pre><p>evidence/memory/probe-07.txt</p><p>evidence/memory/boundary-04.txt</p></details></section>
+<section class="card" id="RE-MEM-02"><h3>[P2] RE-MEM-02 · 删除申请/决定恢复直接回放领域指针，丢失正常结果字段</h3>
+<p>定位：backend/mariposa/capabilities/registry.py:564–567</p>
+<p>归类：incomplete_fix_and_new_recovery_surface；关联原项：MEM-05</p>
+<p><strong>合同：</strong>CURRENT §9：同key崩溃重试恢复同一个最终操作；公开删除接口的完成结果需可获知申请/决定状态。</p>
+<p><strong>复现：</strong>分别公开memory.deletion.request(qiaosheng)和memory.deletion.decide(jiaming/approve)，确认领域completed后模拟transport未写completed，原header/body重试。</p>
+<p><strong>实际：</strong>decide重试data只有request_id；request重试data只有memory_id/request_id，缺status、human_reason、时间等；这些残缺data还被永久写成transport completed。两者领域result_ref本来是指针，非完整结果。</p>
+<p><strong>预期：</strong>根据领域request_id恢复deletion_get/适当最终结果，再补外层completed回执并返回。</p>
+<details><summary>代码和证据</summary><pre> 564          if row is not None and row[&quot;status&quot;] == &quot;completed&quot;:
+ 565              try:
+ 566                  result = json.loads(row[&quot;result_ref&quot;])
+ 567              except (ValueError, TypeError):</pre><p>evidence/memory/probe-09.txt</p><p>evidence/memory/boundary-01.txt</p></details></section>
+<section class="card" id="RE-MEM-03"><h3>[P2] RE-MEM-03 · 删除申请reason归一化不一致使原样crash重试误报幂等冲突</h3>
+<p>定位：backend/mariposa/capabilities/registry.py:521–522</p>
+<p>归类：regression_introduced_by_fix；关联原项：新增暴露</p>
+<p><strong>合同：</strong>CURRENT §9崩溃恢复及现行deletion_request同key同payload幂等；payload身份应与领域实际规范化一致。</p>
+<p><strong>复现：</strong>公开申请reason=&#x27;  padded reason  &#x27;成功；领域回执completed、外层模拟stale running；使用完全相同header/body重试。</p>
+<p><strong>实际：</strong>抛IDEMPOTENCY_CONFLICT；deletion/service.py在落库/hash前strip(reason)，新builder直接hash原始a.get(&#x27;reason&#x27;)，同一请求被误判成另一payload。</p>
+<p><strong>预期：</strong>与领域共享相同规范化payload构造，使同header/body的完成请求可恢复；异payload仍应冲突。</p>
+<details><summary>代码和证据</summary><pre> 521      &quot;memory.deletion.request&quot;: lambda a: {
+ 522          &quot;memory_id&quot;: a.get(&quot;memory_id&quot;), &quot;reason&quot;: a.get(&quot;reason&quot;)},</pre><p>evidence/memory/boundary-02.txt</p></details></section>
+<section class="card" id="SRC-01-R1"><h3>[P2] SRC-01-R1 · 跨快照端点sequence倒置仍使合法parent区间被拒绝</h3>
+<p>定位：backend/mariposa/source/query.py:343–345</p>
+<p>归类：incomplete_fix；关联原项：SRC-01</p>
+<p><strong>合同：</strong>CURRENT §6 parent路径绑定；Source v1.1 SL-07 sequence只在快照内解释，不能代替跨快照parent先后。</p>
+<p><strong>复现：</strong>成功导入同会话[root,padding1,padding2,a(parent=root)]，再导入完整新快照[root,a,b(parent=a)]；请求range.open(a,b)。</p>
+<p><strong>实际：</strong>first-seen a.sequence=3,b.sequence=2；代码在沿parent验证前抛SOURCE_RANGE_NOT_PATH(kind=order)，虽然b.parent就是a。</p>
+<p><strong>预期：</strong>依真实parent链接受[a,b]；不能按互不相同快照的首次sequence判定逆序。</p>
+<details><summary>代码和证据</summary><pre> 343      if start[&quot;sequence&quot;] &gt; end[&quot;sequence&quot;]:
+ 344          raise Forbidden(&quot;start message is after end message&quot;,
+ 345                          code=&quot;SOURCE_RANGE_NOT_PATH&quot;, kind=&quot;order&quot;)</pre><p>evidence/source/boundary-range_accepts_parent_order_when_first_seen_sequences_reverse.log</p></details></section>
+<section class="card" id="SRC-01-R2"><h3>[P2] SRC-01-R2 · 补齐parent成员后未重新执行区间消息数量限额</h3>
+<p>定位：backend/mariposa/source/query.py:206–214</p>
+<p>归类：fix_regression；关联原项：SRC-01</p>
+<p><strong>合同：</strong>Source v1.1资源边界、config.SOURCE_RANGE_MAX_MESSAGES和query.open_range现行同集响应数量预算；应在取完整候选集后判断。</p>
+<p><strong>复现：</strong>首快照[a,padding1,padding2,b]，新快照[a,b,c]，parent a→b→c；配置SOURCE_RANGE_MAX_MESSAGES=4，打开a→c。</p>
+<p><strong>实际：</strong>预补齐sequence窗口4条满足检查，补齐b后返回messages3条+off_path_messages2条，共5条，没有SOURCE_RANGE_TOO_LARGE。</p>
+<p><strong>预期：</strong>将补齐的path成员计入数量预算，在超过4时拒绝或使用合同允许的有界读取，不能绕过资源门。</p>
+<details><summary>代码和证据</summary><pre> 206          window_ids = {r[&quot;id&quot;] for r in rows}
+ 207          path_missing = [i for i in path_ids if i not in window_ids]
+ 208          if path_missing:
+ 209              marks = &quot;,&quot;.join(&quot;?&quot; * len(path_missing))
+ 210              rows += list(conn.execute(
+ 211                  f&quot;SELECT {_COLS}, content_json FROM source_messages WHERE&quot;
+ 212                  f&quot; conversation_id=? AND id IN ({marks}){pubflt}&quot;
+ 213                  &quot; ORDER BY sequence ASC&quot;,
+ 214                  (start[&quot;conversation_id&quot;], *path_missing)).fetchall())</pre><p>evidence/source/boundary-range_budget_counts_supplemented_parent_members.log</p><p>evidence/source/control-old-snapshot-range-budget.log</p></details></section>
+<section class="card" id="SRC-03-R1"><h3>[P2] SRC-03-R1 · 备份校验只检查归档manifest存在，损坏或断开payload关系仍判可恢复</h3>
+<p>定位：backend/mariposa/storage.py:264–269</p>
+<p>归类：incomplete_fix；关联原项：SRC-03</p>
+<p><strong>合同：</strong>CURRENT §6/§10完整恢复集；Source v1.1 SL-02精确manifest路径/身份；archive.verify_archived依manifest实际解析并定位payload。</p>
+<p><strong>复现：</strong>先正常导入、backup、verify通过；仅改备份内Raw manifest为坏JSON，或改payload字段为missing-payload（数据库与payload字节不动），再verify并将SOURCE_RAW_DIR指向备份raw用archive.verify。</p>
+<p><strong>实际：</strong>两个反例restore_verify均ok=true；archive.verify分别SOURCE_ARCHIVE_CORRUPT及archived_payload_missing。新增_copy_object(manifest)返回的hash也未登记进backup manifest。</p>
+<p><strong>预期：</strong>校验manifest可解析、身份/精确payload路径与归档对象一致，或校验受信任摘要并落实引用完整性；坏恢复集不能判ok。</p>
+<details><summary>代码和证据</summary><pre> 264          # SRC-03：恢复集必须能重建归档运行——缺 manifest 的 payload
+ 265          # 无法按记录的精确路径校验母本，不判完整
+ 266          mf = p.parent / &quot;manifest.json&quot;
+ 267          if not mf.is_file():
+ 268              problems.append({&quot;object&quot;: e[&quot;rel&quot;],
+ 269                               &quot;issue&quot;: &quot;raw_archive_manifest_missing&quot;})</pre><p>evidence/source/boundary-restore_verify_checks_archive_manifest_integrity-corrupt.log</p><p>evidence/source/boundary-restore_verify_checks_archive_manifest_integrity-retarget.log</p></details></section>
+<section class="card" id="SRC-05"><h3>[P2] SRC-05 · 空raw_path仍在恢复验证扫描中被当作必须存在的归档</h3>
+<p>定位：backend/mariposa/storage.py:284–292</p>
+<p>归类：original_repro_still_fails；关联原项：SRC-05</p>
+<p><strong>合同：</strong>CURRENT §10被引用Raw母本恢复集；格式拒绝批次raw_path空字符串并不引用归档对象。</p>
+<p><strong>复现：</strong>fresh隔离库source.import坏JSON得到预期拒绝，失败批次raw_path=&quot;&quot;；backup之后restore_verify。</p>
+<p><strong>实际：</strong>收集端已不再生成伪对象，但验证端仍SELECT raw_path IS NOT NULL，结果ok=false，object=&quot;&quot;,issue=raw_archive_not_in_backup。原反例原样仍失败。</p>
+<p><strong>预期：</strong>收集及验证均排除空路径，或统一源头无引用表示；坏输入不得永久污染后续备份。</p>
+<details><summary>代码和证据</summary><pre> 284                  for (rp,) in conn.execute(
+ 285                          &quot;SELECT DISTINCT raw_path FROM&quot;
+ 286                          &quot; source_import_batches&quot;
+ 287                          &quot; WHERE raw_path IS NOT NULL&quot;):
+ 288                      e = declared_raw.get(rp)
+ 289                      if e is None or e.get(&quot;missing_at_backup&quot;):
+ 290                          problems.append({&quot;object&quot;: rp,
+ 291                                           &quot;issue&quot;:
+ 292                                           &quot;raw_archive_not_in_backup&quot;})</pre><p>evidence/source/replay-failed_format_detection_does_not_poison_backups.log</p></details></section>
+<section class="card" id="SRC-06"><h3>[P3] SRC-06 · 迁移dry_run仍未产生相对path，子目录报告验证仍file_missing</h3>
+<p>定位：backend/mariposa/migration.py:228–229</p>
+<p>归类：original_repro_still_fails；关联原项：SRC-06</p>
+<p><strong>合同：</strong>CURRENT §10现已明确migration.py为离线维护工具，按P3/deferred；实现的dry_run→verify闭环仍应一致。</p>
+<p><strong>复现：</strong>合法fixtures/daily/2026-09-28 nested_abc123def456.md；dry_run返回ok=true，报告原样传verify。</p>
+<p><strong>实际：</strong>verify虽新增e.get(path,legacy_id)，dry_run仍仅输出basename legacy_id，未生成path；verify仍file_missing。apply亦未改路径读取（未执行apply）。</p>
+<p><strong>预期：</strong>在报告生产端保留相对路径且消费端一致处理；本问题按现行P3维护事项记录。</p>
+<details><summary>代码和证据</summary><pre> 228          name = f.name
+ 229          legacy_id = name</pre><p>evidence/source/replay-nested_migration_dry_run_verify_roundtrip.log</p></details></section>
+<h2>未闭合项的上一轮发现原文</h2><p>以下仅用于逐项修复追踪；与已修订合同冲突的旧表述不作为本次新增要求。</p>
+<details class="card"><summary>RECALL-02 · continue_request_ref 只去重，没有验证所指 revision 是否为最新交付</summary><p>原实际：start 交付 rev1，普通 refine 交付 rev2 后，携带 rev1 的 request_ref 作为 continue_request_ref 仍成功创建 rev3 并授予下一 burst。消费表把输入字符串直接登记到当前 from_revision=2，没有查其实际引用 rev1。也验证过从未签发/交付的任意字符串能授予 burst。</p><p>原预期：先解析服务端已交付 ref→revision 绑定，只有最新可继续 revision 的 ref 能授予 burst；未签发及未消费但已过时的 ref 均应拒绝。</p><p>本次复核：server-issued token对正常/旧revision/已消费/未签发/总预算边界检查已修；但start与有检索refine的token在保存operation响应之后才放入packet，网络重试丢token，完整生命周期未闭合（RER-01）。无新检索的BUDGET_EXHAUSTED分支同事务保存token，重放与续接通过。</p></details>
+<details class="card"><summary>RECALL-06 · legacy 来源缺口只在部分 words 读路显示</summary><p>原实际：为合法桶植入存量 raw_msg:unresolvable 话语记录。memory.our_words.list 原样返回 expression_kind=verbatim/source_ref，完全无来源缺口；memory.words.get 对 verbatim 正确标 legacy_raw_prefix，但 paraphrase/unspecified 无标记（_word_evidence 在这两个分支跳过来源校验）。</p><p>原预期：所有显式读取和 Recall 证据构造均独立报告已知来源的解析缺口，不能仅在 verbatim 分支处理。正文角色/无指令权限包装已存在且无问题。</p><p>本次复核：words.get的paraphrase/unspecified已修（连同verbatim三类均标gap）；memory.our_words.list仍直接返回source_ref与expression_kind，无legacy来源缺口，原发现未全部关闭。当前无真实legacy存量，本探针只构造合成记录验证合同。</p></details>
+<details class="card"><summary>MEM-05 · 四个已具领域回执的纠错/删除入口遗漏 transport 崩溃恢复</summary><p>原实际：四个入口均抛 OUTCOME_UNKNOWN；_DOMAIN_IDEMPOTENT_CAPS 仅包含另外三种纠错，当前四个入口没有读取已有 completed 领域证据。</p><p>原预期：补写外层 completed 并返回第一次完成结果，业务不重复执行；没有领域记录时也应按相应领域合同允许安全重试。</p><p>本次复核：word source.correct及memory.delete完成/未执行crash恢复通过；plan.memory.correct仍遗漏（两窗口均OUTCOME_UNKNOWN）；deletion.decide不再UNKNOWN但恢复仅request_id，未恢复完整操作结果。新纳入的deletion.request同样把领域指针当完整结果。</p></details>
+<details class="card"><summary>SRC-01 · 跨快照 sequence 冲突使已验证的原文 parent 区间丢失中间消息</summary><p>原实际：validate_range 找到 a→b→c；但 open_range 按 source_messages 首见 sequence 取 [a.seq=0,c.seq=2]，b.seq=3 被排除；messages 仅 [a,c]，无缺口提示。</p><p>原预期：读取完整的已验证 parent 路径 [a,b,c]，按路径/指定快照决定顺序，不以跨快照首见 sequence 截掉成员。</p><p>本次复核：原缺中间消息已修；端点sequence倒置仍误拒，且补齐引入数量预算绕过。</p></details>
+<details class="card"><summary>SRC-03 · 备份漏掉 Raw Archive manifest，却宣称恢复集验证通过</summary><p>原实际：备份只包含 raw/claude/&lt;batch&gt;/payload-...，缺 manifest.json（也无 metadata.json）；restore_verify ok=true，但恢复集上的 archive.verify_archived 为 {ok:false,issue:SOURCE_ARCHIVE_MISSING}。</p><p>原预期：复制归档运行必需的 manifest 并验证其 payload 关系，或提供并验证等价重建流程；verify 不应对缺必要归档元数据的恢复集判完整。</p><p>本次复核：正常manifest已复制，删manifest会拒绝；但已存在的坏manifest及失效payload路径仍通过verify。</p></details>
+<details class="card"><summary>SRC-05 · 一次格式错误导入会令此后所有备份的恢复校验失败</summary><p>原实际：_collect_object_references 仅过滤 IS NOT NULL，将空字符串转换成Path(&quot;.&quot;)，manifest登记raw/orphan/缺失；backup仍ok=true，但restore_verify恒为ok=false，issues=[raw_archive_missing_at_backup,raw_archive_not_in_backup]。</p><p>原预期：空路径应表示尚无归档引用（或源头存NULL），收集和校验均排除它；正常数据库备份不应被一次已拒绝输入永久污染。</p><p>本次复核：只修了收集端，restore验证DB引用端仍收空路径。</p></details>
+<details class="card"><summary>SRC-06 · 迁移 dry-run 丢弃子目录路径，导致自有报告无法 verify/apply</summary><p>原实际：报告legacy_id仅文件basename，无daily/相对目录；实测verify返回file_missing，源文件完整在位。apply_from_report亦按fixture_dir/legacy_id读取同一不存在路径（代码证据migration.py:393-396；本探针未执行apply）。</p><p>原预期：把相对路径与资源身份分开保存，或至少保留相对路径；递归发现的合法文件应能原样完成verify/apply。</p><p>本次复核：只改verify消费者，dry_run未写path，按CURRENT维护工具裁定P3。</p></details>
+<h2>报告与测试证据质量</h2>
+<p>宣称包含逐条对照的REMEDIATION.md为空文件：78921d0中该文件大小为0；无法核对报告宣称的逐条关闭依据。 docs/audit_20261004/REMEDIATION.md</p>
+<p>TEST-NOTE-01：delete冲突测试不提供transport key、不制造stale claim，实际测试的是原有领域幂等，而非新恢复路径；恢复覆盖面测试只查三个集合成员，遗漏plan.memory.correct和完整返回值。 tests/unit/test_audit1004_batch2.py</p>
+<p>TEST-NOTE-02：大小上限回归使用Bearer x并允许401，因此即使413逻辑退回400也不会被此测试发现。我们另用有效token确认真实413已修。 tests/unit/test_audit1004_batch2.py</p>
+<p>TEST-NOTE-03：Plan测试如果找不到page_item，if分支跳过全部分节断言。本次独立使用真实51项与逐页拼接验证功能通过，但建议正式测试先断言page_item存在。 tests/unit/test_audit1004_batch2.py</p>
+<h2>下一批修复顺序</h2>
+<p>第一批：把start/refine签发的continuation写入同事务operation响应；补齐plan.memory.correct恢复；删除申请/决定按领域指针恢复完整结果，并复用领域payload规范化。</p>
+<p>第二批：Source区间全程按parent关系判断顺序，补齐后重新执行数量预算；Raw manifest验证内容/身份/实际payload关系；备份收集与验证统一排除空raw_path。</p>
+<p>第三批：补words.list来源gap、导航重放字段映射；离线migration报告生产与消费统一相对路径，按P3处理。</p>
+<p>最后补实REMEDIATION，并将本包反例纳入正式回归。保持已验证的删除权限和新合同；不要通过删断言或放松失败条件换取绿色结果。</p>
+<h2>范围与判断边界</h2>
+<p>15项“关闭”表示本轮原反例与相应定向边界已通过，不是对整个项目不存在其他缺陷的证明。</p>
+<p>RECALL-02/SRC-01/SRC-03的原最小反例已通过，但网络重放或同类边界仍失败，因此未判完整关闭。RECALL-06的get分支已修，list仍未修；MEM-05部分入口已修，不能概括为全部没有改善。</p>
+<p>Source超数量上限在旧版同probe通过、新版失败，是本批回归。导航卡重放为空在旧8b6b1c8也失败，是既有新暴露问题，不归咎于本批改动。</p>
+<p>删除申请理由strip问题由本批新增恢复builder引入；删除申请/决定返回残缺JSON的共同根因是缺少领域结果展开。</p>
+<p>无真实legacy存量；来源gap仅用合成遗留状态验证。未实测真实模型质量、GB级负载或生产恢复。</p>
+</html>

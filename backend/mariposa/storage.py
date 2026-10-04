@@ -261,12 +261,25 @@ def _verify_object_restore_set(bdir: Path, manifest: dict) -> list[dict]:
             problems.append({"object": e["rel"],
                              "issue": "raw_archive_bytes_mismatch"})
             continue
-        # SRC-03：恢复集必须能重建归档运行——缺 manifest 的 payload
-        # 无法按记录的精确路径校验母本，不判完整
+        # SRC-03/R1（2026-10-04 复审）：manifest 必须在且可解析、
+        # 身份与精确 payload 关系一致——损坏/断链/指向别的 payload
+        # 都不能判可恢复
         mf = p.parent / "manifest.json"
         if not mf.is_file():
             problems.append({"object": e["rel"],
                              "issue": "raw_archive_manifest_missing"})
+            continue
+        try:
+            md = json.loads(mf.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            problems.append({"object": e["rel"],
+                             "issue": "raw_archive_manifest_corrupt"})
+            continue
+        if not isinstance(md, dict) or                 md.get("payload") != p.name or                 md.get("sha256") != e.get("sha256"):
+            problems.append({"object": e["rel"],
+                             "issue": "raw_archive_manifest_retargeted",
+                             "manifest_payload": md.get("payload")
+                             if isinstance(md, dict) else None})
     for e in (manifest.get("media_objects") or []):
         p = bdir / e["rel"]
         if not p.is_file() or _sha256_file(p) != e.get("sha256"):
@@ -284,7 +297,8 @@ def _verify_object_restore_set(bdir: Path, manifest: dict) -> list[dict]:
                 for (rp,) in conn.execute(
                         "SELECT DISTINCT raw_path FROM"
                         " source_import_batches"
-                        " WHERE raw_path IS NOT NULL"):
+                        " WHERE raw_path IS NOT NULL"
+                        " AND raw_path <> ''"):
                     e = declared_raw.get(rp)
                     if e is None or e.get("missing_at_backup"):
                         problems.append({"object": rp,
