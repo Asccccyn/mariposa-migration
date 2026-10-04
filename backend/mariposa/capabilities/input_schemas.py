@@ -386,7 +386,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {
             "path": {"type": "string", "minLength": 1},
-            "filename": {"type": "string"}},
+            # SRC-04：未显式给 filename 时调用方传 null——importer
+            # 回退 src.name，schema 必须接受
+            "filename": {"anyOf": [{"type": "string"},
+                                   {"type": "null"}]}},
     },
     "source.binding.bind": {
         "type": "object",

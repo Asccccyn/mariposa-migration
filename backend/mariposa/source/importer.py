@@ -123,7 +123,9 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     # md 对话转写（裁定 2026-10-04 四）：按源扩展名分流——解析产出
     # 与 Claude JSON 同形的元素契约，后续认领/归档/门禁全链复用
     md_dialect = None
-    if src.suffix.lower() in (".md", ".markdown"):
+    if src.suffix.lower() in (".md", ".markdown") or \
+            src.name.lower().endswith(
+                (".md.part", ".markdown.part")):
         from . import md_transcript
         try:
             provider, elements = md_transcript.parse(staged, original_name)
@@ -137,6 +139,7 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                 return {"batch_id": None, "provider": provider,
                         "status": "completed", "stats": _new_stats(),
                         "note": "md 转写无可导入会话", "raw_path": None}
+            del elements  # SRC-06：检测副本即刻释放
         except MariposaError as e:
             _record_failed_import(principal_id, staged, "unknown",
                                   f"bad md: {e}", filename)
@@ -184,16 +187,23 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
             "租约过期", code="SOURCE_IMPORT_IN_PROGRESS", sha256=sha256)
 
     # ---- 4) 原子发布归档；解析/复核只读归档 payload（SL-02） ----
-    existing_payload = _existing_payload_if_consistent(provider, batch_id,
-                                                       sha256)
-    if existing_payload is not None:
-        staged.unlink(missing_ok=True)
-        archived = existing_payload
-    else:
-        archived = archive.publish_snapshot(
-            provider, batch_id, staged, sha256, size, original_name,
-            principal_id)
-    _set_raw_path(batch_id, str(archived), original_name)
+    # SRC-05：归档发布与 raw_path 登记纳入租约保护——失败落库为
+    # failed（可重试），不得把批次锁死在 running
+    try:
+        existing_payload = _existing_payload_if_consistent(
+            provider, batch_id, sha256)
+        if existing_payload is not None:
+            staged.unlink(missing_ok=True)
+            archived = existing_payload
+        else:
+            archived = archive.publish_snapshot(
+                provider, batch_id, staged, sha256, size, original_name,
+                principal_id)
+        _set_raw_path(batch_id, str(archived), original_name)
+    except Exception as _arch_err:
+        _fail_batch(batch_id, provider,
+                    f"archive publish failed: {_arch_err}", stats, lease)
+        raise
 
     stats = _new_stats()
     try:

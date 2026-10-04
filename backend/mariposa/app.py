@@ -262,8 +262,15 @@ async def source_upload(request: Request):
                 "code": "SOURCE_UPLOAD_TOO_LARGE",
                 "max_bytes": _config.SOURCE_UPLOAD_MAX_BYTES}})
     _config.SOURCE_INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+    # SRC-03/08（2026-10-04 全量审计）：保留原始扩展名（.md/.json/
+    # .zip）——导入的格式检测靠它分流 md 方言；.part 后缀让既有
+    # 48h staging 清理覆盖上传副本（此前 .tmp 永久累积）
+    import re as _re
+    _orig = request.query_params.get("filename") or ""
+    _ext_m = _re.search(r"(\.[A-Za-z0-9]{1,8})$", _orig)
+    _ext = _ext_m.group(1).lower() if _ext_m else ".bin"
     dest = _config.SOURCE_INCOMING_DIR / (
-        "upload_" + _uuid.uuid4().hex[:12] + ".tmp")
+        "upload_" + _uuid.uuid4().hex[:12] + _ext + ".part")
     size = 0
     with open(dest, "wb") as f:
         async for chunk in request.stream():

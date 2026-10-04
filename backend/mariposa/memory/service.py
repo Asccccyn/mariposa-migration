@@ -324,7 +324,9 @@ def hold_in_tx(
         occurred_start=occurred_start, occurred_end=occurred_end)
     # plan 绑定先于分层写入（categories.add 的 PLAN 绑定守卫
     # 依赖链接已存在——同事务内顺序保证）
-    if "plan" in cats:
+    # WR-02（2026-10-04 全量审计）：非空 plan_ids 一律写绑定——
+    # 不再依赖分类恰含 plan（此前 daily+plan_ids 静默丢绑定）
+    if plan_ids:
         for pid in dict.fromkeys(plan_ids):
             if not conn.execute(
                     "SELECT 1 FROM plans WHERE id=?",

@@ -1,0 +1,587 @@
+{
+  "baseline": {
+    "source": "/Users/zhoujiaming/Projects/mariposa",
+    "head": "fe2ed052537b59ce28a7e11023fa946177a47178",
+    "status": "",
+    "omitted": [
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/60938626ad1097a0c1a14be4f8340e32c714a056.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/a8b3208c2884c4efb86e49300fdd3dc877220cdf.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/cdb3043fc938fc918c06e66cf704c2ba58f88747.lock",
+      "D:\\mariposa\\runtime\\models/CACHEDIR.TAG",
+      "D:\\mariposa\\runtime\\models/blobs/.huggingface-shared-blobs",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.lock",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.refs",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/60938626ad1097a0c1a14be4f8340e32c714a056",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/a8b3208c2884c4efb86e49300fdd3dc877220cdf",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/cdb3043fc938fc918c06e66cf704c2ba58f88747",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/files_metadata.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/refs/main",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/model_optimized.onnx",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/special_tokens_map.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer_config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/trees/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59.json"
+    ]
+  },
+  "counts": {
+    "P1": 3,
+    "P2": 13
+  },
+  "confirmed_findings": [
+    {
+      "id": "CR-01",
+      "priority": "P1",
+      "title": "Judge 策略失效或撤回原文权限后，旧 operation 仍重放正文",
+      "file": "backend/mariposa/recall/replay.py",
+      "line": 64,
+      "trigger": "首次合法召回后，当前 TypeSafe Judge 策略失效；或已完成 Round2 后撤回 source_excerpt 权限，再重放同 operation。",
+      "observed": "新普通召回0卡/unavailable，旧 operation 重放1卡/evaluated；撤回原文权限后旧 Round2 仍返回3张raw卡，而新 continuation 拒绝 RAW_PROFILE_WITHDRAWN。",
+      "expected": "CURRENT §4/§7要求每次出站按当前权限、开关、版本和 Judge 状态重验。幂等身份稳定不等于继续交付旧正文。",
+      "recommendation": "提取 fresh/continuation/replay 共用的当前provider可用性和证据角色授权检查；保留operation/预算身份，受限正文结构化抑制。不要仅扩大 DisabledJudge 类名判断。",
+      "acceptance": "覆盖策略缺失/配置缺失/source_excerpt缩权、full/compact和HTTP/MCP回放；无重复业务执行与预算消费。",
+      "evidence": "evidence/compact/probe-results.json:unavailable_judge_replay,raw_profile_withdrawn_replay",
+      "probe": "probes/compact/run_guard.py"
+    },
+    {
+      "id": "SRC-01",
+      "priority": "P1",
+      "title": "MD 词法边界破坏已发布正文、时间与说话人归属",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 58,
+          "end": 66
+        },
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 130,
+          "end": 154
+        },
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 202,
+          "end": 208
+        }
+      ],
+      "trigger": "导入含合法四反引号外围栏+三反引号示例的 Claude md；或人类正文含普通 ### Thinking 标题而无思考围栏；或 Gemini 正文代码块内含 message time 示例。 Gemini 时间反例具体为该消息没有真实时间元数据、仅代码中含时间示例。",
+      "observed": "所有例子都 completed 且 published=1。两条消息被切为三条，assistant 代码中的 ## User 后半段归到 human；普通 Thinking 标题后全部正文消失；代码里的时间行被删除并冒作 created_at。Raw Archive 母本尚在，但可检索正文与来源身份已失真。",
+      "expected": "代码围栏保留原开围栏字符/长度；只有真正的导出元数据位置才剥离时间/Thinking；普通正文及代码完整保留，不产生伪消息。",
+      "recommendation": "把 dialect 检测、消息切块和元数据提取共享同一围栏感知 lexer；记录 opener 长度及匹配 closing 规则，Thinking 必须满足 assistant+导出区位置+紧邻有效围栏条件，缺围栏保留正文或结构化拒收。",
+      "acceptance": "新增端到端导入三类夹具，核对原始正文逐字一致、human/assistant 数、has_thinking、created_at、搜索与绑定展开；不只测 parser 返回值。",
+      "evidence": "evidence/source/probe_results.json:four_backtick_fence,ordinary_thinking_heading,timestamp_inside_code",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "SRC-02",
+      "priority": "P1",
+      "title": "MD 序号身份使前插重导漏掉新增可见正文并重复旧消息",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 76,
+          "end": 78
+        },
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 164,
+          "end": 170
+        },
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 213,
+          "end": 219
+        }
+      ],
+      "trigger": "同一 Link 会话先导入 alpha/beta，再导入前插一条 recovered message 的相同会话。",
+      "observed": "第二次 completed、version_conflicts=2、messages_new=1，当前可见正文是 alpha/beta/beta；新增 recovered message 无法检索，旧两条与新正文错误地被视为同 UUID 的版本。 Raw Archive 母本仍完整，响应也报告了 version_conflicts；本结论不称原始字节永久丢失或完全没有告警。",
+      "expected": "CURRENT §6 明定内容锚定确定性消息 ID。相同正文重导复用身份，新插消息获得新身份，不改变后续原消息的身份。",
+      "recommendation": "以 provider+会话+标准化内容/真实时间等稳定锚点合成消息 ID，并设计重复相同消息的消歧；不要让列表位置改变业务身份。合成 ID 的 id_synthetic 也应如实记录。",
+      "acceptance": "完整重导、前插、删除中间项、导出子集、重复相同文本等夹具核对身份稳定、新增正文可见且无伪重复；绑定旧身份仍指向原消息。",
+      "evidence": "evidence/source/probe_results.json:index_identity_reimport",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "CR-02",
+      "priority": "P2",
+      "title": "HTTP output_profile query 丢失，compact 与非法值都返回 full",
+      "file": "backend/mariposa/app.py",
+      "line": 86,
+      "trigger": "已认证POST bootstrap.get?output_profile=compact_v1或invalid。",
+      "observed": "query compact和legacy同为1324B；invalid也200。把profile放arguments时才正确输出806B。",
+      "recommendation": "把查询参数并入真正传给invoke的arguments，定义query/body冲突优先级。",
+      "acceptance": "加带真实测试身份的HTTP compact/invalid/unsupported/同operation切profile用例；现有未鉴权测试无法证明协商。",
+      "evidence": "evidence/compact/probe-results.json:http_profile"
+    },
+    {
+      "id": "CR-03",
+      "priority": "P2",
+      "title": "MCP 工具schema不声明且禁止 output_profile，与实际call脱节",
+      "file": "backend/mariposa/capabilities/mcp_adapter.py",
+      "line": 58,
+      "trigger": "标准客户端根据tools/list严格inputSchema构造compact请求。",
+      "observed": "additionalProperties=false且无output_profile；裸tools/call手工传参数却能成功。调用能力存在，但合规生成客户端无从合法使用。",
+      "recommendation": "为支持能力生成拷贝后的传输schema，附加profile枚举和说明；业务schema/幂等hash保持现有语义。",
+      "acceptance": "检查tools/list声明、客户端schema校验与实际call一致；不得原地修改共享业务schema。",
+      "evidence": "evidence/compact/probe-results.json:mcp_schema,mcp_call"
+    },
+    {
+      "id": "SRC-03",
+      "priority": "P2",
+      "title": "Web 上传 MD 必被当 JSON 拒收，新增 MD 能力未接通实际上传入口",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/importer.py",
+          "start": 120,
+          "end": 129
+        },
+        {
+          "file": "backend/mariposa/app.py",
+          "start": 264,
+          "end": 266
+        },
+        {
+          "file": "backend/mariposa/web/index.html",
+          "start": 141,
+          "end": 141
+        }
+      ],
+      "trigger": "PUT /api/source/upload 上传合法 md，再按页面逻辑 source.import(path=返回的 upload_x.tmp,filename=good.md)。",
+      "observed": "上传200，导入400 SOURCE_BAD_JSON，原因 top-level JSON must be an array, got '#'; 同样字节从 .md 本地文件直接导入 completed。文件选择器 accept 也只有 .json,.zip。",
+      "expected": "source.import 的 md 支持应覆盖上传入口，原始文件名/明确格式能用于选择解析器。",
+      "recommendation": "使用受控上传的格式/原始文件名元数据选择 parser，或显式受校验的 format 参数；更新 accept；保留内部生成文件名安全性。",
+      "acceptance": "用 TestClient 和页面夹具跑 Claude/Gemini md 上传→导入→查询，并保留 json/zip 正常路径。",
+      "evidence": "evidence/source/probe_results.json:web_md_upload",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "SRC-04",
+      "priority": "P2",
+      "title": "Web 宿主路径导入总传 filename:null，schema 拒绝所有文件",
+      "locations": [
+        {
+          "file": "backend/mariposa/web/index.html",
+          "start": 578,
+          "end": 578
+        },
+        {
+          "file": "backend/mariposa/web/index.html",
+          "start": 612,
+          "end": 615
+        },
+        {
+          "file": "backend/mariposa/capabilities/input_schemas.py",
+          "start": 384,
+          "end": 390
+        }
+      ],
+      "trigger": "页面点击宿主路径导入执行 sourceImport(p,null)，HTTP arguments 含 filename:null。",
+      "observed": "403 SCHEMA_VIOLATION: field filename does not match schema，尚未执行导入。",
+      "expected": "未指定可选 filename 时省略参数，importer 使用 src.name。",
+      "recommendation": "组装 arguments 时仅在 filename 有字符串值时添加；或显式允许 null，但应统一 schema/handler/UI 契约。",
+      "acceptance": "以页面实际 payload 调用 JSON、MD、ZIP 本地路径入口，均不因可选空字段被拒；不存在路径仍给 NotFound。",
+      "evidence": "evidence/source/probe_results.json:web_path_null_filename",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "SRC-05",
+      "priority": "P2",
+      "title": "归档 manifest 写盘失败发生在失败保护之外，批次被锁在 running",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/importer.py",
+          "start": 186,
+          "end": 199
+        },
+        {
+          "file": "backend/mariposa/source/archive.py",
+          "start": 73,
+          "end": 89
+        }
+      ],
+      "trigger": "已认领批次后 publish_snapshot 写 manifest.json 遇磁盘/OSError。",
+      "observed": "payload 已转移到 raw，但 DB 仍 status=running、raw_path=''、error=null；解除故障立即重试仍 SOURCE_IMPORT_IN_PROGRESS，默认120分钟后才能接管。",
+      "expected": "已终止 worker 的可判定失败应记 failed，留下可恢复的归档关联且可及时重试；不能伪装仍在进行。",
+      "recommendation": "把归档发布及 _set_raw_path 放进租约保护的批次失败处理范围；manifest 用临时写+原子替换，失败落库不依赖另一次可能失败的文件写入。",
+      "acceptance": "注入 payload replace、manifest 写、raw_path 更新故障；断言无 published 新消息，批次明确失败，旧批不变，故障解除后同输入可重试成功。",
+      "evidence": "evidence/source/probe_results.json:archive_manifest_failure,archive_manifest_failure_retry",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "SRC-06",
+      "priority": "P2",
+      "title": "MD 入口绕过元素字节限额并在校验前完整读入、重复解析",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 237,
+          "end": 248
+        },
+        {
+          "file": "backend/mariposa/source/importer.py",
+          "start": 129,
+          "end": 134
+        },
+        {
+          "file": "backend/mariposa/source/importer.py",
+          "start": 537,
+          "end": 548
+        }
+      ],
+      "trigger": "较大的 md 转写，或调低 SOURCE_MAX_ELEMENT_BYTES 后导入超过限额的单会话 md。",
+      "observed": "限额128 bytes 时286 bytes单会话仍 completed。parse 先 read_text 再多次 split/list；importer 在检测与归档后分别完整解析，检测所得 elements 一直留在上层作用域。JSON 的 json_stream 限额不经过，normalize_messages 只能在已全量分配后检查单消息。",
+      "expected": "Source 资源边界覆盖新格式，拒绝路径在整文件/全部消息内存放大前执行。",
+      "recommendation": "提供有界流式 MD element/message iterator，或至少 stat/流式字节计数的独立MD上限；复用一次固定快照解析结果或释放初次对象，避免双解析。",
+      "acceptance": "缩小配置限额的单会话/单消息/多消息夹具验证结构化超限与零发布；用有界中等样本记录峰值，不进行GB级宿主压测。",
+      "evidence": "evidence/source/probe_results.json:md_element_limit_bypass",
+      "probe": "probes/source/probe_source.py",
+      "limitation": "未做大文件压测；OOM风险由整文件分配/未受限路径静态推导。"
+    },
+    {
+      "id": "SRC-07",
+      "priority": "P2",
+      "title": "Source 逆查把 parent 路径外的 sibling 错算成记忆引用",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/binding.py",
+          "start": 124,
+          "end": 143
+        },
+        {
+          "file": "backend/mariposa/relations/routing.py",
+          "start": 307,
+          "end": 318
+        }
+      ],
+      "trigger": "A→B→C 绑定，另有 parent=A 的 SIBLING，导出顺序为 A,B,SIBLING,C。反查 SIBLING。",
+      "observed": "绑定展开正确得到 messages A/B/C，SIBLING 只在 off_path_messages；但 memories_referencing 和公开 relations.list(source_ref) 都返回该记忆的 exact 绑定。",
+      "expected": "同一绑定的正查/逆查对覆盖成员必须一致；不在 parent 路径上的正文不能被当成记忆证据。",
+      "recommendation": "从共享范围解析器取得实际 path IDs，再判断消息/字符区间是否被覆盖；不能用跨快照 sequence 大小代替路径身份。",
+      "acceptance": "增加 sibling 位于范围内部、边界同序号、序号倒置、跨快照补齐等双向一致性用例；每个 messages 成员能反查，off_path 成员不能反查。",
+      "evidence": "evidence/source/edge_results.json:off_path_reverse_reference",
+      "probe": "probes/source/probe_edges.py"
+    },
+    {
+      "id": "SRC-08",
+      "priority": "P2",
+      "title": "上传原文 .tmp 副本永久留在 incoming，成功和重导都会累积磁盘",
+      "locations": [
+        {
+          "file": "backend/mariposa/app.py",
+          "start": 264,
+          "end": 286
+        },
+        {
+          "file": "backend/mariposa/source/archive.py",
+          "start": 41,
+          "end": 53
+        },
+        {
+          "file": "backend/mariposa/source/archive.py",
+          "start": 133,
+          "end": 146
+        }
+      ],
+      "trigger": "Web 上传 JSON 成功导入并归档后调用暂存清理；重复上传同文件也会新增 upload_x.tmp。",
+      "observed": "成功批次的323-byte上传副本仍在；将 mtime 老化72h后执行48h cleanup_staging 仍不删除，因为清理仅匹配 .part。每份文件在归档外永久额外保留原上传副本。",
+      "expected": "受控上传暂存有明确消费/TTL生命周期，用户原始本地文件不受影响。",
+      "recommendation": "区分服务端拥有的上传文件与用户路径，归档成功后消费上传文件或按登记TTL回收 upload_*.tmp；上传断流同样清理。",
+      "acceptance": "成功、失败、already_imported、客户端断流、过期上传测试检查受控tmp数/字节回落；保证任意宿主源文件不被误删。",
+      "evidence": "evidence/source/edge_results.json:upload_temp_retention",
+      "probe": "probes/source/probe_edges.py"
+    },
+    {
+      "id": "SRC-09",
+      "priority": "P2",
+      "title": "格式异常 MD 产生未结构化 ValueError，绕过失败导入留痕",
+      "locations": [
+        {
+          "file": "backend/mariposa/source/md_transcript.py",
+          "start": 202,
+          "end": 207
+        },
+        {
+          "file": "backend/mariposa/source/importer.py",
+          "start": 128,
+          "end": 143
+        }
+      ],
+      "trigger": "Gemini message time 行语法匹配但日期无效，例如 2026-99-99 99:99:99。",
+      "observed": "ValueError: month must be in 1..12 直接冒出，source_import_batches 为0；MD 首次解析仅捕获 MariposaError，HTTP层也只捕获该类型。",
+      "expected": "不能解析的md应 SOURCE_MD_FORMAT 结构化拒收并按导入失败契约留痕；正文不发布。",
+      "recommendation": "在方言解析边界包装日期/UTF-8等输入错误为 MariposaError，并统一失败批次记录；不要宽泛吞系统异常。",
+      "acceptance": "无效月/日/时间、坏UTF-8、正确UTC+8边界分别经实际 HTTP/MCP 入口验证状态码、错误码、失败批次与零发布。",
+      "evidence": "evidence/source/probe_results.json:invalid_md_date",
+      "probe": "probes/source/probe_source.py"
+    },
+    {
+      "id": "WR-01",
+      "priority": "P2",
+      "title": "回忆追加公开标为幂等，相同请求重放实际创建第二条回忆和 keep",
+      "file": "backend/mariposa/capabilities/registry.py",
+      "line": 76,
+      "related_locations": [
+        "backend/mariposa/capabilities/mcp_adapter.py:65",
+        "backend/mariposa/memory/recollections.py:42",
+        "backend/mariposa/memory/recollections.py:97"
+      ],
+      "trigger": "用已确认查看票据调用 memory.recollections.append，keep_wide=true；不携带非标准 MCP params._client_idempotency_key，把同一组工具参数重试一次。",
+      "observed": "MCP tools/list 的 idempotentHint=true；同参两次成功，生成两个不同 recollection_id 和两个不同 mark_id。",
+      "expected": "若追加本质上每调用一次新增一次，公开 idempotentHint 必须为 false；若承诺安全重试，应把可发现的请求身份与追加/keep/回执同事务落库。",
+      "impact": "客户端按工具幂等提示自动重试时会重复记忆；重复 keep 会使撤销单条标记后仍处于保留状态。一般无 key 的写入不自动算缺陷，此项针对明确错误的公开幂等提示。",
+      "fix": "最小修复撤销该能力的 idempotentHint；需要业务幂等时，新增 schema 可见 operation_id 并复用领域原子写。",
+      "evidence": "evidence/writes/probe_writes.json#recollection_append_idempotent_hint",
+      "confidence": "high"
+    },
+    {
+      "id": "WR-02",
+      "priority": "P2",
+      "title": "hold 接受 plan_ids 后在非 plan 分类下静默丢弃绑定",
+      "file": "backend/mariposa/memory/service.py",
+      "line": 327,
+      "related_locations": [
+        "backend/mariposa/capabilities/registry.py:367",
+        "backend/mariposa/capabilities/input_schemas.py:536"
+      ],
+      "trigger": "创建一个真实 Plan，再调用 memory.hold(text=...,categories=['daily'],plan_ids=[该Plan])。",
+      "observed": "调用成功；正式 memory 已保存，但 plan_memory_links 没有该绑定；随后 memory.delete 成功，未触发预期存在的 Plan 关系保护。",
+      "expected": "对显式给出的 plan_ids 要么写入绑定（Plan 关联本身允许指向 daily 桶），要么明确拒绝与分类的非法组合；不能成功后静默丢字段。",
+      "impact": "使用者以为已关联计划，实际关系缺失，关系查询漏项且删除硬门无关联可守。并非已存关系在并发下被绕过。",
+      "fix": "将非空 plan_ids 的校验与链接写入独立于分类条件；保留 plan 分类必须有绑定的守卫。若产品有意禁止该组合，写入前结构化拒绝。",
+      "evidence": "evidence/writes/probe_writes.json#hold_plan_ids_without_plan_category",
+      "confidence": "high"
+    },
+    {
+      "id": "WR-03",
+      "priority": "P2",
+      "title": "空来源也可被纠错撤销，制造不存在的撤销历史并降级逐字证据",
+      "file": "backend/mariposa/memory/our_words.py",
+      "line": 258,
+      "related_locations": [
+        "backend/mariposa/memory/our_words.py:229",
+        "backend/mariposa/retrieval/words.py:143"
+      ],
+      "trigger": "新写 expression_kind='verbatim' 且从未绑定 source_ref 的话语；调用 source.correct(remove_wrong_binding,expected_source_ref=null,expected_source_version=0)。",
+      "observed": "从 null 变成 null 仍成功生成 correction，source_binding_version 从0升1；同一句话 memory.words.get 证据从 word_verbatim 变成 word_unverified，并标 source_ref_state='revoked'。",
+      "expected": "撤销不存在的来源绑定应拒绝或无副作用，不应制造曾经有来源且被撤销的事实。",
+      "impact": "一次误调用会永久改变该话语的证据身份，使 verbatim_required 不再满足；修复需新绑真实来源，不能靠普通读取恢复。",
+      "fix": "remove_wrong_binding 在 cur 为空时结构化拒绝/返回无变更，只有有效绑定实际退出时才递增来源版本和记录 correction；保留曾撤销后重绑所需 CAS。",
+      "evidence": "evidence/writes/probe_writes.json#empty_source_correction",
+      "confidence": "high"
+    },
+    {
+      "id": "ARCH-01",
+      "priority": "P2",
+      "title": "新拆分模块仍反依赖service，4个模块独立导入失败",
+      "locations": [
+        {
+          "file": "backend/mariposa/recall/round2.py",
+          "start": 27
+        },
+        {
+          "file": "backend/mariposa/recall/replay.py",
+          "start": 12
+        },
+        {
+          "file": "backend/mariposa/bootstrap/pages.py",
+          "start": 18
+        },
+        {
+          "file": "backend/mariposa/capabilities/v1_compat.py",
+          "start": 15
+        }
+      ],
+      "trigger": "新解释器直接导入round2、replay、pages或v1_compat。",
+      "observed": "4项均因partially initialized module失败；89模块独立导入85成功。service-first的当前应用启动/套件可通过，这不是线上启动必崩的结论。",
+      "recommendation": "共享guards/packet/snapshot/read helpers下沉，service单向编排；compat注入registry，Capability类型单独定义；保留事务conn和原子提交边界。",
+      "acceptance": "各模块独立import、入口import排列、既有行为与故障回滚测试均通过，依赖方向不再成环。",
+      "evidence": "evidence/architecture/isolated_imports.json; evidence/architecture/static.json"
+    }
+  ],
+  "qualified_interface_and_conditional_risks": [
+    {
+      "id": "WR-04",
+      "priority": "P2",
+      "title": "memory.update 无法表达清空可空元数据，显式 null 被当省略且升版本",
+      "file": "backend/mariposa/memory/extras.py",
+      "line": 109,
+      "related_locations": [
+        "backend/mariposa/memory/extras.py:79",
+        "backend/mariposa/capabilities/registry.py:916",
+        "backend/mariposa/capabilities/input_schemas.py:232"
+      ],
+      "trigger": "已有 why_remember 和 memory_date 的 memory，调用 memory.update(expected_version=1,why_remember=null,memory_date=null)。",
+      "observed": "schema 接受，返回 version=2；再读仍是旧 why_remember 和旧 memory_date。handler 的 a.get 和服务 None 默认将缺省与显式 null 合并。",
+      "expected": "接口应能明确表达保留/设值/清空，或者明确拒绝/文档说明 null 的特殊保留含义；本项不声称现行正本已明确规定 null=清空。",
+      "impact": "用户试图清除错误日期或理由时收到更新成功，却仍保留旧数据，并产生无实际元数据变更的新版本。",
+      "fix": "用未提供 sentinel 或 field-presence 判断区分缺省与 null，让显式清空落实；如清空不被允许，应 schema/domain 明确拒绝并补文档。",
+      "evidence": "evidence/writes/probe_writes.json#explicit_null_update",
+      "confidence": "high for observed behavior; product contract clarification needed for null semantics"
+    },
+    {
+      "id": "CR-R1",
+      "priority": "P3",
+      "title": "Bootstrap snapshot identity uses aggregate timestamps instead of complete versions",
+      "file": "backend/mariposa/bootstrap/service.py",
+      "line_start": 69,
+      "line_end": 93,
+      "condition": "A plan update has an equal timestamp, or wall-clock rollback / a future existing MAX(updated_at) prevents the table maximum advancing. Normal public Plan timestamps have microsecond precision; this audit uses a frozen clock to prove the collision and does not claim routine same-microsecond occurrence.",
+      "reproduction": "Freeze plans._now to one ISO timestamp. Public plans.create(content=old), bootstrap.get, plans.update(content=new). loaded_snapshot_id returns unchanged=true and a plan_content continuation for the old snapshot returns the new suffix.",
+      "evidence": "probe-results.json: same_tick_snapshot",
+      "recommendation": "Hash deterministic per-resource IDs and current version counters/visibility, or use a transactional monotonic bootstrap change epoch. Include I and Plan section constants in the snapshot rule identity."
+    },
+    {
+      "id": "CR-R2",
+      "priority": "P3",
+      "title": "Plan terminal cursor is a truthy object and can restart page one",
+      "file": "backend/mariposa/bootstrap/pages.py",
+      "line_start": 147,
+      "line_end": 174,
+      "condition": "An integration loops on the generic next_cursor object instead of next_cursor.plans_offset. Existing tests explicitly expect {plans_offset:null}, so this is an interface inconsistency, not a claim of current-contract violation.",
+      "evidence": "probe-results.json: plans_terminal_cursor",
+      "recommendation": "Document the current termination rule; in a versioned schema, standardize exhausted pages to next_cursor=null and reject terminal/negative offsets instead of mapping them to zero."
+    }
+  ],
+  "validation": {
+    "baseline": "fe2ed052537b59ce28a7e11023fa946177a47178",
+    "collected": 927,
+    "files": 94,
+    "counts": {
+      "passed": 921,
+      "skipped": 1
+    },
+    "not_run": [
+      "tests/acceptance/test_gate_cases.py::TestRET::test_T_RET_05_late_embedding_rejected",
+      "tests/acceptance/test_gate_cases.py::TestRET::test_T_RET_11_filter_before_vector",
+      "tests/integration/test_dense_real_model_smoke.py::TestRealModelWarmupAndSmoke::test_warmup_and_synonym_recall",
+      "tests/integration/test_dense_real_model_smoke.py::TestRealModelWarmupAndSmoke::test_forbidden_fields_do_not_trigger",
+      "tests/integration/test_dense_real_model_smoke.py::TestRealModelWarmupAndSmoke::test_no_fallback_when_unavailable"
+    ],
+    "skips": [
+      {
+        "name": "test_real_export_readonly",
+        "message": "未设置 MARIPOSA_SOURCE_REAL_EXPORT（本机真实导出路径）"
+      }
+    ],
+    "max_sampled_tree_rss_bytes": 82427904,
+    "batch_duration_seconds": 82.48,
+    "environment_corrections": [
+      "Initial snapshot lacked .venv symlink; test_audit_ra_ui_docs subprocess could not start. After adding symlink the affected file passed 2/2.",
+      "Initial Vite node_modules symlink attempted writes outside snapshot; copied dependencies into snapshot and original npm run build succeeded."
+    ],
+    "web_build": "passed",
+    "web_e2e": "1 passed; authenticated API smoke/retired endpoints only; no browser write-loop coverage"
+  },
+  "json_measurements": {
+    "encoding": "UTF-8, ensure_ascii=False, separators=(',', ':'), exact synthetic serialized packet bytes",
+    "samples": {
+      "bootstrap.get": {
+        "legacy_bytes": 9151,
+        "compact_bytes": 8630,
+        "saved_bytes": 521,
+        "saved_pct": 5.69,
+        "candidate_extra_removed": [
+          "i.detail_on_demand",
+          "plans.note",
+          "coverage.note",
+          "plans.items[].forgetting_note"
+        ],
+        "candidate_bytes": 8172,
+        "candidate_extra_saved_bytes": 458,
+        "candidate_extra_saved_pct_of_compact": 5.31
+      },
+      "memory.recall.start": {
+        "legacy_bytes": 6430,
+        "compact_bytes": 5885,
+        "saved_bytes": 545,
+        "saved_pct": 8.48,
+        "candidate_extra_removed": [
+          "candidates[]._matched fields only when same-field evidence.snippet equals the exact value"
+        ],
+        "candidate_bytes": 5039,
+        "candidate_extra_saved_bytes": 846,
+        "candidate_extra_saved_pct_of_compact": 14.38
+      },
+      "source.search": {
+        "legacy_bytes": 5569,
+        "compact_bytes": 5314,
+        "saved_bytes": 255,
+        "saved_pct": 4.58,
+        "candidate_extra_removed": [],
+        "candidate_bytes": 5314,
+        "candidate_extra_saved_bytes": 0,
+        "candidate_extra_saved_pct_of_compact": 0.0
+      }
+    },
+    "mcp": {
+      "wire_bytes": 1869,
+      "structured_payload_bytes": 806,
+      "wire_bytes_with_minified_text": 1814,
+      "note": "content.text and structuredContent both contain full result; do not remove fallback without client capability negotiation"
+    },
+    "http_empty_bootstrap": {
+      "legacy_wire_bytes": 1324,
+      "query_compact_wire_bytes": 1324,
+      "arguments_compact_wire_bytes": 806
+    }
+  },
+  "tool_catalog_measurements": {
+    "registered_capabilities": 151,
+    "jiaming_tools": 148,
+    "tools_list_utf8_bytes": 54769,
+    "deliberate_blocked_reserved_count": 35,
+    "active_only_opt_in_utf8_bytes": 46977,
+    "active_only_opt_in_saving_pct": 14.23,
+    "blocked_reserved_names": [
+      "mariposa_chat_conversations_list",
+      "mariposa_chat_conversations_create",
+      "mariposa_chat_conversations_get",
+      "mariposa_chat_conversations_messages",
+      "mariposa_chat_messages_list",
+      "mariposa_chat_send",
+      "mariposa_chat_cancel",
+      "mariposa_voice_send",
+      "mariposa_voice_call_start",
+      "mariposa_voice_call_get",
+      "mariposa_voice_call_end",
+      "mariposa_voice_status",
+      "mariposa_group_list",
+      "mariposa_group_history",
+      "mariposa_group_archive_list",
+      "mariposa_group_archive_get",
+      "mariposa_group_send",
+      "mariposa_group_send_message",
+      "mariposa_group_profile",
+      "mariposa_group_status",
+      "mariposa_wishstar_list",
+      "mariposa_wishstar_get",
+      "mariposa_wishstar_write",
+      "mariposa_wishstar_respond",
+      "mariposa_wakeup_status",
+      "mariposa_wakeup_configure",
+      "mariposa_settings_update",
+      "mariposa_listening_play",
+      "mariposa_listening_queue",
+      "mariposa_listening_seek",
+      "mariposa_listening_pause",
+      "mariposa_listening_enqueue",
+      "mariposa_listening_join",
+      "mariposa_listening_sync",
+      "mariposa_listening_leave"
+    ],
+    "contracts_missing": [],
+    "contracts_extra": [],
+    "contracts_changed": []
+  },
+  "source_unchanged": {
+    "head": "fe2ed052537b59ce28a7e11023fa946177a47178",
+    "status": "",
+    "source_drift": [],
+    "restored_snapshot_generated_files": []
+  }
+}

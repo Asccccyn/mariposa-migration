@@ -251,12 +251,14 @@ def list_relations(a: dict) -> dict:
                     msg_overlap = True
                     if s_mid and e_mid:
                         srow = conn.execute(
-                            "SELECT sequence, conversation_id FROM"
+                            "SELECT id, provider_message_id, sequence,"
+                            " conversation_id FROM"
                             " source_messages WHERE id=? OR"
                             " provider_message_id=?",
                             (s_mid, s_mid)).fetchone()
                         erow = conn.execute(
-                            "SELECT sequence, conversation_id FROM"
+                            "SELECT id, provider_message_id, sequence,"
+                            " conversation_id FROM"
                             " source_messages WHERE id=? OR"
                             " provider_message_id=?",
                             (e_mid, e_mid)).fetchone()
@@ -267,6 +269,19 @@ def list_relations(a: dict) -> dict:
                         _bconv = r["conversation_id"]
                         if (srow["conversation_id"] != _bconv
                                 or erow["conversation_id"] != _bconv):
+                            continue
+                        # SRC-07：覆盖以共享范围解析器判定的实际
+                        # parent 路径成员为准（含锚定消息端点）；
+                        # 锚定消息不在绑定路径上 → 不算命中。解析
+                        # 失败保守跳过
+                        from ..source import query as _sq
+                        _pids = _sq.covered_path_ids(
+                            _bconv, r["start_message_id"],
+                            r["end_message_id"])
+                        _sid = srow["id"]
+                        _eid = erow["id"]
+                        if _pids is None or not (
+                                _sid in _pids and _eid in _pids):
                             continue
                         q_s, q_e = srow["sequence"], erow["sequence"]
                         msg_overlap = not _entirely_before(

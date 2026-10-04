@@ -171,6 +171,25 @@ def get_message(message_id: str | None = None,
     }
 
 
+
+def covered_path_ids(conversation_id: str, start_message_id: str,
+                     end_message_id: str,
+                     include_unpublished: bool = False) -> set[str] | None:
+    """绑定区间的实际 parent 路径成员集合（SRC-07 共享解析器）。
+
+    供正查/逆查共用：成员身份以 parent 链为准，不以跨快照 sequence
+    大小近似——sibling 不在路径上就不算覆盖。解析失败返回 None
+    （调用方按保守跳过该绑定，不猜）。
+    """
+    try:
+        resolved = validate_range(
+            conversation_id, start_message_id, end_message_id,
+            include_unpublished=include_unpublished)
+        return set(resolved["path_ids"])
+    except Exception:
+        return None
+
+
 def open_range(conversation_id: str, start_message_id: str,
                end_message_id: str, start_char_offset: int | None = None,
                end_char_offset: int | None = None,
