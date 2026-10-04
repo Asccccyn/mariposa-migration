@@ -121,22 +121,17 @@ def memories_referencing(message_id: str) -> list[dict]:
             " JOIN source_messages e ON e.id=b.end_message_id"
             " WHERE b.conversation_id=?", (msg["conversation_id"],)).fetchall()
     out = []
+    from . import query as _query
     for r in rows:
-        # 同 sequence 组按稳定消息身份精确分辨（§6.1；F08 2026-10-03）：
-        # 序号严格落在区间内部 → 覆盖（粒度只能到序号）；落在边界序号
-        # 上时还须与对应端点消息身份一致（id 或 provider_message_id
-        # 相等）——多次导出的 sequence 冲突会让同会话并存同号 sibling，
-        # 仅凭序号相等会把 sibling 误算作被覆盖
-        strictly_inside = any(r["start_seq"] < q < r["end_seq"]
-                              for q in seq_set)
-        boundary_identical = (
-            (r["start_seq"] in seq_set and (
-                msg["id"] == r["s_id"]
-                or msg["provider_message_id"] == r["s_pid"]))
-            or (r["end_seq"] in seq_set and (
-                msg["id"] == r["e_id"]
-                or msg["provider_message_id"] == r["e_pid"])))
-        if strictly_inside or boundary_identical:
+        # SRC-07（2026-10-04 全量审计）：覆盖以共享范围解析器的实际
+        # parent 路径成员为准——sibling 序号落点不等于路径身份；
+        # 解析失败（None）保守跳过该绑定
+        path_ids = _query.covered_path_ids(
+            msg["conversation_id"], r["start_message_id"],
+            r["end_message_id"])
+        if path_ids is None:
+            continue
+        if msg["id"] in path_ids:
             d = {k: v for k, v in dict(r).items()
                  if k not in ("start_seq", "end_seq", "s_id", "s_pid",
                               "e_id", "e_pid")}

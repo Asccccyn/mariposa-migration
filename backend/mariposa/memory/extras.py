@@ -44,10 +44,12 @@ def set_flag(principal_id: str, memory_id: str, flag: str, value: bool) -> dict:
     return {"memory_id": memory_id, flag: value}
 
 
+_UNSET = object()  # 字段缺席哨兵（WR-04：缺席≠显式 null 清空）
+
+
 def update_text(principal_id: str, memory_id: str, expected_version: int,
-                text: str | None = None, why_remember: str | None = None,
-                memory_date: str | None = None,
-                date_confidence: str | None = None) -> dict:
+                text: str | None = None, why_remember=_UNSET,
+                memory_date=_UNSET, date_confidence=_UNSET) -> dict:
     """修改桶正文：新版本，不就地覆盖（§4.5）。
 
     审计 F39：expected_version 校验在 BEGIN IMMEDIATE 写锁内执行——
@@ -76,8 +78,9 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                 new_text = None if v["event_text"] is not None else text
             else:
                 new_text = None if v["event_text"] is not None else v["hold_text"]
-            new_why = (why_remember if why_remember is not None
-                       else v["why_remember"])
+            # WR-04：缺席（_UNSET）保留现值；显式 None 落实清空
+            new_why = (v["why_remember"] if why_remember is _UNSET
+                       else why_remember)
             if m["compression_state"] == "forgotten_summary":
                 raise Forbidden(
                     "forgotten memory cannot be edited in place; restore first")
@@ -106,8 +109,15 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                 "UPDATE memories SET current_version_no=?, memory_date=?,"
                 " date_confidence=?, updated_at=? WHERE memory_id=?",
                 (new_version,
-                 memory_date if memory_date is not None else m["memory_date"],
-                 date_confidence or m["date_confidence"], now, memory_id))
+                 # WR-04：why_remember（可空列）显式 null=清空；
+                 # memory_date/date_confidence 是 NOT NULL 列，不支持
+                 # 清空——null 等同未提供（保留现值，语义文档化）
+                 m["memory_date"] if (memory_date is _UNSET
+                                      or memory_date is None)
+                 else memory_date,
+                 m["date_confidence"] if (date_confidence is _UNSET
+                                          or date_confidence is None)
+                 else date_confidence, now, memory_id))
             from ..retrieval import field_projection as _fp
             _fp.build_for_memory(conn, memory_id)
             memory.rebuild_full_projection(conn, memory_id)
