@@ -161,6 +161,62 @@ class TestCommitTimeRevalidation:
         assert row["status"] == "CANCELLED", "终态不得被提交复活"
         assert row["current_revision"] == 1, "拒绝路径零 revision 前进"
 
+    def test_accept_cannot_overwrite_concurrent_close(self, actors,
+                                                      monkeypatch):
+        """F03（2026-10-03 审计 P1）：accept 锁外读 ACTIVE → 对端
+        close 提交 CANCELLED（close 不推进 revision，revision CAS
+        拦不住）→ accept(close=True) 曾把终态覆盖成 RESOLVED。
+        现在最终写锁内重读行重跑状态机，拒绝且 CANCELLED 保留。"""
+        _seed_word(actors["jiaming"])
+        r1 = _start(actors, op="op-f03-acc")
+        sid = r1["data"]["data"]["recall_session_id"]
+        original = recall_service.require_owned_session
+        armed = [True]
+
+        def interleave(*a, **kw):
+            result = original(*a, **kw)
+            if armed[0]:
+                armed[0] = False
+                recall_service.close(actors["jiaming"], {
+                    "session_id": sid, "outcome": "cancelled"}, None)
+            return result
+
+        monkeypatch.setattr(recall_service, "require_owned_session",
+                            interleave)
+        with pytest.raises(Forbidden):
+            recall_service.accept(actors["jiaming"], {
+                "session_id": sid, "close": True}, None)
+        assert store.get_session(sid)["status"] == "CANCELLED", \
+            "并发 close 的终态不得被 accept 覆盖"
+
+    def test_reject_after_terminal_rejected_in_tx(self, actors,
+                                                  monkeypatch):
+        """F03 同面：reject 的候选写入同样在写锁内重验——终态
+        session 上不再落 rejected 标记。"""
+        _seed_word(actors["jiaming"])
+        r1 = _start(actors, op="op-f03-rej")
+        sid = r1["data"]["data"]["recall_session_id"]
+        cand = r1["data"]["data"]["candidates"][0]["candidate_ref"]
+        original = recall_service.require_owned_session
+        armed = [True]
+
+        def interleave(*a, **kw):
+            result = original(*a, **kw)
+            if armed[0]:
+                armed[0] = False
+                recall_service.close(actors["jiaming"], {
+                    "session_id": sid, "outcome": "cancelled"}, None)
+            return result
+
+        monkeypatch.setattr(recall_service, "require_owned_session",
+                            interleave)
+        with pytest.raises(Forbidden):
+            recall_service.reject(actors["jiaming"], {
+                "session_id": sid, "candidate_ref": cand}, None)
+        states = {c["candidate_ref"]: c["state"]
+                  for c in store.list_candidates(sid)}
+        assert states[cand] != "rejected", "终态后不得再写候选状态"
+
     def test_round2_cannot_commit_stale_revision(self, actors, monkeypatch):
         """审计反例：Round2 raw 计算后 refine 换词（revision2），旧
         Round2 仍提交并交付 revision1 的结果——现在提交时重验拒绝。"""
@@ -265,6 +321,45 @@ class TestRawToggleLifecycle:
                 cfg.RECALL_RAW_FALLBACK_ENABLED = old_flag
         finally:
             cfg.RECALL_JUDGE_PROVIDER = old
+
+    def test_replay_blocked_after_words_toggle_off(self, actors):
+        """F02（2026-10-03 审计 P1）：words 关闭后，旧 find_words 包
+        整体拒绝重放——通道开关对 fresh/continuation/replay 无例外。"""
+        from mariposa.errors import StaleOperation
+        _seed_word(actors["jiaming"])
+        r1 = _start(actors, op="op-f02-words")
+        saved = r1["data"]["data"]
+        assert saved.get("intent") == "find_words"
+        assert saved["candidates"], "前置：开启时至少一张 words 卡"
+        old_flag = cfg.RECALL_WORDS_ENABLED
+        cfg.RECALL_WORDS_ENABLED = False
+        try:
+            with pytest.raises(StaleOperation):
+                recall_service.revalidate_replayed(
+                    "memory.recall.start", saved, None)
+        finally:
+            cfg.RECALL_WORDS_ENABLED = old_flag
+
+    def test_mixed_replay_strips_words_cards_after_toggle_off(self, actors):
+        """F02 混合通道：event+words 旧包重放时 words 卡剔除、
+        event 卡保留——开关关的是通道，不是整个混合查询。"""
+        _seed_word(actors["jiaming"], text="复述：崧蓝染色的话语")
+        _hold(actors["jiaming"], "崧蓝染色的事件正文")
+        r1 = _start(actors, terms=("崧蓝",), op="op-f02-mix",
+                    channels=["event", "words"])
+        saved = r1["data"]["data"]
+        channels_seen = {c.get("channel") for c in saved["candidates"]}
+        assert "words" in channels_seen, "前置：混合包里有 words 卡"
+        old_flag = cfg.RECALL_WORDS_ENABLED
+        cfg.RECALL_WORDS_ENABLED = False
+        try:
+            out = recall_service.revalidate_replayed(
+                "memory.recall.start", saved, None)
+            left = {c.get("channel") for c in out["candidates"]}
+            assert "words" not in left, "关闭后 words 卡不得出站"
+            assert left, "event 卡应保留"
+        finally:
+            cfg.RECALL_WORDS_ENABLED = old_flag
 
 
 # ---------------------------------------------------------------- CB-011

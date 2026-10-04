@@ -8,12 +8,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _sha256_file(path: Path) -> str:
@@ -24,9 +33,54 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _collect_object_references() -> tuple[list[str], list[str]]:
+    """F07（2026-10-03 审计 P1）：恢复集引用收集。
+
+    备份必须携带库中引用的字节，否则"库在、母本/媒体没了"的备份
+    verify 仍 ok 却不可恢复。引用面：source_import_batches.raw_path
+    （Raw Archive 母本）与 media_objects.storage_key（媒体对象）。
+    """
+    raw_paths: list[str] = []
+    storage_keys: list[str] = []
+    if config.FORMAL_DB.exists():
+        conn = sqlite3.connect(str(config.FORMAL_DB))
+        try:
+            if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+                    " name='source_import_batches'").fetchone():
+                raw_paths = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT raw_path FROM source_import_batches"
+                    " WHERE raw_path IS NOT NULL")]
+            if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+                    " name='media_objects'").fetchone():
+                storage_keys = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT storage_key FROM media_objects")]
+        finally:
+            conn.close()
+    return raw_paths, storage_keys
+
+
+def _copy_object(src: Path, rel: str, dest_dir: Path) -> dict | None:
+    """把一个被引用对象复制进备份目录并记录身份；源缺失返回
+    missing 标记（verify 阶段 fail closed，不静默降级为 DB-only）。"""
+    entry: dict = {"rel": rel, "source_path": str(src)}
+    if not src.is_file():
+        entry["missing_at_backup"] = True
+        return entry
+    target = dest_dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, target)
+    entry["sha256"] = _sha256_file(target)
+    entry["bytes"] = target.stat().st_size
+    return entry
+
+
 def backup() -> dict:
     config.ensure_dirs()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # F11（2026-10-03 审计 P2）：秒级目录名让同秒两次备份互相覆盖——
+    # 加微秒保证唯一
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     dest_dir = config.RUNTIME_DIR / "backups" / stamp
     dest_dir.mkdir(parents=True, exist_ok=True)
     manifest: dict = {"created_at": datetime.now(timezone.utc).isoformat(),
@@ -49,11 +103,31 @@ def backup() -> dict:
             "sha256": _sha256_file(target),
             "bytes": target.stat().st_size,
         }
+    # F07：恢复集 = 数据库 + 被引用的 Raw 母本 + 媒体对象
+    raw_paths, storage_keys = _collect_object_references()
+    manifest["raw_archives"] = []
+    for p in raw_paths:
+        rp = Path(p)
+        rel = f"raw/{rp.relative_to(config.SOURCE_RAW_DIR)}" \
+            if _is_under(rp, config.SOURCE_RAW_DIR) else \
+            f"raw/orphan/{rp.name}"
+        entry = _copy_object(rp, rel, dest_dir)
+        if entry:
+            manifest["raw_archives"].append(entry)
+    manifest["media_objects"] = []
+    for key in storage_keys:
+        entry = _copy_object(config.RUNTIME_DIR / "objects" / key,
+                             f"objects/{key}", dest_dir)
+        if entry:
+            manifest["media_objects"].append(entry)
     manifest_path = dest_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
                              encoding="utf-8")
     print(json.dumps({"ok": True, "backup_dir": str(dest_dir),
                       "manifest": str(manifest_path)}, ensure_ascii=False))
+    # F11：返回值与打印一致地带 ok——main() 按 ok 定退出码，此前
+    # 成功备份 CLI 也 exit 1
+    manifest = {**manifest, "ok": True, "backup_dir": str(dest_dir)}
     return manifest
 
 
@@ -125,14 +199,92 @@ def restore_verify(backup_dir: str) -> dict:
                              "issue": f"not_a_mariposa_{name}_backup"
                                       f"（缺表 {t}）"})
                         break
+                # F12（2026-10-03 审计 P2）：库身份必须各归其位——
+                # formal 备份替换 workspace 位置后哈希可以重算合法，
+                # 但启动 identity 校验会拒绝；verify 同标准拒绝
+                expected_identity = f"{name}_v1"
+                meta = conn.execute(
+                    "SELECT value FROM mariposa_db_meta WHERE"
+                    " key='identity'").fetchone()
+                # 无 meta 行=迁移前旧库，启动时也放行补章（同口径）；
+                # 有章不匹配=错误文件冒名，verify 与启动一致拒绝
+                if meta is not None and meta[0] != expected_identity:
+                    problems.append({
+                        "db": name, "issue": "identity_mismatch",
+                        "expected": expected_identity,
+                        "got": meta[0]})
             finally:
                 conn.close()
         except sqlite3.Error as e:
             problems.append({"db": name, "issue": f"unreadable: {e}"})
+    # F07（2026-10-03 审计 P1）：恢复集不只是数据库——库中引用的
+    # Raw 母本与媒体对象的字节必须在备份内且哈希一致，否则"库在、
+    # 对象没了"的备份不得宣称可完整恢复（媒体读取 NOT_FOUND、
+    # archive verify 失败都是恢复后必然撞上的坑）
+    problems.extend(_verify_object_restore_set(bdir, manifest))
     result = {"ok": not problems, "problems": problems,
               "note": "verify-only；实际恢复需独立授权参数"}
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
+
+
+def _verify_object_restore_set(bdir: Path, manifest: dict) -> list[dict]:
+    """对象恢复集核对：备份 formal 库内的每条对象引用，都必须能在
+    备份目录找到对应字节且哈希一致；清单里登记的每个对象文件也必须
+    实际在场。旧格式备份（无对象清单）只要库里有引用同样 fail closed。"""
+    problems: list[dict] = []
+    declared_raw = {e.get("source_path"): e
+                    for e in (manifest.get("raw_archives") or [])}
+    declared_media = {e["rel"][len("objects/"):]
+                      for e in (manifest.get("media_objects") or [])
+                      if not e.get("missing_at_backup")}
+    for e in (manifest.get("raw_archives") or []):
+        if e.get("missing_at_backup"):
+            problems.append({"object": e.get("source_path"),
+                             "issue": "raw_archive_missing_at_backup"})
+            continue
+        p = bdir / e["rel"]
+        if not p.is_file() or _sha256_file(p) != e.get("sha256"):
+            problems.append({"object": e["rel"],
+                             "issue": "raw_archive_bytes_mismatch"})
+    for e in (manifest.get("media_objects") or []):
+        p = bdir / e["rel"]
+        if not p.is_file() or _sha256_file(p) != e.get("sha256"):
+            problems.append({"object": e["rel"],
+                             "issue": "media_bytes_mismatch"})
+    fdb = bdir / "formal.sqlite3"
+    if not fdb.is_file():
+        return problems
+    try:
+        conn = sqlite3.connect(f"file:{fdb}?mode=ro", uri=True)
+        try:
+            if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+                    " name='source_import_batches'").fetchone():
+                for (rp,) in conn.execute(
+                        "SELECT DISTINCT raw_path FROM"
+                        " source_import_batches"
+                        " WHERE raw_path IS NOT NULL"):
+                    e = declared_raw.get(rp)
+                    if e is None or e.get("missing_at_backup"):
+                        problems.append({"object": rp,
+                                         "issue":
+                                         "raw_archive_not_in_backup"})
+            if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+                    " name='media_objects'").fetchone():
+                for (key,) in conn.execute(
+                        "SELECT DISTINCT storage_key FROM media_objects"):
+                    if key not in declared_media:
+                        problems.append({"object": key,
+                                         "issue":
+                                         "media_object_not_in_backup"})
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        problems.append({"object": "formal.sqlite3",
+                         "issue": f"reference_scan_unreadable: {e}"})
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:

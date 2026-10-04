@@ -56,20 +56,24 @@ def append(principal, memory_id: str, receipt_id: str, text: str,
                 raise ViewReceiptInvalid(
                     "view not confirmed yet; confirm before writing",
                     receipt_id=receipt_id)
-            # P1-3（2026-10-02 接续复审）：票据版本必须仍是当前 Memory
-            # 表示版本——看过 v1 确认后 Memory 改成 v2，v1 票据不得
-            # 给 v2 写回忆或据此 keep_wide（receipt 表本来就存了
-            # representation_version，view.confirm 也有同款校验）
+            # P1-3（2026-10-02 接续复审）+ F01（2026-10-03 审计）：
+            # 票据绑定的是签发时刻的内容版本（open 时落 content_version），
+            # 此处与当前 current_version_no 同维度比较——看过 v1 后
+            # Memory 更新到 v2，旧票据不得给 v2 写回忆或据此 keep_wide；
+            # 更新后重新 open+confirm 的票据则必须放行。迁移前旧票据
+            # 无内容绑定（NULL），fail-closed。
             cur_v = conn.execute(
                 "SELECT current_version_no FROM memories WHERE"
                 " memory_id=?", (memory_id,)).fetchone()
-            if cur_v is None or str(r["representation_version"]) != str(
-                    cur_v["current_version_no"]):
+            if cur_v is None or r["content_version"] is None or str(
+                    r["content_version"]) != str(cur_v["current_version_no"]):
                 raise ViewReceiptInvalid(
-                    "view receipt 的表示版本已过期（Memory 已更新）；"
+                    "view receipt 的内容版本已过期（Memory 已更新）；"
                     "请重新 open+confirm 当前版本",
                     receipt_id=receipt_id,
-                    receipt_version=str(r["representation_version"]),
+                    receipt_version=(str(r["content_version"])
+                                     if r["content_version"] is not None
+                                     else None),
                     current_version=(str(cur_v["current_version_no"])
                                      if cur_v else None))
             conn.execute(

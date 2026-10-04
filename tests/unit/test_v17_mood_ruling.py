@@ -145,6 +145,18 @@ class TestMoodProvenanceAndWrite:
         assert got2["tags"] == ["安心"]
         assert got2["mood_written_at"] >= first_written, \
             "后补时间戳推进（event_date+mood_written_at 表达后补）"
+        # F04（2026-10-03 审计 P1）：覆盖≠丢失——旧 note/旧 tags 必须
+        # 能从审计事件读回（覆盖前的值：后来补的当时心情 / 想念）
+        with db.formal() as conn:
+            import json as _json
+            evs = conn.execute(
+                "SELECT payload FROM audit_events WHERE resource_id=?"
+                " AND event_type='memory.mood.written' ORDER BY rowid",
+                (mid,)).fetchall()
+        last = _json.loads(evs[-1]["payload"])
+        assert last["replaced_previous"] is True
+        assert last["previous_note"] == "后来补的当时心情"
+        assert last["previous_tags"] == ["想念"]
 
     def test_mood_write_jiaming_only(self, actors):
         out = hold(actors["jiaming"], "权限正文")

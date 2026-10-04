@@ -30,6 +30,9 @@ BOOT_DAY_WINDOW_MODE = "calendar_days"  # 今天+前两天（自然日），非�
 BOOT_UPCOMING_DAYS = 3  # 临近按日期差 0..3 日（含边界；S4/D03）
 BOOT_SOFT_TOKEN_BUDGET = 16000
 BOOT_SECTION_LIMIT = 50  # 每段上限；超出走 cursor，不静默截断
+# F16（2026-10-03 审计 P2）：默认包内 I 正文分节长度——单条长 I
+# 全文返回会击穿软预算且承诺的分节续取并不存在
+BOOT_I_SECTION_CHARS = 2000
 
 _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
@@ -269,14 +272,21 @@ def get(principal_id: str, entry_source: str, profile: str,
                        "categories"],
             "note": "三天桶只出标题+心情；事件正文须明确打开该桶",
         },
-        "i": {"content": i_doc["content"], "version": i_doc["version"],
+        "i": {"content": (i_doc["content"] or "")[:BOOT_I_SECTION_CHARS],
+              "version": i_doc["version"],
               "items": i_doc.get("items", []),
               "history_policy": "旧 revision 默认不注入；has_history="
                                "true 时可按需调用 i.item.history",
               "source": ("i_documents"
                          if i_doc["content"] is not None else None),
               "note": None if i_doc["content"] is not None else
-                      "I 尚未落笔（无旧Self自动映射，V2-I-03）"},
+                      "I 尚未落笔（无旧Self自动映射，V2-I-03）",
+              **({"truncated": True,
+                  "total_chars": len(i_doc["content"]),
+                  "next_cursor": {"i_offset": BOOT_I_SECTION_CHARS}}
+                 if (i_doc["content"] is not None
+                     and len(i_doc["content"]) > BOOT_I_SECTION_CHARS)
+                 else {})},
         "plans": {
             "items": plan_page, "count": len(plan_page),
             "total": len(plan_items),
@@ -321,7 +331,7 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
     """
     if principal_id != "jiaming":
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
-    if section not in ("memory_days", "plans"):
+    if section not in ("memory_days", "plans", "i"):
         raise Forbidden(f"unknown section: {section}（v2 开窗无 raw 段）")
     # P1 复审（2026-10-02 接续）：校验 state_hash 与取页在同一读事务
     # ——此前校验连接先关、取页/Plan 各自重开连接，交错窗口内旧
@@ -379,6 +389,28 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                         "section": "memory_days",
                         "items": items, "count": len(items),
                         "total_in_window": total, "next_cursor": nxt}
+
+            # i：正文分节续取（F16）——同事务读当前 I，超长默认包
+            # 只给首节，warning 承诺的分节续取在这里兑现
+            if section == "i":
+                from ..identity_i import service as _i_svc
+                i_cur = _i_svc.get(conn=conn)
+                content = i_cur["content"] or ""
+                i_off = int((cursor or {}).get("i_offset") or 0)
+                if i_off < 0 or i_off > len(content):
+                    raise Forbidden("cursor.i_offset 超出当前正文范围",
+                                    code="INVALID_ARGUMENT",
+                                    got=i_off, total_chars=len(content))
+                nxt_i = (i_off + BOOT_I_SECTION_CHARS
+                         if i_off + BOOT_I_SECTION_CHARS < len(content)
+                         else None)
+                return {"snapshot_id": snapshot_id, "section": "i",
+                        "content": content[i_off:i_off
+                                           + BOOT_I_SECTION_CHARS],
+                        "offset": i_off, "total_chars": len(content),
+                        "version": i_cur["version"],
+                        "next_cursor": ({"i_offset": nxt_i}
+                                        if nxt_i else None)}
 
             # plans：offset 游标（同事务经 conn 装配）
             offset = int((cursor or {}).get("plans_offset") or 0)

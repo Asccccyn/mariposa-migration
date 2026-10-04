@@ -468,7 +468,14 @@ def mood_write(principal_id: str, memory_id: str,
             old = conn.execute(
                 "SELECT mood_text FROM memory_moods WHERE memory_id=?",
                 (memory_id,)).fetchone()
+            old_tags: list[str] = []
             if old is not None:
+                # F04（2026-10-03 审计 P1）：被覆盖的旧值必须留底——
+                # 2026-09-30 裁定"旧值进审计事件"同事务落实，否则
+                # DELETE 后旧 note 在全库零命中，永久丢失
+                old_tags = [r["tag"] for r in conn.execute(
+                    "SELECT tag FROM memory_mood_tags WHERE memory_id=?",
+                    (memory_id,))]
                 conn.execute("DELETE FROM memory_moods WHERE memory_id=?",
                              (memory_id,))
                 conn.execute("DELETE FROM memory_mood_tags WHERE"
@@ -485,6 +492,10 @@ def mood_write(principal_id: str, memory_id: str,
             audit.record(conn, "memory.mood.written", principal_id,
                          resource_id=memory_id,
                          payload={"replaced_previous": old is not None,
+                                  "previous_note": (old["mood_text"]
+                                                    if old is not None
+                                                    else None),
+                                  "previous_tags": old_tags,
                                   "tags": clean_tags,
                                   "note_present": note is not None})
             conn.execute("COMMIT")

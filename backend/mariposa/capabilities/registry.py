@@ -406,7 +406,7 @@ def _idempotent_invoke(principal: Principal, cap: Capability, arguments: dict,
     ph = _payload_hash(arguments)
     tkey = _transport_key(key)
     if not _claim_idempotency(principal.principal_id, cap.name, tkey, ph):
-        replay = _await_completion(principal, cap, tkey, ph)
+        replay = _await_completion(principal, cap, tkey, ph, arguments)
         if replay is not None:
             return {"ok": True, "data": replay, "idempotent_replay": True}
 
@@ -483,8 +483,67 @@ def _revalidate_replayed_response(principal: Principal, capability: str,
             memory_id=mid)
 
 
+#: 走 relations.corrections.atomic_write 的能力（领域回执键
+#: op:<operation_id>，与业务副作用同事务）——F23 崩溃窗口恢复面
+_DOMAIN_IDEMPOTENT_CAPS = frozenset({
+    "memory.relations.correct", "i.item.relations.correct",
+    "source.binding.correct"})
+
+
+def _recover_transport_from_domain(principal: Principal, cap: Capability,
+                                   tkey: str, arguments: dict):
+    """t 层 running 残留时按领域回执恢复外层（F23）。
+
+    返回 (verdict, result)：completed=业务已落地（外层补 completed
+    并重放领域结果）；not_executed=领域零痕迹（外层转 failed 放行
+    重试）；None=不可判定（body 无 operation_id 或领域侧同在
+    running）。不放松未知结果保护——非 atomic_write 能力不走此路。
+    """
+    op = arguments.get("operation_id")
+    if not isinstance(op, str) or not op:
+        return None, None
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT status, result_ref FROM idempotency_records WHERE"
+            " principal_id=? AND capability=? AND idempotency_key=?",
+            (principal.principal_id, cap.name, f"op:{op}")).fetchone()
+        if row is not None and row["status"] == "completed":
+            try:
+                result = json.loads(row["result_ref"])
+            except (ValueError, TypeError):
+                return None, None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE idempotency_records SET status='completed',"
+                    " result_ref=? WHERE principal_id=? AND capability=?"
+                    " AND idempotency_key=? AND status='running'",
+                    (json.dumps(result, ensure_ascii=False),
+                     principal.principal_id, cap.name, tkey))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            return "completed", result
+        if row is None:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE idempotency_records SET status='failed',"
+                    " result_ref=NULL WHERE principal_id=? AND"
+                    " capability=? AND idempotency_key=? AND"
+                    " status='running'",
+                    (principal.principal_id, cap.name, tkey))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            return "not_executed", None
+    return None, None
+
+
 def _await_completion(principal: Principal, cap: Capability, key: str,
-                      ph: str) -> dict | None:
+                      ph: str, arguments: dict | None = None) -> dict | None:
     """占位失败方：等待占位方终态。
 
     返回 dict = 已完成（调用方按幂等重放返回）；None = 记录消失或已由
@@ -509,6 +568,19 @@ def _await_completion(principal: Principal, cap: Capability, key: str,
     row = _read_idempotency(principal.principal_id, cap.name, key)
     if row is not None and row["status"] == "running":
         if _idempotency_stale(row):
+            # F23（2026-10-03 审计 P2）：atomic_write 能力的崩溃窗口按
+            # 领域回执恢复外层——领域记录与业务副作用同事务，completed
+            # 即已落地（补写外层并重放同一结果），无记录即零痕迹（转
+            # failed 放行重试）；不可判定才维持 OUTCOME_UNKNOWN
+            if cap.name in _DOMAIN_IDEMPOTENT_CAPS:
+                verdict, recovered = _recover_transport_from_domain(
+                    principal, cap, key, arguments or {})
+                if verdict == "completed":
+                    return recovered
+                if verdict == "not_executed":
+                    if _claim_idempotency(principal.principal_id, cap.name,
+                                          key, ph):
+                        return None
             # 疑似崩溃残留：不盲目重放副作用（B02 崩溃窗口）
             raise OutcomeUnknown(
                 "idempotent execution likely crashed mid-flight; "

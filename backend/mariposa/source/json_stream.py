@@ -97,14 +97,17 @@ def iter_top_level_array(stream) -> Iterator[Any]:
             pos += 1
             break
         while True:
-            if len(buf) - pos > max_element:
-                raise JsonStreamError(
-                    f"element {yielded} exceeds SOURCE_MAX_ELEMENT_BYTES",
-                    code="SOURCE_ELEMENT_TOO_LARGE")
             try:
                 obj, end = dec.raw_decode(buf, pos)
                 break
             except json.JSONDecodeError:
+                # F10（2026-10-03 审计 P2）：未完元素按已读 UTF-8 字节
+                # 先封顶（限制内存增长），不是等解析完成才检查
+                if len(buf[pos:].encode("utf-8")) > max_element:
+                    raise JsonStreamError(
+                        f"element {yielded} exceeds"
+                        " SOURCE_MAX_ELEMENT_BYTES",
+                        code="SOURCE_ELEMENT_TOO_LARGE")
                 if fill():
                     continue
                 raise JsonStreamError(
@@ -112,6 +115,14 @@ def iter_top_level_array(stream) -> Iterator[Any]:
             except ValueError as e:  # parse_constant 拒绝 NaN/Infinity
                 raise JsonStreamError(
                     f"invalid JSON value at element {yielded}: {e}") from e
+        # F10：单元素限额按 UTF-8 字节数、且只算当前元素本身——
+        # 旧实现 len(buf)-pos 是 Unicode 字符数且把缓冲中后续元素
+        # 一起计入（限额 400 放过 490 字节中文元素；限额 100 反而
+        # 拒绝同块 5 个各 42 字节的合法元素）
+        if len(buf[pos:end].encode("utf-8")) > max_element:
+            raise JsonStreamError(
+                f"element {yielded} exceeds SOURCE_MAX_ELEMENT_BYTES",
+                code="SOURCE_ELEMENT_TOO_LARGE")
         yield obj
         yielded += 1
         pos = end

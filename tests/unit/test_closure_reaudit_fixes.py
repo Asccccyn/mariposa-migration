@@ -250,8 +250,10 @@ class TestP14WordsIdentityAndEnvelope:
                           if c.get("channel") == "event"
                           and "our_words" in (c.get("matched_fields")
                                               or [])]
-            if not word_cards:
-                pytest.skip("event words-field miss")
+            # 审计 2026-10-03：前置由本用例自己构造（同数据同索引），
+            # 命中消失是回归不是可选依赖——skip 会把真红变成静默跳过
+            assert word_cards, \
+                "前置失败：event 通道应命中 our_words 字段卡（WIDE 阶段）"
             cands = {c["candidate_ref"]: c
                      for c in cap["payload"]["state"]["candidates"]}
             word_ref = word_cards[0]["candidate_ref"]
@@ -266,6 +268,12 @@ class TestP14WordsIdentityAndEnvelope:
 
 
 class TestP15JevProfileFailClosed:
+    @pytest.fixture(autouse=True)
+    def _ensure_runtime_root(self):
+        # judge 结果会写 runtime 缓存库——单独运行本类时临时根与
+        # runtime 迁移尚未由其他用例完成；reset_all 幂等建齐
+        reset_all()
+
     def test_structured_metadata_blocked(self, monkeypatch):
         monkeypatch.setenv("MARIPOSA_RECALL_JUDGE_ALLOWED_DATA",
                            "event_excerpt")
@@ -298,6 +306,48 @@ class TestP15JevProfileFailClosed:
         item = out.items[0]
         assert item.evaluation_status == "unavailable"
         assert out.request_count == 0, "空段候选不产生请求"
+
+    def test_title_only_segments_not_judged(self, monkeypatch):
+        """F05（2026-10-03 审计 P1）：许可只够发标题（title_cue），
+        event 主体被剥——段非空但缺 event_evidence，照样不送 Jev、
+        unavailable。标题不能替代事件主体（r2 S09）。"""
+        monkeypatch.setenv("MARIPOSA_RECALL_JUDGE_ALLOWED_DATA",
+                           "title_cue")
+        j = typesafe_jev.TypeSafeJevJudge()
+        j._api_key = "k"
+        out = j.judge({"original_request": "q",
+                       "explicit_constraints": {}},
+                      [{"candidate_ref": "m1",
+                        "resource_ref": "memory:m1", "channel": "event",
+                        "matched_fields": ["original_title"],
+                        "excerpt": "标题命中片段",
+                        "_row": {"whitelist_body": "当晚在山里修电路",
+                                 "original_title": "中秋约会"}}],
+                      {})
+        item = out.items[0]
+        assert item.evaluation_status == "unavailable"
+        assert out.request_count == 0, "缺事件主体的候选不产生请求"
+
+    def test_word_match_cannot_substitute_event_body(self, monkeypatch):
+        """F05 混合面：普通 recall 中 our_words 命中，许可只给
+        word_excerpt——话语 match 段在场但 event 主体被剥 →
+        unavailable（话语命中不能替代事件事实主体）。"""
+        monkeypatch.setenv("MARIPOSA_RECALL_JUDGE_ALLOWED_DATA",
+                           "word_excerpt")
+        j = typesafe_jev.TypeSafeJevJudge()
+        j._api_key = "k"
+        out = j.judge({"original_request": "q",
+                       "explicit_constraints": {}},
+                      [{"candidate_ref": "m2",
+                        "resource_ref": "memory:m2", "channel": "event",
+                        "matched_fields": ["our_words"],
+                        "excerpt": "具体命中话语",
+                        "_row": {"whitelist_body": "事件正文主体",
+                                 "original_title": "t"}}],
+                      {})
+        item = out.items[0]
+        assert item.evaluation_status == "unavailable"
+        assert out.request_count == 0
 
 
 class TestP26ReplayKeepsSourceMsg:

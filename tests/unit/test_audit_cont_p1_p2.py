@@ -116,6 +116,53 @@ class TestStaleReceipt:
         from mariposa.memory import keep as keep_mod
         assert not keep_mod.marks_of(m["memory_id"])
 
+    def test_fresh_receipt_after_update_allows_append(self, actors):
+        """F01 正例：更新到 v2 后重新 open+confirm，追加回忆必须成功。
+
+        票据绑定的版本事实必须与追加校验同一维度——重开拿到的是
+        当前内容的合法票据，不能再被表示版本/内容版本混比误拒。
+        """
+        m = _hold(actors, "票据版本正文一")
+        registry.invoke(actors["jiaming"], "memory.update", {
+            "memory_id": m["memory_id"], "expected_version": 1,
+            "text": "票据版本正文二"}, None)
+        opened = registry.invoke(actors["jiaming"], "memory.open", {
+            "memory_id": m["memory_id"]}, None)
+        assert opened["data"]["version"] == 2
+        registry.invoke(actors["jiaming"], "memory.view.confirm", {
+            "memory_id": m["memory_id"],
+            "receipt_id": opened["data"]["view_receipt"]}, None)
+        out = registry.invoke(actors["jiaming"], "memory.recollections.append", {
+            "memory_id": m["memory_id"],
+            "receipt_id": opened["data"]["view_receipt"],
+            "text": "重开后的合法回忆", "keep_wide": True}, None)
+        assert out["data"]["recollection_id"]
+        from mariposa.memory import keep as keep_mod
+        assert keep_mod.marks_of(m["memory_id"]), "合法票据的 keep_wide 应生效"
+
+    def test_unconfirmed_old_receipt_rejected_after_update(self, actors):
+        """F01 反例：v1 打开未确认 → 内容更新 v2 → 旧票据不得 confirm。
+
+        否则旧票据会给 v2 内容写入明开回温事实（把没看过的内容
+        当看过）。
+        """
+        m = _hold(actors, "未确认票据正文")
+        opened = registry.invoke(actors["jiaming"], "memory.open",
+                                 {"memory_id": m["memory_id"]}, None)
+        receipt = opened["data"]["view_receipt"]
+        registry.invoke(actors["jiaming"], "memory.update", {
+            "memory_id": m["memory_id"], "expected_version": 1,
+            "text": "更新后的正文"}, None)
+        with pytest.raises(ViewReceiptInvalid):
+            registry.invoke(actors["jiaming"], "memory.view.confirm", {
+                "memory_id": m["memory_id"], "receipt_id": receipt}, None)
+        with db.formal() as conn:
+            row = conn.execute(
+                "SELECT last_explicit_open_at FROM memories WHERE"
+                " memory_id=?", (m["memory_id"],)).fetchone()
+        assert row["last_explicit_open_at"] is None, \
+            "未看过 v2 就确认成功会伪造明开事实"
+
 
 # ---------------------------------------------------------------- NP4
 

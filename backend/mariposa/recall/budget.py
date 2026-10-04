@@ -17,9 +17,15 @@ def snapshot(session: dict) -> dict:
     """预算快照。rounds_used 由成功 round 记录派生（commit-at-end：
     session dict 的 rounds_used 已在 store.get_session 统一派生覆盖，
     权威事实源是 recall_rounds 表，本模块不再维护平行计数）。"""
+    left = _rounds_left_in_burst(session)
+    # F20（2026-10-03 审计 P2）：成功包预览把本轮算作已成功——剩余
+    # 额度同步扣减，否则同一响应里 1 已用/3 剩余自相矛盾（硬门
+    # rounds_left_in_burst 仍按已提交事实判定，不受预览影响）
+    if session.get("_round_preview_offset"):
+        left = max(0, left - int(session["_round_preview_offset"]))
     return {
         "rounds_used": session["rounds_used"],
-        "rounds_remaining_in_burst": _rounds_left_in_burst(session),
+        "rounds_remaining_in_burst": left,
         "bursts_used": session["bursts_used"],
         "bursts_max": config.RECALL_SESSION_BURSTS_MAX,
         "rounds_max_total": (config.RECALL_SESSION_BURSTS_MAX *

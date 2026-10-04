@@ -967,6 +967,16 @@ ALTER TABLE deletion_requests_v2 RENAME TO deletion_requests;
 ALTER TABLE memory_our_words
   ADD COLUMN source_binding_version INTEGER NOT NULL DEFAULT 0;
 """),
+    (28, """
+
+-- F01（2026-10-03 审计 P1）：查看票据绑定内容版本。此前票据只存
+-- representation_version（内容修订不递增它），追加侧却拿它与
+-- current_version_no 直接比较——两个维度混用导致"更新后重开仍被拒"
+-- 与"旧未确认票据可确认新内容"一对反向漏洞。迁移前签发的旧票据
+-- 没有内容绑定（NULL），confirm/append 一律 fail-closed 要求重开。
+ALTER TABLE memory_view_receipts
+  ADD COLUMN content_version INTEGER;
+"""),
 ]
 
 
@@ -1069,6 +1079,15 @@ DROP TABLE IF EXISTS workspace_task_leases;
 
 def migrate() -> None:
     config.ensure_dirs()
+    # 审计 2026-10-03（恒真断言揭出）：sqlite3.connect 会先落一个空
+    # 库文件再做身份检查——"拒绝静默建库"必须在连接前按文件存在性
+    # 拒绝，不留空壳库文件
+    for _db_path in (config.FORMAL_DB, config.WORKSPACE_DB):
+        if not _db_path.exists() and not config.ALLOW_DB_CREATE:
+            raise RuntimeError(
+                "目标路径下没有既有数据库且未显式 MARIPOSA_ALLOW_CREATE=1："
+                "拒绝静默创建新的正式/工作区库（OPS-RECALL-01）。生产首次"
+                "建库或迁移到新数据根时请显式设置该变量并在完成后关闭。")
     with db.formal() as conn:
         _require_identity(conn, "formal_v1")
         _apply(conn, FORMAL_MIGRATIONS)

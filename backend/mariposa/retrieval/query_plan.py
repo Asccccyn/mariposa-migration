@@ -25,9 +25,13 @@ def compile_terms(terms: list[str]) -> str:
         toks = [t for t in toks if t]
         if not toks:
             continue
-        # 单个 term 内部按 phrase 序列（FTS5 相邻短语隐式 AND，保持顺序）；
+        # F17（2026-10-03 审计 P2）：单个 term 编译成整体 phrase——
+        # FTS5 裸 token 的隐式 AND 既不保序也不要求相邻，"小路灯"
+        # 会命中"灯在小路旁"。event 通道的 scoped_bm25 已按 HYBRID-04
+        # 组内相邻+组间 OR；words 与 prefilter 统一到同一规则。
         # term 之间 OR。
-        exprs.append(" ".join(_quote_token(t) for t in toks))
+        exprs.append('"' + " ".join(
+            t.replace('"', "") for t in toks) + '"')
     if not exprs:
         return ""
     return " OR ".join(exprs)

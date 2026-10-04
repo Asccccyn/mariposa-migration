@@ -234,6 +234,20 @@ def _list_plans_on(conn, states: list[str] | None = None) -> list[dict]:
     return [get(conn, r["id"]) for r in rows]
 
 
+def _local_date_string(anchor: str) -> str:
+    """时间戳锚（可带 offset/无 offset/纯日期）→ 业务时区自然日。"""
+    from zoneinfo import ZoneInfo
+    from .. import config
+    try:
+        dt = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+    except ValueError:
+        return anchor[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo(
+        config.RELATIONSHIP_TIMEZONE)).date().isoformat()
+
+
 def bootstrap_plans(now_local_date, upcoming_days: int = 3,
                     conn=None) -> list[dict]:
     """v2 开窗计划池（BOOT-08/PLAN-06）。
@@ -254,7 +268,10 @@ def bootstrap_plans(now_local_date, upcoming_days: int = 3,
             anchor = p["starts_at"] or p["due_at"] or p["date_start"]
             if not anchor:
                 continue
-            day = anchor[:10]
+            # F13（2026-10-03 审计 P2）：窗口按业务时区自然日比较——
+            # anchor 是 UTC 时间戳时，字符串前 10 位取的是 UTC 日期，
+            # 上海 10/7 的计划会被当成 10/6 纳入/排除错档
+            day = _local_date_string(anchor)
             if day <= horizon:  # 含逾期（< today）与 0..3 日临近
                 out.append(p)
     return out

@@ -67,11 +67,23 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
     """
     from ..errors import NotFound as _NF
     from datetime import datetime as _dt
+    from ..capabilities import registry as _reg
     with db.formal() as conn:
+        # RA-004 后 transport 幂等记录统一存 t: 前缀键；对账入口收
+        # 的是调用方原始 key，必须先映射再查（裸键回退仅服务迁移前
+        # 旧行）。否则真实崩溃留下的 t: running 记录永远无法经公开
+        # 入口对账清除（审计 2026-10-03：红测 fixture 种裸键掩盖了
+        # 此断层）
         row = conn.execute(
             "SELECT * FROM idempotency_records WHERE principal_id=? AND"
             " capability=? AND idempotency_key=?",
-            (record_principal, capability, idempotency_key)).fetchone()
+            (record_principal, capability,
+             _reg._transport_key(idempotency_key))).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT * FROM idempotency_records WHERE principal_id=? AND"
+                " capability=? AND idempotency_key=?",
+                (record_principal, capability, idempotency_key)).fetchone()
         if row is None:
             raise _NF("idempotency record not found",
                       principal=record_principal, capability=capability,
@@ -94,7 +106,8 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
                 "UPDATE idempotency_records SET status='failed', result_ref=?"
                 " WHERE principal_id=? AND capability=? AND idempotency_key=?"
                 " AND status='running'",
-                (None, record_principal, capability, idempotency_key))
+                (None, record_principal, capability,
+                 row["idempotency_key"]))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

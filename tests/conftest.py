@@ -139,6 +139,11 @@ FORMAL_TABLES = [
     "i_revision_memory_relations", "i_item_revisions", "i_items",
     "i_suggestions", "i_versions", "i_documents",
     "memory_recollections", "memory_view_receipts", "memory_our_words",
+    "memory_keeps",
+    # 审计 2026-10-03：此前漏清——memories=0 而这三张派生/历史表
+    # 残留，引入顺序依赖与孤儿统计
+    "field_search_docs", "field_fts",
+    "relation_corrections",
     "memory_mood_tags", "memory_moods", "memory_categories",
     "anniversary_occurrences", "anniversary_definitions",
     "audit_events", "events_outbox", "idempotency_records",  "words_fts", "words_search_docs", "search_fts",

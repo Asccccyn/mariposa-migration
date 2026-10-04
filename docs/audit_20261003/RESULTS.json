@@ -1,0 +1,47 @@
+{
+  "audit_date": "2026-10-03",
+  "baseline": {
+    "branch": "main",
+    "commit": "b484908cebce23d54c039249386cba9b37f69bfa",
+    "remote_head_matches": true,
+    "initial_worktree_clean": true,
+    "current_semantics": "docs/memory_runtime/CURRENT.md plus subsequent rulings"
+  },
+  "python_tests": {
+    "unique_collected": 828,
+    "passed": 814,
+    "failed": 5,
+    "skipped": 4,
+    "deselected_real_model": 5,
+    "disjoint_initial_batches": 15,
+    "supplement_batches_after_fail_fast": 16,
+    "hash_seed": "0",
+    "network_used": false,
+    "real_models_loaded": false,
+    "failures": [
+      "tests/unit/test_p1_fixes.py::TestB02CrashWindow::test_stale_running_raises_outcome_unknown_not_replay",
+      "tests/unit/test_p1_fixes.py::TestB02CrashWindow::test_fresh_running_still_busy",
+      "tests/unit/test_p1_fixes.py::TestB02CrashWindow::test_same_key_different_payload_conflicts",
+      "tests/unit/test_v17_reaudit_fixes.py::TestReplayGuardN03N04::test_guard_refreshes_packet_header",
+      "tests/integration/test_recall_runtime_parity.py::test_session01_mcp_full_loop"
+    ],
+    "raw_log_directory": "/var/folders/7j/nw52xb0n7fldkm289wb127n80000gn/T/mariposa-audit-suite-2bgoa9g6"
+  },
+  "critical_probes": {
+    "script": "docs/audit_20261003/reproduce_critical.py",
+    "exit_code": 1,
+    "elapsed_seconds": 0.214,
+    "results": [
+      {"probe": "fresh_receipt_after_update", "status": "FAIL", "content_version": 2, "receipt_representation_version": 1},
+      {"probe": "words_switch_applies_to_replay", "status": "FAIL", "fresh_count": 0, "replay_count": 1},
+      {"probe": "terminal_status_is_not_overwritten", "status": "FAIL", "expected": "CANCELLED", "actual": "RESOLVED"},
+      {"probe": "mood_previous_value_is_preserved", "status": "FAIL", "audit_events_retaining_previous_note": 0},
+      {"probe": "source_failed_cleanup_is_batch_scoped", "status": "FAIL", "cleanup_exception": "IntegrityError"}
+    ]
+  },
+  "acceptance_mapping": {"unique_evidence_references": 71, "missing_current_nodeids": 12},
+  "capability_contract": {"registry_count": 151, "snapshot_count": 151, "names_permissions_write_idempotent_match": true},
+  "frontend": {"react_dependencies_present": false, "build_run": false, "playwright_run": false, "static_and_http_probes_completed": true},
+  "application_source_modified": false,
+  "existing_tests_modified": false
+}

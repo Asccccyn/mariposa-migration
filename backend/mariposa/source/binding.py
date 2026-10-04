@@ -101,8 +101,9 @@ def memories_referencing(message_id: str) -> list[dict]:
     """
     with db.formal() as conn:
         msg = conn.execute(
-            "SELECT conversation_id, sequence, provider FROM"
-            " source_messages WHERE id=? OR provider_message_id=?",
+            "SELECT id, provider_message_id, conversation_id, sequence,"
+            " provider FROM source_messages WHERE id=? OR"
+            " provider_message_id=?",
             (message_id, message_id)).fetchone()
         if msg is None:
             return []
@@ -112,18 +113,33 @@ def memories_referencing(message_id: str) -> list[dict]:
             (msg["conversation_id"], message_id, message_id)).fetchall()
         seq_set = {r["sequence"] for r in seqs}
         rows = conn.execute(
-            "SELECT b.*, s.sequence AS start_seq, e.sequence AS end_seq"
+            "SELECT b.*, s.sequence AS start_seq, e.sequence AS end_seq,"
+            " s.id AS s_id, s.provider_message_id AS s_pid,"
+            " e.id AS e_id, e.provider_message_id AS e_pid"
             " FROM memory_source_bindings b"
             " JOIN source_messages s ON s.id=b.start_message_id"
             " JOIN source_messages e ON e.id=b.end_message_id"
             " WHERE b.conversation_id=?", (msg["conversation_id"],)).fetchall()
     out = []
     for r in rows:
-        # 同 sequence 组按稳定消息身份精确分辨（§6.1）
-        if any(r["start_seq"] <= q <= r["end_seq"] for q in seq_set):
-            d = dict(r)
-            d.pop("start_seq", None)
-            d.pop("end_seq", None)
+        # 同 sequence 组按稳定消息身份精确分辨（§6.1；F08 2026-10-03）：
+        # 序号严格落在区间内部 → 覆盖（粒度只能到序号）；落在边界序号
+        # 上时还须与对应端点消息身份一致（id 或 provider_message_id
+        # 相等）——多次导出的 sequence 冲突会让同会话并存同号 sibling，
+        # 仅凭序号相等会把 sibling 误算作被覆盖
+        strictly_inside = any(r["start_seq"] < q < r["end_seq"]
+                              for q in seq_set)
+        boundary_identical = (
+            (r["start_seq"] in seq_set and (
+                msg["id"] == r["s_id"]
+                or msg["provider_message_id"] == r["s_pid"]))
+            or (r["end_seq"] in seq_set and (
+                msg["id"] == r["e_id"]
+                or msg["provider_message_id"] == r["e_pid"])))
+        if strictly_inside or boundary_identical:
+            d = {k: v for k, v in dict(r).items()
+                 if k not in ("start_seq", "end_seq", "s_id", "s_pid",
+                              "e_id", "e_pid")}
             out.append(d)
     return out
 

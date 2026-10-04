@@ -452,3 +452,82 @@ class TestIdempotencyNamespace:
                 {"memory_id": m2, "operation_id": "dup-op"}, None)
         rows = self._idempotency_rows("memory.delete")
         assert "running" not in rows.values()
+
+
+# ---------------------------------------------------------------- F23
+
+class TestF23CrashWindowDomainRecovery:
+    """F23（2026-10-03 审计 P2）：领域已提交、transport 回执未写的
+    崩溃窗口——同 header/body 重试必须找回同一完成结果，不
+    OUTCOME_UNKNOWN、不重复执行业务。"""
+
+    def _prepare(self, actors):
+        a = _hold(actors, "崩溃窗口甲")["memory_id"]
+        b = _hold(actors, "崩溃窗口乙")["memory_id"]
+        rid = registry.invoke(
+            actors["jiaming"], "memory.relations.link",
+            {"from_memory": a, "to_memory": b,
+             "relation_type": "related_to"}, None)["data"]["relation_id"]
+        return rid
+
+    def test_completed_domain_receipt_recovers_transport(self, actors):
+        rid = self._prepare(actors)
+        args = {"relation_id": rid,
+                "correction_action": "remove_wrong_binding",
+                "operation_id": "f23-op-ok"}
+        tkey = "f23-t-ok"
+        # 领域先行完成（业务已落地：op: 回执 completed）
+        first = registry.invoke(actors["jiaming"],
+                                "memory.relations.correct", args, tkey)
+        assert first["ok"] is True
+        # 伪造崩溃窗口：t 层只留下 stale running，无 completed 回执
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc)
+               - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S")
+        ph = registry._payload_hash(args)
+        with db.formal() as conn:
+            conn.execute(
+                "UPDATE idempotency_records SET status='running',"
+                " result_ref=NULL, created_at=? WHERE principal_id=?"
+                " AND capability='memory.relations.correct' AND"
+                " idempotency_key=?",
+                (old, "jiaming", registry._transport_key(tkey)))
+        # 同 key 同 body 重试：按领域回执恢复，重放同一完成结果
+        retry = registry.invoke(actors["jiaming"],
+                                "memory.relations.correct", args, tkey)
+        assert retry.get("idempotent_replay") is True
+        assert retry["data"] == first["data"]
+        # 业务零重复：纠错历史只有一条
+        with db.formal() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM relation_corrections WHERE"
+                " original_instance_id=?", (rid,)).fetchone()["c"]
+        assert n == 1
+
+    def test_absent_domain_receipt_frees_retry(self, actors):
+        """崩溃窗口里领域零痕迹（整体回滚）——外层转 failed 放行
+        重试，重试正常执行一次。"""
+        rid = self._prepare(actors)
+        args = {"relation_id": rid,
+                "correction_action": "remove_wrong_binding",
+                "operation_id": "f23-op-none"}
+        tkey = "f23-t-none"
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc)
+               - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S")
+        ph = registry._payload_hash(args)
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO idempotency_records(principal_id, capability,"
+                " idempotency_key, payload_hash, status, result_ref,"
+                " created_at) VALUES('jiaming','memory.relations.correct',"
+                "?,?, 'running', NULL, ?)",
+                (registry._transport_key(tkey), ph, old))
+        retry = registry.invoke(actors["jiaming"],
+                                "memory.relations.correct", args, tkey)
+        assert retry["ok"] is True
+        with db.formal() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM relation_corrections WHERE"
+                " original_instance_id=?", (rid,)).fetchone()["c"]
+        assert n == 1, "零痕迹窗口重试恰执行一次"
