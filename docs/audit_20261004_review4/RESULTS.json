@@ -1,0 +1,764 @@
+{
+  "date": "2026-10-04",
+  "baseline": {
+    "source": "/Users/zhoujiaming/Projects/mariposa",
+    "head": "db81255bc9f2bf689720a1a1d8a373dba1b635ef",
+    "status": "",
+    "omitted_model_cache_paths": [
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/60938626ad1097a0c1a14be4f8340e32c714a056.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/a8b3208c2884c4efb86e49300fdd3dc877220cdf.lock",
+      "D:\\mariposa\\runtime\\models/.locks/models--Qdrant--bge-small-zh-v1.5/cdb3043fc938fc918c06e66cf704c2ba58f88747.lock",
+      "D:\\mariposa\\runtime\\models/CACHEDIR.TAG",
+      "D:\\mariposa\\runtime\\models/blobs/.huggingface-shared-blobs",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.lock",
+      "D:\\mariposa\\runtime\\models/blobs/9e/9eedf0673c9aa300264fe51ef8df7c22e09538e5512f8132f3c2b65ef8143076.refs",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/3a59388f0fd1bd22dec2ce7902c1be8e1fb84107",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/60938626ad1097a0c1a14be4f8340e32c714a056",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/a8b3208c2884c4efb86e49300fdd3dc877220cdf",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/blobs/cdb3043fc938fc918c06e66cf704c2ba58f88747",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/files_metadata.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/refs/main",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/model_optimized.onnx",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/special_tokens_map.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/snapshots/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59/tokenizer_config.json",
+      "D:\\mariposa\\runtime\\models/models--Qdrant--bge-small-zh-v1.5/trees/46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59.json"
+    ],
+    "remote_main_verified": "db81255bc9f2bf689720a1a1d8a373dba1b635ef"
+  },
+  "review_passed": true,
+  "new_findings": [],
+  "targeted_tests": {
+    "recall": {
+      "passed": 28,
+      "failed": 0
+    },
+    "memory": {
+      "passed": 9,
+      "failed": 0
+    },
+    "source": {
+      "passed": 13,
+      "failed": 0
+    }
+  },
+  "existing_tests": {
+    "collected": 912,
+    "files": 92,
+    "cases": {
+      "passed": 906,
+      "skipped": 1
+    },
+    "deselected_real_model": 5,
+    "max_sampled_tree_rss_bytes": 102989824,
+    "seconds": 80.75
+  },
+  "closure": [
+    {
+      "id": "DBR-RECALL-01",
+      "status": "CLOSED",
+      "summary": "words.list正确解析内部id和provider_message_id，两种已发布合法来源均无source_gap；missing及两类unpublished来源仍正确标invalid_or_missing，words.get证据也正确降级。",
+      "evidence": [
+        "evidence/recall/test_words_list_does_not_mark_published_source_as_gap[internal_id].txt",
+        "evidence/recall/test_words_list_does_not_mark_published_source_as_gap[provider_id].txt",
+        "evidence/recall/test_words_list_marks_invalid_or_unpublished_source[missing].txt",
+        "evidence/recall/test_words_list_marks_invalid_or_unpublished_source[unpublished_internal].txt",
+        "evidence/recall/test_words_list_marks_invalid_or_unpublished_source[unpublished_provider].txt"
+      ]
+    },
+    {
+      "id": "RER-01",
+      "status": "CLOSED",
+      "summary": "start/refine同请求重放恢复同一个server-issued continuation，可继续且不重复计轮；保持通过。",
+      "evidence": [
+        "evidence/recall/test_replay_retains_issued_continuation[start].txt",
+        "evidence/recall/test_replay_retains_issued_continuation[refine].txt"
+      ]
+    },
+    {
+      "id": "RER-02",
+      "status": "CLOSED",
+      "summary": "导航结构卡同operation重放保持可见；导航不消费或使continuation失效；保持通过。",
+      "evidence": [
+        "evidence/recall/test_navigation_replay_preserves_current_structured_cards.txt",
+        "evidence/recall/test_navigation_does_not_consume_or_invalidate_continuation.txt"
+      ]
+    },
+    {
+      "id": "RECALL-06",
+      "status": "CLOSED",
+      "summary": "legacy来源gap在words.list及words.get全部表达类别明确呈现；有效来源正控制与缺失/未发布负控制均通过，保持关闭。",
+      "evidence": [
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_list.txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[verbatim].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[paraphrase].txt",
+        "evidence/recall/test_legacy_source_gap_is_present_on_words_get[unspecified].txt"
+      ]
+    },
+    {
+      "id": "DB-MEM-01",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-01.txt",
+        "evidence/memory/probe-02.txt",
+        "evidence/memory/probe-03.txt"
+      ],
+      "result": "删除最后I绑定原案已使旧Bootstrap快照失效。公开跨条目B→A替换使DISTINCT计数2→1且MAX(created_at)更新；同条目重复目标替换使行数2→1；两个正常替换路径都正确改变state_hash并拒绝旧snapshot。",
+      "summary": "删除最后I绑定原案已使旧Bootstrap快照失效。公开跨条目B→A替换使DISTINCT计数2→1且MAX(created_at)更新；同条目重复目标替换使行数2→1；两个正常替换路径都正确改变state_hash并拒绝旧snapshot。"
+    },
+    {
+      "id": "RE-MEM-01",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-04.txt",
+        "evidence/memory/probe-08.txt"
+      ],
+      "result": "Plan纠错completed领域恢复和领域尚未执行窗口重试继续通过。",
+      "summary": "Plan纠错completed领域恢复和领域尚未执行窗口重试继续通过。"
+    },
+    {
+      "id": "RE-MEM-02",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-05.txt",
+        "evidence/memory/probe-06.txt"
+      ],
+      "result": "删除决定/申请恢复完整结果继续通过。",
+      "summary": "删除决定/申请恢复完整结果继续通过。"
+    },
+    {
+      "id": "RE-MEM-03",
+      "status": "CLOSED",
+      "evidence": [
+        "evidence/memory/probe-07.txt"
+      ],
+      "result": "含前后空白理由的原样删除申请crash重试继续通过。",
+      "summary": "含前后空白理由的原样删除申请crash重试继续通过。"
+    },
+    {
+      "id": "I-MINIMAL-CONTROL",
+      "status": "PASSED",
+      "evidence": [
+        "evidence/memory/probe-09.txt"
+      ],
+      "result": "I分页只含当前正文且完整拼回；旧正文及绑定明细仅显式历史读取可见。",
+      "summary": "I分页只含当前正文且完整拼回；旧正文及绑定明细仅显式历史读取可见。"
+    },
+    {
+      "id": "SRC-01-R1",
+      "status": "CLOSED",
+      "reason": "合法parent链不再被跨快照逆序sequence拒绝。",
+      "evidence": [
+        "evidence/source/probe-range_accepts_parent_order_when_first_seen_sequences_reverse.log",
+        "evidence/source/probe-open_range_preserves_all_parent_path_nodes_across_snapshots.log",
+        "evidence/source/probe-cross_snapshot_range_retains_codepoint_endpoint_offsets.log"
+      ],
+      "summary": "合法parent链不再被跨快照逆序sequence拒绝。"
+    },
+    {
+      "id": "SRC-01-R2",
+      "status": "CLOSED",
+      "reason": "补齐parent后重新执行数量限额，上限4不再返回5条。",
+      "evidence": [
+        "evidence/source/probe-range_budget_counts_supplemented_parent_members.log"
+      ],
+      "summary": "补齐parent后重新执行数量限额，上限4不再返回5条。"
+    },
+    {
+      "id": "SRC-03-R1",
+      "status": "CLOSED",
+      "reason": "正常恢复集可验证；缺失manifest、坏JSON、payload断链均拒绝。",
+      "evidence": [
+        "evidence/source/probe-backup_contains_raw_archive_manifest_needed_to_verify.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-remove.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-corrupt.log",
+        "evidence/source/probe-restore_verify_checks_archive_manifest_integrity-retarget.log"
+      ],
+      "summary": "正常恢复集可验证；缺失manifest、坏JSON、payload断链均拒绝。"
+    },
+    {
+      "id": "SRC-05",
+      "status": "CLOSED",
+      "reason": "空raw_path在收集与验证两端一致排除，坏格式导入不再污染备份验证。",
+      "evidence": [
+        "evidence/source/probe-failed_format_detection_does_not_poison_backups.log"
+      ],
+      "summary": "空raw_path在收集与验证两端一致排除，坏格式导入不再污染备份验证。"
+    },
+    {
+      "id": "SRC-06",
+      "status": "CLOSED",
+      "severity": "P3",
+      "reason": "正常单个嵌套fixture：dry_run与verify成功，首次apply创建1条；同报告二次apply跳过已映射项，memory_id不变，memories=1、migration_id_map=1。",
+      "evidence": [
+        "evidence/source/probe-nested_migration_dry_run_verify_roundtrip.log",
+        "evidence/source/probe-nested_migration_verified_report_actually_applies.log"
+      ],
+      "summary": "正常单个嵌套fixture：dry_run与verify成功，首次apply创建1条；同报告二次apply跳过已映射项，memory_id不变，memories=1、migration_id_map=1。"
+    }
+  ],
+  "json_slimming": {
+    "status": "ASSESSED_NOT_IMPLEMENTED",
+    "proposal": [
+      [
+        "总体范围",
+        "采用统一的模型出站精简规则，分域落地：Bootstrap → Recall → Source。先优化默认给模型的信息，不做全库删字段或重写业务合同。当前交付是已测量的候选方案与独立原型，尚未实施公共接口变化。"
+      ],
+      [
+        "第一批 Bootstrap",
+        "把固定policy/帮助说明移到一次性的工具说明或输出profile约定；state_hash、估算值按需诊断；仅删除可由当前页items长度精确推导的count。保留snapshot_id、日期窗口、未知/未完成总量、原文、I历史/绑定提示、Plan全部业务时间线、所有分页游标与安全信封。I/Plan纯正文续页及memory.get保持原形。"
+      ],
+      [
+        "第二批 Recall",
+        "先按白名单移出rrf_score、模型/提示词版本、query_fingerprint、内部pool/cache/scorer统计等诊断；再仅在逐值完全相同的条件下去掉_matched或顶层snippet等正文别名，让evidence.snippet保留唯一完整正文。保留status与search_status各自含义、coverage状态/gap、全部操作ID/资源ID/版本/receipt、budget/continuation、judge判断语义和false/null状态。"
+      ],
+      [
+        "第三批 Source",
+        "共同provider/会话字段页级表达可作为有限试点。小列表/短消息保持原形。显式默认值继承和正文引用编码列为实验，不作为首批默认格式；如果宿主解码成原包再交给模型，只减少wire而不减少模型上下文。"
+      ],
+      [
+        "双层data",
+        "暂不为瘦身单独扁平化：实测三卡包只省9字节/0.168%，但当前HTTP/MCP调用者存在data.data读取。以后若为统一API语义整理，应作为独立版本迁移，不能假借瘦身静默改兼容合同。"
+      ],
+      [
+        "MCP双通路",
+        "默认保留structuredContent与TextContent JSON回退。可以对TextContent使用紧凑JSON编码，但两路内容必须语义相同。2025-06-18协议建议structured结果同时提供文本JSON以兼容旧客户端。不要直接删其中一路，或据网络重复就宣称模型重复消耗token。"
+      ],
+      [
+        "不做的裁剪",
+        "不缩写为难懂短键、不压成位置数组、不总结/改写正文、不机械删除null/false/空数组，不把absence当作false/unknown/not_requested的替代。安全字段可使用有明确定义的页级语义，但任何进入模型的页面/独立片段都必须带上相应无指令权限边界。"
+      ]
+    ],
+    "architecture": [
+      "新增纯展示投影层：先完成业务操作与当前权限/开关/版本/Judge重校验，再投影模型响应。canonical结果、operation回执和业务存储仍保留完整信息，不把精简包提前写入幂等回执或喂回检索/状态机。",
+      "以明确的compact_v1输出profile协商启用，默认旧接口保持legacy/full。先盘点实际HTTP/MCP/宿主ContextAssembler消费者，再决定具体传输参数；展示profile不得混进request_ref逻辑载荷、query_fingerprint或预算计数。同operation切换输出profile不得重做业务。",
+      "profile请求应在执行业务前验证支持情况，成功结果在出站边界投影；同一投影结果同时供MCP structuredContent与TextContent使用。避免两路字段范围不一致。",
+      "默认主包不附送diagnostics sidecar。诊断保留在内部/按需接口，继续做主体与当前可见性校验；如果每次又把sidecar发送给模型，本次主包节省不成立，甚至总字节更多。",
+      "静态帮助/policy仅能在工具说明或协商profile确实提供了同一含义时移出。运行配置偏离profile默认值时必须带覆盖值或升级profile；不能让模型依赖过时隐含常量。",
+      "保留full/legacy兼容路径用于现有UI和显式诊断。公开输入/输出schema、TS读取路径与集成测试一起升级，不能只在server字典上删key。状态、动作参数、分页和安全语义的变化均不属于“纯瘦身”。"
+    ],
+    "acceptance": [
+      "逐样本校验完整正文、证据等级/来源、ID/版本/receipt、budget/continuation、snapshot/cursor、gap/truncated/false/null含义；不要仅比较成功状态或用候选为空绕过断言。",
+      "必须实跑compact首包→续页拼回全文、首包丢失→同operation重放、拒绝→refine、导航重放、Judge/words/raw开关变化及旧snapshot失效。覆盖full/compact来回切换且不重复消费预算。",
+      "对内存中投影结果验证Plan id/version可执行正常更新、Source范围offset/parent/游标可继续使用、当前表示变化后旧内容仍受guard约束。权限与删除模型保持不变。",
+      "HTTP和MCP解析同一业务语义；MCP文本JSON解析后应与structuredContent逐值相等。宿主只选一种内容入模型上下文，并用真实消费者集成验证，而不是假定服务器重复传输就等于重复token。",
+      "体积只比较同一层、同一数据、同一紧凑JSON编码。记录实际模型投喂文本并单独测token；本报告只测UTF-8字节和Unicode字符，不声称模型质量/任务成功率等价。",
+      "不强制所有响应缩小。短页、纯正文页或引入profile/defaults后反而变大的页允许保持原格式；不以空包的高缩减率当作生产平均收益。"
+    ],
+    "measurements": [
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_empty",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 1305,
+        "after": 651,
+        "saved_pct": 50.11
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_routine_3_memory_3_plans_2_i",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 3391,
+        "after": 2487,
+        "saved_pct": 26.66
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_unchanged",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 155,
+        "after": 76,
+        "saved_pct": 50.97
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "memory_get_with_mood",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 722,
+        "after": 722,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "memory_get_without_mood",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 534,
+        "after": 534,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "i_get_two_current_items",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 751,
+        "after": 500,
+        "saved_pct": 33.42
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "i_items_list_two_current_items",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 569,
+        "after": 470,
+        "saved_pct": 17.4
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "i_item_get_current",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 316,
+        "after": 237,
+        "saved_pct": 25.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "memory_get_gap_empty",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 580,
+        "after": 580,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "memory_get_gap_summary",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 644,
+        "after": 644,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_boundary_51_memory_51_plans_long_i",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 37608,
+        "after": 32987,
+        "saved_pct": 12.29
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_next_memory_days",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 411,
+        "after": 401,
+        "saved_pct": 2.43
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_next_plans_long_item",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 6690,
+        "after": 6601,
+        "saved_pct": 1.33
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_next_i_1",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 2779,
+        "after": 2779,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Bootstrap/I/Memory",
+        "sample": "bootstrap_next_plan_content_1",
+        "layer": "data",
+        "variant": "conservative_compact_v1",
+        "before": 2626,
+        "after": 2626,
+        "saved_pct": 0.0
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_3cards",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 5969,
+        "after": 5452,
+        "saved_pct": 8.66
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_3cards",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 5969,
+        "after": 4911,
+        "saved_pct": 17.72
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_after_reject_2cards",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 4318,
+        "after": 3903,
+        "saved_pct": 9.61
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_after_reject_2cards",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 4318,
+        "after": 3537,
+        "saved_pct": 18.09
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_replay_judge_disabled",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 997,
+        "after": 786,
+        "saved_pct": 21.16
+      },
+      {
+        "domain": "Recall",
+        "sample": "event_replay_judge_disabled",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 997,
+        "after": 786,
+        "saved_pct": 21.16
+      },
+      {
+        "domain": "Recall",
+        "sample": "raw_page1_3cards",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 4581,
+        "after": 4253,
+        "saved_pct": 7.16
+      },
+      {
+        "domain": "Recall",
+        "sample": "raw_page1_3cards",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 4581,
+        "after": 3791,
+        "saved_pct": 17.25
+      },
+      {
+        "domain": "Recall",
+        "sample": "raw_page2_1card",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 1959,
+        "after": 1793,
+        "saved_pct": 8.47
+      },
+      {
+        "domain": "Recall",
+        "sample": "raw_page2_1card",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 1959,
+        "after": 1639,
+        "saved_pct": 16.33
+      },
+      {
+        "domain": "Recall",
+        "sample": "words_3cards_with_gap",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 5007,
+        "after": 4630,
+        "saved_pct": 7.53
+      },
+      {
+        "domain": "Recall",
+        "sample": "words_3cards_with_gap",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 5007,
+        "after": 4381,
+        "saved_pct": 12.5
+      },
+      {
+        "domain": "Recall",
+        "sample": "words_long_truncated",
+        "layer": "Registry envelope",
+        "variant": "diagnostics_only",
+        "before": 3844,
+        "after": 3629,
+        "saved_pct": 5.59
+      },
+      {
+        "domain": "Recall",
+        "sample": "words_long_truncated",
+        "layer": "Registry envelope",
+        "variant": "compact_v1",
+        "before": 3844,
+        "after": 3629,
+        "saved_pct": 5.59
+      },
+      {
+        "domain": "Source",
+        "sample": "search_20_mixed_conversations",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 31944,
+        "after": 31755,
+        "saved_pct": 0.59
+      },
+      {
+        "domain": "Source",
+        "sample": "search_20_mixed_conversations",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 31944,
+        "after": 28227,
+        "saved_pct": 11.64
+      },
+      {
+        "domain": "Source",
+        "sample": "search_20_mixed_conversations",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 31944,
+        "after": 26340,
+        "saved_pct": 17.54
+      },
+      {
+        "domain": "Source",
+        "sample": "search_12_one_conversation",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 19282,
+        "after": 17988,
+        "saved_pct": 6.71
+      },
+      {
+        "domain": "Source",
+        "sample": "search_12_one_conversation",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 19282,
+        "after": 15629,
+        "saved_pct": 18.95
+      },
+      {
+        "domain": "Source",
+        "sample": "search_12_one_conversation",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 19282,
+        "after": 14498,
+        "saved_pct": 24.81
+      },
+      {
+        "domain": "Source",
+        "sample": "conversations_list_3",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 1035,
+        "after": 1191,
+        "saved_pct": -15.07
+      },
+      {
+        "domain": "Source",
+        "sample": "conversations_list_3",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 1035,
+        "after": 1159,
+        "saved_pct": -11.98
+      },
+      {
+        "domain": "Source",
+        "sample": "conversations_list_3",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 1035,
+        "after": 1164,
+        "saved_pct": -12.46
+      },
+      {
+        "domain": "Source",
+        "sample": "conversation_get_8_with_cursor",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 14115,
+        "after": 13606,
+        "saved_pct": 3.61
+      },
+      {
+        "domain": "Source",
+        "sample": "conversation_get_8_with_cursor",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 14115,
+        "after": 12107,
+        "saved_pct": 14.23
+      },
+      {
+        "domain": "Source",
+        "sample": "conversation_get_8_with_cursor",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 14115,
+        "after": 10040,
+        "saved_pct": 28.87
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_context",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 8929,
+        "after": 8720,
+        "saved_pct": 2.34
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_context",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 8929,
+        "after": 7866,
+        "saved_pct": 11.91
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_context",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 8929,
+        "after": 6576,
+        "saved_pct": 26.35
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_content",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 9809,
+        "after": 9600,
+        "saved_pct": 2.13
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_content",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 9809,
+        "after": 8746,
+        "saved_pct": 10.84
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_5_with_content",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 9809,
+        "after": 6777,
+        "saved_pct": 30.91
+      },
+      {
+        "domain": "Source",
+        "sample": "range_open_8_with_offsets_and_content",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 20575,
+        "after": 20066,
+        "saved_pct": 2.47
+      },
+      {
+        "domain": "Source",
+        "sample": "range_open_8_with_offsets_and_content",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 20575,
+        "after": 18210,
+        "saved_pct": 11.49
+      },
+      {
+        "domain": "Source",
+        "sample": "range_open_8_with_offsets_and_content",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 20575,
+        "after": 10884,
+        "saved_pct": 47.1
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_short_no_context",
+        "layer": "data",
+        "variant": "page_common",
+        "before": 1092,
+        "after": 1253,
+        "saved_pct": -14.74
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_short_no_context",
+        "layer": "data",
+        "variant": "explicit_defaults",
+        "before": 1092,
+        "after": 1259,
+        "saved_pct": -15.29
+      },
+      {
+        "domain": "Source",
+        "sample": "message_get_short_no_context",
+        "layer": "data",
+        "variant": "body_refs_experimental",
+        "before": 1092,
+        "after": 1264,
+        "saved_pct": -15.75
+      }
+    ],
+    "transport": {
+      "sample": "3 synthetic event candidates; actual TestClient HTTP/MCP; deterministic fake judge",
+      "measurement": "compact UTF-8 bytes, not model tokens; actual MCP wire also measured",
+      "http_response_bytes": 5345,
+      "http_compact_bytes": 5345,
+      "packet_bytes": 5317,
+      "single_data_hypothesis_bytes": 5336,
+      "inner_data_wrapper_saving_bytes": 9,
+      "inner_data_wrapper_saving_pct": 0.168,
+      "mcp_wire_bytes": 11616,
+      "mcp_compact_wire_bytes": 11616,
+      "structured_result_bytes": 5274,
+      "text_content_utf8_bytes": 5626,
+      "text_equivalent_to_structured": true,
+      "mcp_text_compact_hypothesis_bytes": 11264,
+      "mcp_text_compact_saving_bytes": 352,
+      "warnings": [
+        "Wire duplication is not evidence of duplicated model-context tokens. No host ContextAssembler was inspected.",
+        "MCP 2025-06-18 recommends serialized JSON TextContent fallback for structured results; preserve both by default.",
+        "Inner data flattening affects current integration callers and saves little by itself; proposal only."
+      ]
+    },
+    "protocol_reference": {
+      "title": "MCP 2025-06-18 · Tools · Structured Content",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools#structured-content",
+      "checked_on": "2026-10-04",
+      "summary": "协议建议structuredContent同时返回序列化JSON TextContent以保持兼容；这不是让两个副本都进入模型上下文的要求。"
+    },
+    "total_domain_samples": 30,
+    "measurement_unit": "compact UTF-8 bytes; NOT model tokens",
+    "body_preservation": "prototypes checked structural/body/cursor invariants; no real-model quality verification"
+  }
+}

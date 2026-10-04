@@ -1,0 +1,45 @@
+建议口径：全局规则统一，分域实施（尚未修改产品）
+
+总体范围：采用统一的模型出站精简规则，分域落地：Bootstrap → Recall → Source。先优化默认给模型的信息，不做全库删字段或重写业务合同。当前交付是已测量的候选方案与独立原型，尚未实施公共接口变化。
+
+第一批 Bootstrap：把固定policy/帮助说明移到一次性的工具说明或输出profile约定；state_hash、估算值按需诊断；仅删除可由当前页items长度精确推导的count。保留snapshot_id、日期窗口、未知/未完成总量、原文、I历史/绑定提示、Plan全部业务时间线、所有分页游标与安全信封。I/Plan纯正文续页及memory.get保持原形。
+
+第二批 Recall：先按白名单移出rrf_score、模型/提示词版本、query_fingerprint、内部pool/cache/scorer统计等诊断；再仅在逐值完全相同的条件下去掉_matched或顶层snippet等正文别名，让evidence.snippet保留唯一完整正文。保留status与search_status各自含义、coverage状态/gap、全部操作ID/资源ID/版本/receipt、budget/continuation、judge判断语义和false/null状态。
+
+第三批 Source：共同provider/会话字段页级表达可作为有限试点。小列表/短消息保持原形。显式默认值继承和正文引用编码列为实验，不作为首批默认格式；如果宿主解码成原包再交给模型，只减少wire而不减少模型上下文。
+
+双层data：暂不为瘦身单独扁平化：实测三卡包只省9字节/0.168%，但当前HTTP/MCP调用者存在data.data读取。以后若为统一API语义整理，应作为独立版本迁移，不能假借瘦身静默改兼容合同。
+
+MCP双通路：默认保留structuredContent与TextContent JSON回退。可以对TextContent使用紧凑JSON编码，但两路内容必须语义相同。2025-06-18协议建议structured结果同时提供文本JSON以兼容旧客户端。不要直接删其中一路，或据网络重复就宣称模型重复消耗token。
+
+不做的裁剪：不缩写为难懂短键、不压成位置数组、不总结/改写正文、不机械删除null/false/空数组，不把absence当作false/unknown/not_requested的替代。安全字段可使用有明确定义的页级语义，但任何进入模型的页面/独立片段都必须带上相应无指令权限边界。
+
+实现边界
+
+新增纯展示投影层：先完成业务操作与当前权限/开关/版本/Judge重校验，再投影模型响应。canonical结果、operation回执和业务存储仍保留完整信息，不把精简包提前写入幂等回执或喂回检索/状态机。
+
+以明确的compact_v1输出profile协商启用，默认旧接口保持legacy/full。先盘点实际HTTP/MCP/宿主ContextAssembler消费者，再决定具体传输参数；展示profile不得混进request_ref逻辑载荷、query_fingerprint或预算计数。同operation切换输出profile不得重做业务。
+
+profile请求应在执行业务前验证支持情况，成功结果在出站边界投影；同一投影结果同时供MCP structuredContent与TextContent使用。避免两路字段范围不一致。
+
+默认主包不附送diagnostics sidecar。诊断保留在内部/按需接口，继续做主体与当前可见性校验；如果每次又把sidecar发送给模型，本次主包节省不成立，甚至总字节更多。
+
+静态帮助/policy仅能在工具说明或协商profile确实提供了同一含义时移出。运行配置偏离profile默认值时必须带覆盖值或升级profile；不能让模型依赖过时隐含常量。
+
+保留full/legacy兼容路径用于现有UI和显式诊断。公开输入/输出schema、TS读取路径与集成测试一起升级，不能只在server字典上删key。状态、动作参数、分页和安全语义的变化均不属于“纯瘦身”。
+
+验收要求
+
+逐样本校验完整正文、证据等级/来源、ID/版本/receipt、budget/continuation、snapshot/cursor、gap/truncated/false/null含义；不要仅比较成功状态或用候选为空绕过断言。
+
+必须实跑compact首包→续页拼回全文、首包丢失→同operation重放、拒绝→refine、导航重放、Judge/words/raw开关变化及旧snapshot失效。覆盖full/compact来回切换且不重复消费预算。
+
+对内存中投影结果验证Plan id/version可执行正常更新、Source范围offset/parent/游标可继续使用、当前表示变化后旧内容仍受guard约束。权限与删除模型保持不变。
+
+HTTP和MCP解析同一业务语义；MCP文本JSON解析后应与structuredContent逐值相等。宿主只选一种内容入模型上下文，并用真实消费者集成验证，而不是假定服务器重复传输就等于重复token。
+
+体积只比较同一层、同一数据、同一紧凑JSON编码。记录实际模型投喂文本并单独测token；本报告只测UTF-8字节和Unicode字符，不声称模型质量/任务成功率等价。
+
+不强制所有响应缩小。短页、纯正文页或引入profile/defaults后反而变大的页允许保持原格式；不以空包的高缩减率当作生产平均收益。
+
+协议依据：https://modelcontextprotocol.io/specification/2025-06-18/server/tools#structured-content
