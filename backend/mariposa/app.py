@@ -13,12 +13,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, schema
+from . import config, gate, schema
 from .capabilities import mcp_adapter
 from .capabilities import registry
 from .capabilities import v1_compat
 from .errors import MariposaError
-from .identity import service as identity
+from .identity import Principal, service as identity
 
 # 静态资源相对代码树定位（而非 MARIPOSA_ROOT 数据根）：
 # 测试/隔离根只隔离数据库，代码与构建产物位置不变
@@ -53,12 +53,13 @@ def capabilities(request: Request):
     # ROOT-02（2026-10-04 二批）：缺 token/坏 token 是结构化 401
     # UNAUTHENTICATED，不是 500——客户端据此识别需重新认证
     try:
-        principal = identity.authenticate(_bearer(request))
+        principal = _authenticate_tracked(request)
     except MariposaError as e:
         return JSONResponse(
             status_code=e.http_status,
             content={"ok": False, "error": {"code": e.code,
-                                            "message": str(e)}})
+                                            "message": str(e),
+                                            "detail": e.detail}})
     return {"ok": True, "data": registry.list_capabilities(principal)}
 
 
@@ -67,13 +68,17 @@ async def invoke(name: str, request: Request):
     # 复审（2026-10-01）：鉴权只用 header——先于读体；未鉴权的大
     # body（含 chunked）不再被读进内存
     try:
-        principal = identity.authenticate(_bearer(request))
+        principal = _authenticate_tracked(request)
     except MariposaError as e:
         return JSONResponse(
             status_code=e.http_status,
             content={"ok": False, "error": {"code": e.code,
-                                            "message": str(e)}})
+                                            "message": str(e),
+                                            "detail": e.detail}})
+    # 门禁三件套（2026-10-04）：写能力单独更紧的限速档——读写同档
+    # 会让导入/召回写风暴挤占读，或读高频放行写滥用
     try:
+        _rate_limit_capability(principal, name)
         body = await _json_body(request)
     except MariposaError as e:
         # P1-07 复审：坏 JSON / BODY_TOO_LARGE 走结构化错误，不是 500
@@ -83,12 +88,20 @@ async def invoke(name: str, request: Request):
                                             "message": str(e)}})
     # compact_v1 输出 profile（JSON 瘦身 2026-10-04 五）：HTTP 以
     # query param 协商（与 MCP arguments 内参数同语义，出站前剥离）
+    # CR-02-R1（2026-10-04 复审 P2）：query 参数必须并入**传给
+    # registry.invoke 的 arguments**——此前并进 body 顶层（与
+    # arguments 平级）被整个丢弃，query 协商形同虚设。冲突优先级：
+    # 显式 query 覆盖 arguments 内同名值（URL 是显式协商通道），
+    # 未知值由 registry.invoke 统一结构化拒绝
     _prof = request.query_params.get("output_profile")
+    _args = body.get("arguments", {})
+    if not isinstance(_args, dict):
+        _args = {}
     if _prof:
-        body = {**body, "output_profile": _prof}
+        _args = {**_args, "output_profile": _prof}
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
     try:
-        result = registry.invoke(principal, name, body.get("arguments", {}), idem)
+        result = registry.invoke(principal, name, _args, idem)
     except MariposaError as e:
         return JSONResponse(
             status_code=e.http_status,
@@ -103,6 +116,63 @@ def _bearer(request: Request) -> str | None:
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return None
+
+
+def _authenticate_tracked(request: Request):
+    """认证 + 门禁三件套（2026-10-04）：
+
+    - 锁定来源直接 423 AUTH_LOCKED（Retry-After 在 detail）——正确
+      token 也不放行，防在线枚举；
+    - 认证失败按来源 IP 计数并触发指数锁定（audit 留痕）；
+    - 未认证请求同时计匿名限速档（IP 维度）；
+    - 认证成功清零失败计数，主体记入读档限速窗口。
+    """
+    ip = gate.client_ip(request)
+    remain = gate.assert_not_locked(ip)
+    if remain > 0:
+        raise MariposaError(
+            f"认证失败次数过多，来源已临时锁定（约 {int(remain)} 秒后"
+            "自动解除）", code="AUTH_LOCKED", http_status=423,
+            retry_after=int(remain))
+    wait = gate.check_rate("anon", ip)
+    if wait > 0:
+        raise MariposaError("匿名请求过于频繁，请稍后重试",
+                            code="RATE_LIMITED", http_status=429,
+                            retry_after=int(wait) + 1)
+    try:
+        principal = identity.authenticate(_bearer(request))
+    except MariposaError:
+        def _audit_lock(level: int, seconds: int) -> None:
+            from . import audit, db as _db
+            with _db.formal() as conn:
+                audit.record(
+                    conn, "auth.locked", "system", resource_id=ip,
+                    payload={"lock_level": level, "seconds": seconds})
+        gate.note_auth_failure(ip, record_audit=_audit_lock)
+        raise
+    gate.note_auth_success(ip)
+    wait = gate.check_rate("read", principal.principal_id)
+    if wait > 0:
+        raise MariposaError("请求过于频繁（读档），请稍后重试",
+                            code="RATE_LIMITED", http_status=429,
+                            retry_after=int(wait) + 1)
+    return principal
+
+
+def _rate_limit_write(principal: Principal) -> None:
+    wait = gate.check_rate("write", principal.principal_id)
+    if wait > 0:
+        raise MariposaError("写入操作过于频繁，请稍后重试",
+                            code="RATE_LIMITED", http_status=429,
+                            retry_after=int(wait) + 1)
+
+
+def _rate_limit_capability(principal: Principal, name: str) -> None:
+    """写能力限速档（读写分档；读档已在 _authenticate_tracked 计）。"""
+    cap = registry.REGISTRY.get(name)
+    if cap is None or not cap.write:
+        return
+    _rate_limit_write(principal)
 
 
 async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
@@ -187,10 +257,12 @@ _JSON_BODY_MAX_BYTES = 2 * 1024 * 1024  # P1-07：JSON 通道 2MB 硬上限
 @app.put("/api/media/stage/{token}")
 async def media_stage(token: str, request: Request):
     try:
-        principal = identity.authenticate(_bearer(request))
+        principal = _authenticate_tracked(request)
+        _rate_limit_write(principal)  # 字节上传属写档
     except MariposaError as e:
-        return JSONResponse(status_code=401,
-                            content={"ok": False, "error": {"code": e.code}})
+        return JSONResponse(status_code=e.http_status,
+                            content={"ok": False, "error": {"code": e.code,
+                                                            "message": str(e)}})
     # 复审（2026-10-01）：流式累计 + 即时截停（chunked 同样护住）；
     # 精确 size 校验仍由 stage_bytes 按声明 size 执行
     clen = request.headers.get("content-length")
@@ -226,10 +298,11 @@ async def media_stage(token: str, request: Request):
 @app.get("/api/media/object/{content_hash}")
 def media_object(content_hash: str, request: Request):
     try:
-        principal = identity.authenticate(_bearer(request))
+        principal = _authenticate_tracked(request)
     except MariposaError as e:
-        return JSONResponse(status_code=401,
-                            content={"ok": False, "error": {"code": e.code}})
+        return JSONResponse(status_code=e.http_status,
+                            content={"ok": False, "error": {"code": e.code,
+                                                            "message": str(e)}})
     try:
         meta, path = _media.get_media(principal.principal_id, content_hash)
     except MariposaError as e:
@@ -245,10 +318,12 @@ def media_object(content_hash: str, request: Request):
 async def source_upload(request: Request):
     import uuid as _uuid
     try:
-        principal = identity.authenticate(_bearer(request))
+        principal = _authenticate_tracked(request)
+        _rate_limit_write(principal)  # 字节上传属写档
     except MariposaError as e:
-        return JSONResponse(status_code=401,
-                            content={"ok": False, "error": {"code": e.code}})
+        return JSONResponse(status_code=e.http_status,
+                            content={"ok": False, "error": {"code": e.code,
+                                                            "message": str(e)}})
     if principal.principal_id not in ("qiaosheng", "jiaming"):
         return JSONResponse(status_code=403,
                             content={"ok": False,

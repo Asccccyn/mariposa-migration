@@ -203,108 +203,90 @@ def list_relations(a: dict) -> dict:
                                   "memory_id": r["memory_id"]},
                         "relation_type": r["relation_type"]})
         elif kind == "source_range":
-            # CB-032 + RA-021（2026-10-02 复审 P2）：Source 端反查消费
-            # 完整端点身份——conversation 必须一致，消息区间按
-            # validate_range 解析两端，同消息时按字符区间重叠匹配
-            #（此前只拿 start_message_id，丢 conversation/end/offset）
+            # RSRC-07（2026-10-04 复审 P2）：反查重叠 = 查询范围与绑定
+            # 范围各自沿真实 parent 链解析成有序路径后求**交集**——
+            # 旧实现要求查询两端点都落在绑定路径上（A→D 查 B→C 判
+            # 空），且用跨快照 sequence 大小做"整体在前"推断（序号
+            # 倒置把已在交集中的消息误排除）。字符偏移只在共享消息
+            # 上按 code point 半开区间比较（端点偏移缺省视为消息
+            # 粒度，即开区间端）；任一共享消息上覆盖重叠即命中。
             if "source_binding" in domains and _wants(direction, "in"):
-                from ..source import binding as src_binding
+                from ..source import query as _sq
                 anchor = a.get("resource", {}) if isinstance(
                     a.get("resource"), dict) else {}
                 conv_id = str(anchor.get("conversation_id", ident))
                 s_mid = str(anchor.get("start_message_id", ""))
                 e_mid = str(anchor.get("end_message_id", s_mid))
-                s_off = anchor.get("start_char_offset")
-                e_off = anchor.get("end_char_offset")
-                rows = conn.execute(
-                    "SELECT b.*, cs.sequence AS cseq, ce.sequence AS eseq"
-                    " FROM memory_source_bindings b"
-                    " JOIN source_conversations c ON"
-                    " c.id=b.conversation_id OR"
-                    " c.provider_conversation_id=b.conversation_id"
-                    " JOIN source_messages cs ON cs.id=b.start_message_id"
-                    " JOIN source_messages ce ON ce.id=b.end_message_id"
-                    " WHERE c.id=? OR c.provider_conversation_id=?",
-                    (conv_id, conv_id)).fetchall()
+                q_path = _sq.ordered_path_ids(conv_id, s_mid, e_mid)
+                if not q_path:
+                    # 查询范围解析失败（消息不存在/断链/sibling）：
+                    # 与任何绑定都不构成可判定的重叠，保守返回空
+                    pass
+                else:
+                    q_sid, q_eid = q_path[0], q_path[-1]
+                    q_set = set(q_path)
 
-                # F08（2026-10-03 审计 P2）：区间重叠按半开语义统一判定
-                # ——"a 整体在 b 前"= a 的末端不晚于 b 的首端（同消息时
-                # 按字符偏移，跨消息按消息序，偏移缺失视为消息粒度）。
-                # 旧实现 <= 把 [0,4) 与 [4,8) 判为重叠；且跨消息查询的
-                # 起止字符偏移被整个丢弃。
-                def _entirely_before(e_seq, e_off, b_seq, b_off):
-                    if e_seq is None or b_seq is None:
-                        return False
-                    if e_seq < b_seq:
+                    def _cover_on(mid, start_id, end_id, s_off, e_off):
+                        """区间在消息 mid 上的覆盖（lo, hi）；hi=None
+                        表示覆盖到消息末尾（开区间端/内部消息）。"""
+                        lo = 0
+                        hi = None
+                        if mid == start_id and s_off is not None:
+                            lo = s_off
+                        if mid == end_id and e_off is not None:
+                            hi = e_off
+                        return lo, hi
+
+                    def _ints_overlap(q, b) -> bool:
+                        qs, qe = q
+                        bs, be = b
+                        if be is not None and qs >= be:
+                            return False
+                        if qe is not None and bs >= qe:
+                            return False
                         return True
-                    return (e_seq == b_seq
-                            and e_off is not None and b_off is not None
-                            and e_off <= b_off)
 
-                def _ov(a0, a1, b0, b1):
-                    return (a0 is None or b1 is None or a0 < b1) and \
-                           (b0 is None or a1 is None or b0 < a1)
-                for r in rows:
-                    if not (r["cseq"] is not None and r["eseq"] is not None):
-                        continue
-                    # 消息区间重叠（同消息时叠加字符半开区间重叠）
-                    msg_overlap = True
-                    if s_mid and e_mid:
-                        srow = conn.execute(
-                            "SELECT id, provider_message_id, sequence,"
-                            " conversation_id FROM"
-                            " source_messages WHERE id=? OR"
-                            " provider_message_id=?",
-                            (s_mid, s_mid)).fetchone()
-                        erow = conn.execute(
-                            "SELECT id, provider_message_id, sequence,"
-                            " conversation_id FROM"
-                            " source_messages WHERE id=? OR"
-                            " provider_message_id=?",
-                            (e_mid, e_mid)).fetchone()
-                        if srow is None or erow is None:
-                            continue
-                        # F08：锚定消息必须属于绑定所在会话——不同会话
-                        # 撞 sequence 不得互相匹配
-                        _bconv = r["conversation_id"]
-                        if (srow["conversation_id"] != _bconv
-                                or erow["conversation_id"] != _bconv):
-                            continue
-                        # SRC-07：覆盖以共享范围解析器判定的实际
-                        # parent 路径成员为准（含锚定消息端点）；
-                        # 锚定消息不在绑定路径上 → 不算命中。解析
-                        # 失败保守跳过
-                        from ..source import query as _sq
-                        _pids = _sq.covered_path_ids(
-                            _bconv, r["start_message_id"],
+                    rows = conn.execute(
+                        "SELECT b.* FROM memory_source_bindings b"
+                        " JOIN source_conversations c ON"
+                        " c.id=b.conversation_id OR"
+                        " c.provider_conversation_id=b.conversation_id"
+                        " WHERE c.id=? OR c.provider_conversation_id=?",
+                        (conv_id, conv_id)).fetchall()
+                    for r in rows:
+                        # 绑定路径按查询的会话身份解析——绑定的端点
+                        # 消息不属于该会话（含他方会话撞序号）时
+                        # validate_range 直接 NotFound，保守跳过
+                        b_path = _sq.ordered_path_ids(
+                            conv_id, r["start_message_id"],
                             r["end_message_id"])
-                        _sid = srow["id"]
-                        _eid = erow["id"]
-                        if _pids is None or not (
-                                _sid in _pids and _eid in _pids):
+                        if not b_path:
+                            continue  # 绑定路径解析失败：保守跳过
+                        shared = q_set.intersection(b_path)
+                        if not shared:
                             continue
-                        q_s, q_e = srow["sequence"], erow["sequence"]
-                        msg_overlap = not _entirely_before(
-                            q_e, e_off, r["cseq"],
-                            r["start_char_offset"]) and \
-                            not _entirely_before(
-                                r["eseq"], r["end_char_offset"],
-                                q_s, s_off)
-                        if msg_overlap and q_s == q_e \
-                                and r["cseq"] == r["eseq"] and (
-                                    s_off is not None or e_off is not None):
-                            msg_overlap = _ov(
-                                s_off, e_off,
+                        b_sid, b_eid = b_path[0], b_path[-1]
+                        overlap = False
+                        for m_id in shared:
+                            qc = _cover_on(
+                                m_id, q_sid, q_eid,
+                                anchor.get("start_char_offset"),
+                                anchor.get("end_char_offset"))
+                            bc = _cover_on(
+                                m_id, b_sid, b_eid,
                                 r["start_char_offset"],
                                 r["end_char_offset"])
-                    if msg_overlap:
-                        out.append({
-                            "domain": "source_binding",
-                            "relation_id": r["binding_id"],
-                            "direction": "in",
-                            "other": {"type": "memory",
-                                      "memory_id": r["memory_id"]},
-                            "confidence": r["bind_confidence"]})
+                            if _ints_overlap(qc, bc):
+                                overlap = True
+                                break
+                        if overlap:
+                            out.append({
+                                "domain": "source_binding",
+                                "relation_id": r["binding_id"],
+                                "direction": "in",
+                                "other": {"type": "memory",
+                                          "memory_id": r["memory_id"]},
+                                "confidence": r["bind_confidence"]})
         elif kind == "source_ref":
             # CB-032：source_msg:<id> 反查——引用该消息的 words（native
             # 表）与覆盖该消息的绑定区间（按序范围）

@@ -138,9 +138,9 @@
   <!-- 她的话 -->
   <section class="page" id="srcSec">
     <div class="row">
-      <input type="file" id="srcFile" accept=".json,.zip" />
+      <input type="file" id="srcFile" accept=".json,.zip,.md,.markdown" />
       <button id="srcUploadBtn" class="primary">上传并导入</button>
-      <span class="empty" id="srcUploadNote">Claude conversations.json / 导出 zip；母本入 Raw Archive</span>
+      <span class="empty" id="srcUploadNote">Claude conversations.json / 导出 zip / md 转写；母本入 Raw Archive</span>
     </div>
     <div class="row">
       <input id="srcPath" placeholder="或输入宿主本地路径 /path/to/conversations.json" style="flex:1" />
@@ -601,7 +601,10 @@ $('srcUploadBtn').onclick = async () => {
   if (!f) { setStatus('先选择文件', true); return; }
   setStatus(`上传 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）…`);
   try {
-    const res = await fetch('/api/source/upload', {
+    // RSRC-03：上传必须带 filename query——服务端靠原始扩展名（.md/
+    // .json/.zip）分流格式与 md 方言，缺省会落成 .bin.part 被 JSON
+    // 检测拒收（SOURCE_BAD_JSON）
+    const res = await fetch('/api/source/upload?filename=' + encodeURIComponent(f.name), {
       method: 'PUT', headers: { 'Authorization': 'Bearer ' + state.token }, body: f });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || body.ok === false) throw new Error(body.error?.code + ': ' + (body.error?.message || res.status));

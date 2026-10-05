@@ -24,3 +24,22 @@
 验收：935 收集 934+1skip 0 failed（分批前台/隔离根）；五反例退出 0；
 新增回归 14 例（四反栏/普通 Thinking/代码内时间/前插重导/坏日期/
 上传扩展名/filename null/daily+plan_ids/空来源撤销）。
+
+## 2026-10-04 复审（bea4f10）勘误与本批真修
+
+复审结论 not_passed（3P1+6P2）。上表三行与实际不符，勘误如下：
+
+- **CR-02**：原文称"query param 在 envelope 校验后并入 arguments"——
+  实际代码仍并入 body 顶层（与 arguments 平级）被丢弃。本批真修：
+  query 值并入传给 registry.invoke 的 arguments（显式 query 覆盖
+  arguments 内同名值；未知值由 registry 结构化拒绝，不再 200）。
+- **CR-03**：原文称"inputSchema 白名单为后续可选优化"——标准客户端
+  按 tools/list 的严格 schema（additionalProperties=false）构造参数，
+  output_profile 不在 schema 内即协商链路断。本批真修：支持 compact_v1
+  的能力在**传输层拷贝**的 schema 上声明 output_profile 枚举，正源
+  业务 schema 与幂等哈希不变。
+- **WR-04**：原文称"memory_date/date_confidence（NOT NULL 列）null=
+  保留"——memory_date 列实际**可空**（PRAGMA notnull=0），显式 null
+  清空是未实现的残留接口限制（null 等同未提供，保留旧值）；
+  date_confidence 公开 schema 不收 null（入口即拒，非保留）。
+  代码注释已同步勘误。日期清空是否支持属产品决策，未定案前不冒充已修。

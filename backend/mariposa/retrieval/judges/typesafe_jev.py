@@ -29,6 +29,28 @@ class JudgeUnavailable(Exception):
     """超时/429/网络失败/格式错——有界降级，不伪装成已评审。"""
 
 
+def required_excerpt_role(candidate: dict) -> str:
+    """候选**必要证据角色**（无副作用共享判定，CR-01-R1）。
+
+    与 provider 实例状态无关：fresh 外发（_outbound_excerpt）与
+    operation 重放共用同一映射，保证"撤回某角色的出站许可"对新
+    请求和旧 operation 重放同权生效：
+    - word/words 通道 → word_excerpt；
+    - raw/source 通道 → source_excerpt；
+    - 仅命中 original_title（无 event_text）→ title_cue；
+    - 其余（事件正文卡）→ event_excerpt。
+    """
+    channel = candidate.get("channel") or "event"
+    fields = candidate.get("matched_fields") or []
+    if channel in ("word", "words"):
+        return "word_excerpt"
+    if channel in ("raw", "source"):
+        return "source_excerpt"
+    if "original_title" in fields and "event_text" not in fields:
+        return "title_cue"
+    return "event_excerpt"
+
+
 class TypeSafeJevJudge(base.JudgeProvider):
     name = "typesafe_jev"
 
@@ -251,16 +273,7 @@ class TypeSafeJevJudge(base.JudgeProvider):
         无许可的字段不外发（置空），不是删候选。"""
         if not excerpt:
             return excerpt, truncated
-        channel = candidate.get("channel") or "event"
-        fields = candidate.get("matched_fields") or []
-        if channel == "word":
-            need = "word_excerpt"
-        elif channel == "raw" or channel == "source":
-            need = "source_excerpt"
-        elif "original_title" in fields and "event_text" not in fields:
-            need = "title_cue"
-        else:
-            need = "event_excerpt"
+        need = required_excerpt_role(candidate)
         if need in (self._data_profile or frozenset()):
             return excerpt, truncated
         return "", truncated

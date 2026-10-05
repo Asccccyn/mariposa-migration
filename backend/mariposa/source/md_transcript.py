@@ -17,6 +17,7 @@ Thinking 分离不进正文；消息 id 内容锚定确定性合成；围栏感�
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,9 +41,29 @@ _HEADER_KV = re.compile(r"^\*\*(Created|Updated|Exported|Model):\*\*"
 
 
 def _detect_dialect(text: str) -> str | None:
-    if any(line.strip() in _CLAUDE_HEADINGS for line in text.split("\n")):
+    """RSRC-01（2026-10-04 复审 P1）：方言判定共享围栏词法状态——
+    代码块内引用的 ## User / # gemini response 不参与判定，正文
+    引用他方言标题不再把整个文件错认方言。围栏外命中多者胜出，
+    平票保持 claude 优先（既有口径）。"""
+    counts = {"claude": 0, "gemini": 0}
+    fence = None
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if fence is not None:
+            if _fence_close(stripped, fence):
+                fence = None
+            continue
+        tok = _fence_tokens(stripped)
+        if tok:
+            fence = tok
+            continue
+        if stripped in _CLAUDE_HEADINGS:
+            counts["claude"] += 1
+        elif stripped in _GEMINI_HEADINGS:
+            counts["gemini"] += 1
+    if counts["claude"] >= counts["gemini"] and counts["claude"] > 0:
         return "claude"
-    if any(line.strip() in _GEMINI_HEADINGS for line in text.split("\n")):
+    if counts["gemini"] > 0:
         return "gemini"
     return None
 
@@ -51,6 +72,18 @@ def _fence_tokens(line: str):
     """行首围栏（` 或 ~ 同字符≥3）→ (字符, 长度)；否则 None。"""
     m = re.match(r"^(`{3,}|~{3,})", line)
     return (m.group(1)[0], len(m.group(1))) if m else None
+
+
+def _fence_close(line: str, fence: tuple[str, int]) -> bool:
+    """闭栏判定（CommonMark）：行首同字符围栏、长度 ≥ 开栏、且围栏
+    字符后**只剩空白**——闭栏不得带内容。
+
+    RSRC-01：```not_a_closing_fence 只是围栏内正文；此前按行首前缀
+    判闭栏会把三反引号示例行误当闭合，围栏内的 ## User 被切成新
+    消息。开栏可带 info string（```python），闭栏必须纯围栏行。
+    """
+    m = re.match(r"^(`{3,}|~{3,})(\s*)$", line)
+    return bool(m) and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]
 
 
 def _valid_ts_claude(value: str) -> bool:
@@ -87,8 +120,9 @@ def _iter_blocks(lines: list[str], headings: dict[str, str]):
             if tok:
                 fence = tok
         else:
-            # 闭合：同字符且长度 ≥ 开栏
-            if tok and tok[0] == fence[0] and tok[1] >= fence[1]:
+            # 闭合：同字符、长度 ≥ 开栏、纯围栏行（RSRC-01：带内容的
+            # ```xxx 行不是闭栏，围栏内标题不切块）
+            if _fence_close(stripped, fence):
                 fence = None
         if fence is None and stripped in headings:
             if current is not None:
@@ -105,9 +139,10 @@ def _iter_blocks(lines: list[str], headings: dict[str, str]):
 def _split_fence(body: list[str]) -> tuple[list[str], list[str], bool]:
     """在首个闭合栏处切分围栏体（SRC-01）。
 
-    仅当首非空行是合法开栏、且其后存在同字符且长度足够的闭合栏
-    时成立；返回 (围栏内行, 围栏后的剩余行, 是否真围栏)。普通正文
-    里的 ### Thinking 标题没有紧邻围栏 → 不成立，正文原样保留。
+    仅当首非空行是合法开栏、且其后存在同字符且长度足够的**纯围栏
+    闭合行**时成立（RSRC-01：```xxx 带内容的行不是闭栏）；返回
+    (围栏内行, 围栏后的剩余行, 是否真围栏)。普通正文里的
+    ### Thinking 标题没有紧邻围栏 → 不成立，正文原样保留。
     """
     i = 0
     while i < len(body) and not body[i].strip():
@@ -117,23 +152,25 @@ def _split_fence(body: list[str]) -> tuple[list[str], list[str], bool]:
     tok = _fence_tokens(body[i].strip())
     if not tok:
         return [], body, False
-    depth = tok[1]
     for j in range(i + 1, len(body)):
-        close = _fence_tokens(body[j].strip())
-        if close and close[0] == tok[0] and close[1] >= depth:
+        if _fence_close(body[j].strip(), tok):
             return body[i + 1:j], body[j + 1:], True
     return [], body, False
 
 
-def _det_id(kind: str, conv_id: str, anchor: str) -> str:
+def _det_id(kind: str, conv_id: str, anchor_fields: tuple) -> str:
     """内容锚定确定性 id（SRC-02：位置无关）。
 
-    anchor = sender+时间+正文 的标准化串——相同消息重导复用身份、
-    前插新消息不改变既有消息身份；同会话内逐字重复的消息以出现
-    次序消歧（对相同内容稳定）。
+    RSRC-02（2026-10-04 复审 P1）：身份前象是结构化序列化（JSON
+    数组，字段自带引号/长度边界），不再是明文竖线拼接——正文或
+    thinking 内含 | / # 时不同消息拼不出同一前象；occurrence 是
+    独立数组元素，不再以 #n 后缀拼进正文尾串。相同消息重导复用
+    身份、前插新消息不改变既有消息身份；同会话内逐字重复的消息
+    以出现次序消歧（对相同内容稳定）。
     """
-    h = hashlib.sha256(
-        f"{kind}:{conv_id}:{anchor}".encode()).hexdigest()[:16]
+    preimage = json.dumps([kind, conv_id, *anchor_fields],
+                          ensure_ascii=False, separators=(",", ":"))
+    h = hashlib.sha256(preimage.encode()).hexdigest()[:16]
     return f"mdm-{h}"
 
 
@@ -181,15 +218,29 @@ def _parse_claude(lines: list[str], filename: str) -> list[dict]:
                                   .hexdigest()[:16]}"
     messages = []
     prev_uuid = None
-    _seen_anchors: dict[str, int] = {}
+    _seen_anchors: dict[tuple, int] = {}
     for (sender, _), mlines in _iter_blocks(body_lines, _CLAUDE_HEADINGS):
         created = None
         thinking = None
         text_lines: list[str] = []
         j = 0
         first_content = True  # 导出元数据位：时间戳只可能在块首
+        fence = None  # RSRC-01：消息体内围栏词法状态与切块层共享规则
         while j < len(mlines):
             stripped = mlines[j].strip()
+            if fence is not None:
+                # 围栏内的 ### Thinking / 时间戳样式都是代码内容
+                if _fence_close(stripped, fence):
+                    fence = None
+                text_lines.append(mlines[j])
+                j += 1
+                continue
+            tok = _fence_tokens(stripped)
+            if tok:
+                fence = tok
+                text_lines.append(mlines[j])
+                j += 1
+                continue
             ts = _TS_CLAUDE.match(stripped)
             if ts and first_content:
                 if not _valid_ts_claude(ts.group(1)):
@@ -209,6 +260,7 @@ def _parse_claude(lines: list[str], filename: str) -> list[dict]:
                     thinking = "\n".join(inner).strip() or None
                     mlines = rest
                     j = 0
+                    fence = None  # rest 起点在闭栏之后，必不在围栏内
                     first_content = False
                     continue
             text_lines.append(mlines[j])
@@ -229,11 +281,11 @@ def _parse_claude(lines: list[str], filename: str) -> list[dict]:
                 f"md 消息正文超限（{_tbytes} > "
                 f"{_cfg.SOURCE_MAX_MESSAGE_TEXT_BYTES}）",
                 code="SOURCE_MD_FORMAT")
-        _anchor = f"{sender}|{created or ''}|{text or ''}|{thinking or ''}"
-        _occ = _seen_anchors.get(_anchor, 0)
-        _seen_anchors[_anchor] = _occ + 1
-        mid = _det_id("claude", conv_uuid,
-                      f"{_anchor}#{_occ}" if _occ else _anchor)
+        # RSRC-02：查重与身份都用结构化字段元组/数组——无明文拼接歧义
+        _key = (sender, created or "", text or "", thinking or "")
+        _occ = _seen_anchors.get(_key, 0)
+        _seen_anchors[_key] = _occ + 1
+        mid = _det_id("claude", conv_uuid, _key + (_occ,))
         messages.append({
             "uuid": mid,
             "sender": sender,
@@ -268,7 +320,7 @@ def _parse_gemini(lines: list[str], filename: str) -> list[dict]:
                                   .hexdigest()[:16]}"
     messages = []
     prev_uuid = None
-    _seen_anchors: dict[str, int] = {}
+    _seen_anchors: dict[tuple, int] = {}
     for (sender, _), mlines in _iter_blocks(lines, _GEMINI_HEADINGS):
         created = None
         text_lines = []
@@ -298,11 +350,11 @@ def _parse_gemini(lines: list[str], filename: str) -> list[dict]:
                 f"md 消息正文超限（{_tbytes} > "
                 f"{_cfg.SOURCE_MAX_MESSAGE_TEXT_BYTES}）",
                 code="SOURCE_MD_FORMAT")
-        _anchor = f"{sender}|{created or ''}|{text or ''}"
-        _occ = _seen_anchors.get(_anchor, 0)
-        _seen_anchors[_anchor] = _occ + 1
-        mid = _det_id("gemini", conv_uuid,
-                      f"{_anchor}#{_occ}" if _occ else _anchor)
+        # RSRC-02：查重与身份都用结构化字段元组/数组——无明文拼接歧义
+        _key = (sender, created or "", text or "")
+        _occ = _seen_anchors.get(_key, 0)
+        _seen_anchors[_key] = _occ + 1
+        mid = _det_id("gemini", conv_uuid, _key + (_occ,))
         messages.append({
             "uuid": mid,
             "sender": sender,

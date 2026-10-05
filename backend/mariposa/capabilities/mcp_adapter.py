@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 
 from fastapi import Request
@@ -58,6 +59,20 @@ def _tools_for(principal: Principal) -> list[dict]:
         from . import input_schemas
         schema = input_schemas.schema_for(cap.name) or {
             "type": "object", "properties": {}, "additionalProperties": True}
+        # CR-03-R1（2026-10-04 复审 P2）：支持 compact_v1 的能力在
+        # **传输层拷贝**的 schema 上声明 output_profile 枚举——标准
+        # 客户端按 tools/list 的 inputSchema 构造参数，严格 schema
+        # （additionalProperties=false）此前不允许该参数，发现/协商
+        # 链路断了（手工绕过 schema 的调用能通不算修好）。正源业务
+        # schema 与幂等 payload 哈希不变（registry.invoke 出站前剥离）
+        from . import compact
+        if compact.supports(cap.name):
+            schema = copy.deepcopy(schema)
+            schema.setdefault("properties", {})
+            schema["properties"]["output_profile"] = {
+                "type": "string", "enum": ["legacy", "compact_v1"],
+                "description": "出站 JSON 瘦身 profile（传输层参数，"
+                               "业务执行前剥离；默认 legacy）"}
         tools.append({
             "name": _transport_name(cap.name),
             "description": cap.description,
@@ -75,14 +90,45 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     """单条 JSON-RPC 请求处理（batch 不在第一版范围）。"""
     # 全量审计 P1-07 复审：鉴权与 body 上限都先于读体——大 JSON 不再
     # 能在未鉴权时整包进内存，媒体字节只能走专用 stage 端点
+    # 门禁三件套（2026-10-04）：与 HTTP 同一套失败锁定/限速语义
+    from .. import gate as _gate
+    from ..errors import MariposaError as _ME
+    _ip = _gate.client_ip(request)
     try:
+        _remain = _gate.assert_not_locked(_ip)
+        if _remain > 0:
+            raise _ME(
+                f"认证失败次数过多，来源已临时锁定（约 {int(_remain)} 秒"
+                "后自动解除）", code="AUTH_LOCKED", http_status=423,
+                retry_after=int(_remain))
+        _wait = _gate.check_rate("anon", _ip)
+        if _wait > 0:
+            raise _ME("匿名请求过于频繁，请稍后重试",
+                      code="RATE_LIMITED", http_status=429,
+                      retry_after=int(_wait) + 1)
         token = _bearer(request)
         principal = identity.authenticate(token)
-    except MariposaError as e:
+    except _ME as e:
+        if e.code in ("UNAUTHENTICATED",):
+            def _audit_lock(level: int, seconds: int) -> None:
+                from .. import audit, db as _db
+                with _db.formal() as conn:
+                    audit.record(conn, "auth.locked", "system",
+                                 resource_id=_ip,
+                                 payload={"lock_level": level,
+                                          "seconds": seconds,
+                                          "transport": "mcp"})
+            _gate.note_auth_failure(_ip, record_audit=_audit_lock)
         return JSONResponse(
             {"jsonrpc": "2.0", "id": None,
              "error": {"code": -32001, "message": f"{e.code}: {e}"}},
-            status_code=401)
+            status_code=e.http_status)
+    _gate.note_auth_success(_ip)
+    _wait = _gate.check_rate("read", principal.principal_id)
+    if _wait > 0:
+        return _rpc_error(None, -32001,
+                          f"RATE_LIMITED: 请求过于频繁（读档），"
+                          f"{int(_wait) + 1}s 后重试")
     clen = request.headers.get("content-length")
     # RA-008（2026-10-02 复审 P2）：坏 Content-Length 是 -32600 不是 500
     try:
@@ -157,6 +203,15 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             return _rpc_error(msg_id, -32600,
                               "invalid params: arguments must be an object")
         canonical = _canonical_name(name)
+        # 写能力单独限速档（与 HTTP /api 通道同一档位语义）
+        _cap = registry.REGISTRY.get(canonical)
+        if _cap is not None and _cap.write:
+            _wait = _gate.check_rate("write", principal.principal_id)
+            if _wait > 0:
+                return _rpc_error(
+                    msg_id, -32001,
+                    f"RATE_LIMITED: 写入操作过于频繁，"
+                    f"{int(_wait) + 1}s 后重试")
         try:
             out = registry.invoke(principal, canonical, arguments,
                                   params.get("_client_idempotency_key"))

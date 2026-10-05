@@ -180,6 +180,10 @@ def reset_all() -> None:
     schema.migrate_runtime()
     from mariposa.recall import store as recall_store
     recall_store.reset_for_tests()
+    # 门禁三件套（2026-10-04）：门禁是进程内存态——不清零会让前序
+    # 用例的认证失败/限速计数泄漏进后续用例（假锁定/假 429）
+    from mariposa import gate as _gate
+    _gate.reset_for_tests()
     identity.seed(TOKENS)
 
 
