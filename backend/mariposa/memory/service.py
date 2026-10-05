@@ -360,6 +360,13 @@ def get(conn, memory_id: str) -> dict:
         "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
         (memory_id, m["current_version_no"]),
     ).fetchone()
+    # P3（2026-10-05 审计）：current_version_no 指向缺失版本行（部分
+    # 迁移/手工修复残留）时给结构化 NotFound，不是 TypeError 500
+    if v is None:
+        raise NotFound(
+            "current version row missing (data inconsistency)",
+            memory_id=memory_id,
+            version_no=m["current_version_no"])
     is_summary = v["representation"] == "forgotten_summary"
     body = version_body(v)
     out = {

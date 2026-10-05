@@ -288,8 +288,12 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                 f"{'写入操作' if _kind == 'write' else '请求'}过于频繁，"
                 f"{_ws}s 后重试", 429, _ws)
         try:
-            out = registry.invoke(principal, canonical, arguments,
-                                  params.get("_client_idempotency_key"))
+            # P2-03（2026-10-05 审计）：同 HTTP invoke——同步 handler 让出
+            # 事件循环（幂等待/DB busy 不再冻结整个服务）
+            import asyncio as _asyncio
+            out = await _asyncio.to_thread(
+                registry.invoke, principal, canonical, arguments,
+                params.get("_client_idempotency_key"))
         except MariposaError as e:
             # 业务错误走 MCP tool error 路径，不是协议错误
             return _rpc_result(msg_id, {

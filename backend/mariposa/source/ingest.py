@@ -480,10 +480,10 @@ def _refresh_aggregates(conn, conv_id: str) -> None:
         " AND m.live_superseded=0),"
         " first_message_at=(SELECT MIN(created_at) FROM source_messages m"
         " WHERE m.conversation_id=source_conversations.id"
-        " AND m.published=1),"
+        " AND m.published=1 AND m.live_superseded=0),"
         " last_message_at=(SELECT MAX(created_at) FROM source_messages m"
         " WHERE m.conversation_id=source_conversations.id"
-        " AND m.published=1),"
+        " AND m.published=1 AND m.live_superseded=0),"
         " updated_at=? WHERE id=?",
         (_now(), conv_id))
 

@@ -60,6 +60,22 @@ def _maintainers() -> set[str]:
     return {"qiaosheng", "jiaming", "worker"}
 
 
+def _int_arg(a: dict, key: str, default: int, lo: int, hi: int) -> int:
+    """P2-02（2026-10-05 审计）：数值参数统一解析——非数字是结构化
+    400（此前裸 int() 逃逸成 500），越界一律钳制（此前负 limit 在
+    SQLite 里是 LIMIT -1 = 无限倾倒，audit_events 含门禁客户端 IP）。
+    """
+    raw = a.get(key, default)
+    if raw is None:
+        raw = default
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        raise Forbidden(f"{key} must be an integer",
+                        code="INVALID_ARGUMENT", argument=key)
+    return min(max(v, lo), hi)
+
+
 def _register() -> dict[str, Capability]:
     caps: dict[str, Capability] = {}
 
@@ -593,7 +609,8 @@ def _i_item_revise(principal: Principal, a: dict) -> dict:
     from ..identity_i import service as i_svc
     return i_svc.item_revise(
         principal.principal_id, str(a.get("item_id", "")),
-        str(a.get("content", "")), int(a.get("expected_revision")),
+        str(a.get("content", "")),
+        _int_arg(a, "expected_revision", 0, 0, 1 << 31),
         a.get("change_reason"), a.get("informed_by_revision"),
         a.get("relations"))
 
@@ -602,7 +619,8 @@ def _i_item_restore(principal: Principal, a: dict) -> dict:
     from ..identity_i import service as i_svc
     return i_svc.item_restore(
         principal.principal_id, str(a.get("item_id", "")),
-        int(a.get("restore_revision")), int(a.get("expected_revision")),
+        _int_arg(a, "restore_revision", 0, 0, 1 << 31),
+        _int_arg(a, "expected_revision", 0, 0, 1 << 31),
         a.get("change_reason"), a.get("relations"))
 
 
@@ -634,14 +652,14 @@ def _versions(principal: Principal, a: dict) -> dict:
 def _search(principal: Principal, a: dict) -> dict:
     with db.formal() as conn:
         return retrieval_search.search(conn, str(a.get("query", "")),
-                                       int(a.get("limit", 20)))
+                                       _int_arg(a, "limit", 20, 1, 200))
 
 
 def _recall(principal: Principal, a: dict) -> dict:
     with db.formal() as conn:
         return retrieval_search.recall(
             conn, str(a.get("query", "")), a.get("filters") or {},
-            int(a.get("limit", 20)), a.get("cursor"))
+            _int_arg(a, "limit", 20, 1, 200), a.get("cursor"))
 
 
 # ---------- 召回运行时 handlers（runtime 幂等：operation_id） ----------
@@ -699,12 +717,12 @@ def _idem_reconcile(principal: Principal, a: dict) -> dict:
         str(a.get("record_principal", principal.principal_id)),
         str(a.get("capability", "")),
         str(a.get("idempotency_key", "")),
-        int(a.get("stale_seconds", 60)))
+        _int_arg(a, "stale_seconds", 60, 1, 86400))
 
 
 def _source_cleanup(principal: Principal, a: dict) -> dict:
     from ..source import archive as src_archive
-    hours = int(a.get("max_age_hours", 48))
+    hours = _int_arg(a, "max_age_hours", 48, 1, 24 * 30)
     return {"removed": src_archive.cleanup_staging(hours),
             "max_age_hours": hours}
 
@@ -796,8 +814,28 @@ def _keeps_list(principal: Principal, a: dict) -> dict:
 def _source_import(principal: Principal, a: dict) -> dict:
     path = str(a.get("path", "")).strip()
     if not path:
-        raise Forbidden("path required（宿主本地文件路径或上传返回的路径）",
+        raise Forbidden("path required（上传返回的暂存路径）",
                         code="SCHEMA_VIOLATION", capability="source.import")
+    # P1-01（2026-10-05 审计）：路径圈禁——宿主任意路径直读此前对
+    # 一切 owner 开放，等于给 MCP 客户端一张"读本机任意 .md/.json"
+    # 的通行证（导入成功即可经 source.search 读回内容，失败也留
+    # 存在性+sha256+大小探针）。收紧为：暂存目录（/api/source/upload
+    # 的产物）对所有 owner 开放；暂存目录之外的宿主绝对路径仅限
+    # qiaosheng 本人（网页端人工使用，AI 客户端有内容时走上传通道）。
+    from pathlib import Path as _Path
+    from .. import config as _cfg
+    try:
+        resolved = _Path(path).expanduser().resolve()
+        incoming = _cfg.SOURCE_INCOMING_DIR.expanduser().resolve()
+    except OSError:
+        raise Forbidden("path not resolvable",
+                        code="SOURCE_PATH_INVALID", capability="source.import")
+    in_incoming = incoming in resolved.parents or resolved == incoming
+    if not in_incoming and principal.principal_id != "qiaosheng":
+        raise Forbidden(
+            "宿主任意路径导入仅限 qiaosheng；其他身份请先经"
+            " /api/source/upload 上传，再以返回的 upload_path 导入",
+            code="SOURCE_PATH_FORBIDDEN", capability="source.import")
     return source_importer.import_file(
         principal.principal_id, path, a.get("filename"))
 
@@ -819,7 +857,8 @@ def _source_import_status(principal: Principal, a: dict) -> dict:
 
 
 def _source_import_batches(principal: Principal, a: dict) -> dict:
-    return {"batches": source_importer.batches_list(int(a.get("limit", 50)))}
+    return {"batches": source_importer.batches_list(
+        _int_arg(a, "limit", 50, 1, 200))}
 
 
 def _source_search(principal: Principal, a: dict) -> dict:
@@ -830,7 +869,8 @@ def _source_search(principal: Principal, a: dict) -> dict:
         provider=a.get("provider"),
         conversation_id=a.get("conversation_id"),
         date_from=a.get("date_from"), date_to=a.get("date_to"),
-        limit=int(a.get("limit", 20)), offset=int(a.get("offset", 0)))
+        limit=_int_arg(a, "limit", 20, 1, 500),
+        offset=_int_arg(a, "offset", 0, 0, 100000))
 
 
 def _source_message_get(principal: Principal, a: dict) -> dict:
@@ -841,7 +881,7 @@ def _source_message_get(principal: Principal, a: dict) -> dict:
     return source_query.get_message(
         message_id=a.get("message_id"),
         provider_message_id=a.get("provider_message_id"),
-        context=int(a.get("context", 5)),
+        context=_int_arg(a, "context", 5, 0, 50),
         include_content=bool(a.get("include_content")),
         provider=a.get("provider"))
 
@@ -865,12 +905,13 @@ def _source_conversation_get(principal: Principal, a: dict) -> dict:
         if isinstance(a.get("after_cursor"), dict) else None,
         before_id=(a.get("before_cursor") or {}).get("id")
         if isinstance(a.get("before_cursor"), dict) else None,
-        around_seq=a.get("around_seq"), limit=int(a.get("limit", 100)))
+        around_seq=a.get("around_seq"), limit=_int_arg(a, "limit", 100, 1, 500))
 
 
 def _source_conversations_list(principal: Principal, a: dict) -> dict:
     return source_query.conversations_list(
-        int(a.get("limit", 50)), int(a.get("offset", 0)), a.get("provider"))
+        _int_arg(a, "limit", 50, 1, 200), _int_arg(a, "offset", 0, 0, 100000),
+        a.get("provider"))
 
 
 def _source_bind(principal: Principal, a: dict) -> dict:
@@ -924,7 +965,7 @@ def _plan_create(principal: Principal, a: dict) -> dict:
 def _plan_update(principal: Principal, a: dict) -> dict:
     return plans.update(
         principal.principal_id, str(a.get("plan_id", "")),
-        int(a.get("expected_version", 0)), **{
+        _int_arg(a, "expected_version", 0, 0, 1 << 31), **{
             k: a[k] for k in
             ("title", "content", "state", "starts_at", "due_at", "date_start",
              "date_end", "weight") if k in a})
@@ -1048,7 +1089,7 @@ from ..memory.extras import _UNSET  # WR-04：字段缺席哨兵
 def _memory_update(principal: Principal, a: dict) -> dict:
     return extras.update_text(
         principal.principal_id, str(a.get("memory_id", "")),
-        int(a.get("expected_version", 0)), a.get("text"),
+        _int_arg(a, "expected_version", 0, 0, 1 << 31), a.get("text"),
         a["why_remember"] if "why_remember" in a else _UNSET,
         a["memory_date"] if "memory_date" in a else _UNSET,
         a["date_confidence"] if "date_confidence" in a else _UNSET)
@@ -1075,7 +1116,7 @@ def _rel_list(principal: Principal, a: dict) -> dict:
 
 def _rel_trace(principal: Principal, a: dict) -> dict:
     return relations.trace(str(a.get("memory_id", "")),
-                           int(a.get("max_depth", 5)))
+                           _int_arg(a, "max_depth", 5, 0, 10))
 
 
 
@@ -1207,11 +1248,11 @@ def _corrections_list(principal: Principal, a: dict) -> dict:
     from ..relations.corrections import list_corrections
     return list_corrections(
         endpoint=a.get("endpoint"), instance_id=a.get("instance_id"),
-        domain=a.get("domain"), limit=int(a.get("limit", 50)),
-        offset=int(a.get("offset", 0)))
+        domain=a.get("domain"), limit=_int_arg(a, "limit", 50, 1, 200),
+        offset=_int_arg(a, "offset", 0, 0, 100000))
 
 def _outbox_drain(principal: Principal, a: dict) -> dict:
-    return maintenance.outbox_drain(int(a.get("limit", 100)))
+    return maintenance.outbox_drain(_int_arg(a, "limit", 100, 1, 1000))
 
 
 def _outbox_status(principal: Principal, a: dict) -> dict:
@@ -1219,8 +1260,8 @@ def _outbox_status(principal: Principal, a: dict) -> dict:
 
 
 def _activity_list(principal: Principal, a: dict) -> dict:
-    return {"events": maintenance.activity_list(int(a.get("limit", 50)),
-                                                a.get("event_type"))}
+    return {"events": maintenance.activity_list(
+        _int_arg(a, "limit", 50, 1, 200), a.get("event_type"))}
 
 
 
@@ -1228,7 +1269,8 @@ def _activity_list(principal: Principal, a: dict) -> dict:
 
 def _media_prepare(principal: Principal, a: dict) -> dict:
     return media.upload_prepare(principal.principal_id,
-                                str(a.get("mime", "")), int(a.get("size", 0)))
+                                str(a.get("mime", "")),
+                                _int_arg(a, "size", 0, 0, 1 << 31))
 
 
 def _media_finalize(principal: Principal, a: dict) -> dict:
@@ -1239,7 +1281,7 @@ def _media_finalize(principal: Principal, a: dict) -> dict:
 
 
 def _media_list(principal: Principal, a: dict) -> dict:
-    return {"objects": media.list_media(int(a.get("limit", 50)))}
+    return {"objects": media.list_media(_int_arg(a, "limit", 50, 1, 200))}
 
 
 def _media_get_meta(principal: Principal, a: dict) -> dict:
@@ -1263,7 +1305,8 @@ def _memory_list(principal: Principal, a: dict) -> dict:
     if isinstance(cur, dict):
         cursor_date = cur.get("memory_date", cursor_date)
         cursor_id = cur.get("memory_id")
-    return listing.list_memories(a.get("state"), int(a.get("limit", 50)),
+    return listing.list_memories(a.get("state"),
+                                 _int_arg(a, "limit", 50, 1, 500),
                                  cursor_date, cursor_id)
 
 

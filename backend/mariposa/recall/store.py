@@ -726,6 +726,12 @@ def purge_expired(limit: int = 200) -> int:
 
     审计 F07：operation 幂等行同样有界清理——超过 session TTL 双倍
     时长的行删除（重放本就必须通过当前状态重校验，清理不改变语义）。
+
+    P2-05（2026-10-05 审计）：docstring 承诺的"及其子行"此前从未兑现
+    ——只把状态改成 EXPIRED + 删 operation_keys，rounds/receipts/
+    candidates/attempts/revisions 全部无界增长，违背"只存短期状态"
+    的库定位。现补齐：超过 TTL 双倍时长的 session（含非终态残留）
+    连同子行物理删除，重放路径本就要求经当前状态重校验。
     """
     now = _now()
     with db.recall_runtime() as conn:
@@ -746,6 +752,21 @@ def purge_expired(limit: int = 200) -> int:
             conn.execute(
                 "DELETE FROM recall_operation_keys WHERE created_at < ?",
                 (cutoff,))
+            # 超期 session 子行按 FK 依赖序（子先父后）整链删除
+            stale = conn.execute(
+                "SELECT session_id FROM recall_sessions"
+                " WHERE expires_at < ?", (cutoff,)).fetchall()
+            stale_ids = [r["session_id"] for r in stale]
+            for sid in stale_ids:
+                for child in ("recall_round1_receipts", "recall_rounds",
+                              "recall_query_revisions", "recall_attempts",
+                              "recall_receipts", "recall_candidates"):
+                    conn.execute(
+                        f"DELETE FROM {child} WHERE session_id=?",
+                        (sid,))
+                conn.execute(
+                    "DELETE FROM recall_sessions WHERE session_id=?",
+                    (sid,))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

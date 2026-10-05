@@ -164,9 +164,11 @@ class TestClientIPResolution:
         assert gate.client_ip(req) == "203.0.113.9"
 
     def test_xff_fallback_when_loopback_without_cf(self):
+        # P3（2026-10-05 审计）：取最后一项（可信代理追加位）——首项
+        # 可由客户端自带 XFF 伪造轮换假 IP 逃失败锁定
         from mariposa import gate
         req = self._req("127.0.0.1", {"X-Forwarded-For": "5.5.5.5, 1.1.1.1"})
-        assert gate.client_ip(req) == "5.5.5.5"
+        assert gate.client_ip(req) == "1.1.1.1"
 
 
 class TestREGATE01WindowQuotaPreserved:

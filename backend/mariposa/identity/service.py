@@ -144,10 +144,27 @@ def revoke_binding(principal_id: str, binding_id: str) -> dict:
     """撤销客户端绑定；旧 token/session 立即失效（T-ID-06）。"""
     if principal_id != "qiaosheng":
         raise Forbidden("only qiaosheng manages bindings", principal=principal_id)
+    # P1-04（2026-10-05 审计）：撤销凭证是安全敏感动作，同事务留审计
+    # （局部 import 避免 identity→audit 在模块加载期的潜在环）
+    from ..audit import service as _audit
     with db.formal() as conn:
-        cur = conn.execute(
-            "UPDATE client_bindings SET revoked=1 WHERE binding_id=? AND revoked=0",
-            (binding_id,))
-        if cur.rowcount == 0:
-            raise NotFound("active binding not found", binding_id=binding_id)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                "UPDATE client_bindings SET revoked=1 WHERE binding_id=?"
+                " AND revoked=0",
+                (binding_id,))
+            if cur.rowcount == 0:
+                raise NotFound("active binding not found", binding_id=binding_id)
+            owner = conn.execute(
+                "SELECT principal_id FROM client_bindings WHERE binding_id=?",
+                (binding_id,)).fetchone()
+            _audit.record(conn, "binding.revoked", principal_id,
+                          resource_id=binding_id,
+                          payload={"binding_principal":
+                                   owner["principal_id"] if owner else None})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"binding_id": binding_id, "revoked": True}

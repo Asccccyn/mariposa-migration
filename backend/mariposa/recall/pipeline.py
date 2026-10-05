@@ -170,11 +170,17 @@ def mark_round1_complete(session_id: str) -> None:
 
 def mark_round1_complete_tx(conn, session_id: str) -> None:
     """同语义的事务内版本（commit-at-end 最终事务调用）。"""
+    # P3（2026-10-05 审计）：datetime('now') 产 SQLite 空格格式，与
+    # store.add_receipts 的 ISO+tz 同列混存——字典序比较（purge/租约
+    # 扫描依赖）跨格式会错乱；统一 ISO 8601 带时区
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO recall_receipts(receipt_id, session_id,"
         " resource_ref, valid_at, created_at)"
-        " VALUES(?,?,?,datetime('now'),datetime('now'))",
-        (f"rr_{session_id[:12]}_r1", session_id, "round1:complete"))
+        " VALUES(?,?,?,?,?)",
+        (f"rr_{session_id[:12]}_r1", session_id, "round1:complete",
+         now, now))
 
 
 def raw_deep_search(principal, plan: dict, limit: int = 20,
@@ -296,12 +302,31 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
     _now = _dt.now(_tz.utc)
     stats = {"WIDE": 0, "MID": 0, "CORE": 0, "gap": 0}
     allowed_by_mid: dict[str, set] = {}
+    # P1-05（2026-10-05 审计）：批量装载阶段事实——此前逐桶 phase_of
+    # 每桶新开一条 formal 连接跑 4 条查询，池上限 2 万桶即 2 万次
+    # 连接开关；facts_for_many 单连接三次查询等价替代
+    facts = pp.facts_for_many(conn, pool_ids)
     for mid in pool_ids:
         if f"memory:{mid}" in rejected:
             continue
+        f = facts.get(mid)
+        if f is None:
+            stats["gap"] += 1
+            continue
         try:
-            phase = pp.phase_of(mid, now=_now)
-        except (pp.DataGap, pp.PolicyError, KeyError):
+            phase = pp.phase_from_facts(f, now=_now)
+        except pp.DataGap:
+            # P1-03（2026-10-05 审计）：v1 存量桶（held_at 缺失）此前
+            # 被整桶跳过且 coverage 仍签 complete_within_scope——假完整
+            # 回执给 Round2 背书。与 retrieval/search._stage_fields 同
+            # 语义：保守按最小允许集纳入扫描（不猜宽松阶段放大命中
+            # 面），既不再漏桶也不再虚签完整
+            stats["CORE"] += 1
+            kinds = fp_mod.stage_filter_kinds(pp.CORE_FIELDS)
+            if kinds:
+                allowed_by_mid[mid] = set(kinds)
+            continue
+        except (pp.PolicyError, KeyError):
             stats["gap"] += 1
             continue
         stats[phase.stage] += 1
@@ -309,10 +334,18 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
         if kinds:
             allowed_by_mid[mid] = set(kinds)
 
+    # P1-03 补充（2026-10-05）：coverage event 维持 S19 裁定语义——
+    # complete 与否只由"池是否取尽"决定（truncated 不签 complete）；
+    # 逐桶不可分类（CATEGORY_REQUIRED 等 PolicyError）是池内非参与
+    # 成员，计入 stage_filter.gap 元数据、不构成不完整。DataGap 桶
+    # 已在上文按 CORE 兜底纳入扫描，不再落入 gap
+    def _coverage_event() -> str:
+        return ("partial_pool_truncated" if pool_truncated
+                else "complete_within_scope")
+
     if not allowed_by_mid:
         # S19：truncated 池不签 complete（说得过头 = 假"完整搜过"）
-        coverage["event"] = ("partial_pool_truncated" if pool_truncated
-                             else "complete_within_scope")
+        coverage["event"] = _coverage_event()
         coverage["stage_filter"] = stats
         coverage["event_pool"] = {"scanned": len(pool_ids),
                                   "truncated": pool_truncated}
@@ -340,8 +373,7 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
     scored = scoped_bm25.score_documents(docs, flat_terms, phrases)
     # S19：全量迭代 + 安全阀诚实化——metadata（event_pool）按三轮#1
     # 白名单语义不参与 family 完整性判断
-    coverage["event"] = ("partial_pool_truncated" if pool_truncated
-                         else "complete_within_scope")
+    coverage["event"] = _coverage_event()
     coverage["stage_filter"] = stats
     coverage["lexical_scorer"] = scoped_bm25.SCORER_VERSION
     coverage["event_pool"] = {"scanned": len(pool_ids),
