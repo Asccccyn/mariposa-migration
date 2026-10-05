@@ -45,6 +45,11 @@ def required_excerpt_roles(candidate: dict) -> frozenset:
       又漏正文——正解是通道单一真源）。
     """
     channel = candidate.get("channel") or "event"
+    # 导航卡（temporal_navigate）：结构事实卡——fresh 的 navigate
+    # 不经 judge、无文本段外发（evidence snippet 恒空），任何
+    # profile 下都交付；重放不得按 event 通道误杀（自查②，2026-10-05）
+    if "temporal_navigate" in (candidate.get("matched_by") or []):
+        return frozenset()
     if channel in ("raw", "source"):
         return frozenset({"source_excerpt"})
     if channel in ("word", "words"):

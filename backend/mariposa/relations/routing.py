@@ -236,14 +236,18 @@ def list_relations(a: dict) -> dict:
                         ASRC-07（三轮复审）：None 尾端用消息**真实
                         长度**归一（此前视为无界，s_off==len 的零
                         覆盖漏过空检测）；归一后 lo>=hi 是空半开
-                        覆盖——返回 None 表示该消息上零覆盖。"""
+                        覆盖——返回 None 表示该消息上零覆盖。
+                        自查③（2026-10-05）：绑定侧偏移若因数据损坏
+                        出现负数/越过消息长度，同样按零覆盖处理
+                        （保守），不让坏数据放大覆盖范围。"""
                         lo = 0
                         hi = text_len
                         if mid == start_id and s_off is not None:
                             lo = s_off
                         if mid == end_id and e_off is not None:
                             hi = e_off
-                        if lo >= hi:
+                        if lo < 0 or hi < 0 or lo > text_len \
+                                or hi > text_len or lo >= hi:
                             return None
                         return lo, hi
 

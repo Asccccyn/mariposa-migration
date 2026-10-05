@@ -623,3 +623,160 @@ class TestCR01R3FullProfileMatrix:
         assert base_n >= 1
         bad = {k: v for k, v in results.items() if v[0] != v[1]}
         assert not bad, f"双命中矩阵重放/新建不一致: {bad}"
+
+
+class TestSelfAudit20261005:
+    """2026-10-05 自查批（不等复审点名的离舱点）。"""
+
+    @staticmethod
+    def _register(name, profile):
+        from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class G(typesafe_jev.TypeSafeJevJudge):
+            def __init__(self):
+                super().__init__()
+                self._api_key = "k"
+                self._data_profile = frozenset(profile)
+                self._disabled_reason = None
+
+        jb.register_for_tests(name, G())
+
+    @staticmethod
+    def _fake_http(monkeypatch):
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class _Resp:
+            def __init__(self, body):
+                self._body = body.encode("utf-8")
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            typesafe_jev.urllib.request, "urlopen",
+            lambda req, timeout=None: _Resp(json.dumps(
+                {"model": "m",
+                 "answers": {f"candidate_{i}": {"noul": 0.9}
+                             for i in range(8)}})))
+
+    def test_navigate_cards_survive_profile_withdrawn(self, actors,
+                                                      monkeypatch):
+        """自查②：导航卡是结构事实卡（fresh 的 navigate 不经 judge、
+        无文本段），缩权 profile 下重放不得按 event 通道误杀。"""
+        from mariposa import config as cfg
+        from mariposa.capabilities import registry
+        from mariposa.identity import service as identity
+        from mariposa.memory import service as memory
+        self._fake_http(monkeypatch)
+        self._register("snav_full", {"event_excerpt", "title_cue",
+                                     "word_excerpt", "source_excerpt",
+                                     "structured_metadata"})
+        self._register("snav_narrow", {"title_cue"})
+        old = cfg.RECALL_JUDGE_PROVIDER
+        try:
+            j = identity.Principal("jiaming", "周家明", "agent",
+                                   "claude_chat", "bj")
+            memory.hold(j, text="导航自查较早事件", memory_date="2026-09-10",
+                        date_confidence="exact", original_title="早",
+                        categories=["daily"],
+                        creation_mode="contemporaneous", raw_pending=False)
+            memory.hold(j, text="导航自查锚词事件", memory_date="2026-09-20",
+                        date_confidence="exact", original_title="晚",
+                        categories=["daily"],
+                        creation_mode="contemporaneous", raw_pending=False)
+            plan = {"query_plan": {"original_request": "导航自查锚词",
+                                   "channels": ["event"],
+                                   "lexical_terms": ["导航自查锚词"]},
+                    "operation_id": "snav-1"}
+            cfg.RECALL_JUDGE_PROVIDER = "snav_full"
+            r1 = registry.invoke(j, "memory.recall.start", dict(plan),
+                                 None)["data"]["data"]
+            sid = r1["recall_session_id"]
+            nav_args = {"session_id": sid, "direction": "earlier",
+                        "operation_id": "snavn-1"}
+            full = registry.invoke(j, "memory.recall.navigate",
+                                   dict(nav_args), None)["data"]["data"]
+            n_full = len(full["candidates"])
+            assert n_full >= 1, "夹具应产出导航卡"
+            body_full = json.dumps(full, ensure_ascii=False)
+            assert "导航自查较早事件" not in body_full, \
+                "导航卡不带正文（结构事实）"
+            # 撤到 title_cue-only：fresh navigate 仍交付结构卡；
+            # 同 op 重放必须同权（不得按 event_excerpt 误杀）
+            cfg.RECALL_JUDGE_PROVIDER = "snav_narrow"
+            fresh_n = registry.invoke(
+                j, "memory.recall.navigate",
+                {**nav_args, "operation_id": "snavn-2"},
+                None)["data"]["data"]["candidates"]
+            replay = registry.invoke(j, "memory.recall.navigate",
+                                     dict(nav_args), None)["data"]["data"]
+            assert len(fresh_n) == n_full
+            assert len(replay["candidates"]) == n_full, \
+                "缩权 profile 下导航卡重放不得被误杀"
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old
+
+    def test_health_and_static_rate_limited(self, actors, monkeypatch):
+        """自查①：/health 与静态面不再是无门禁打点面（IP 匿名档）。"""
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_ANON_PER_MIN", 3)
+        with _client() as c:
+            codes = [c.get("/health").status_code for _ in range(5)]
+        assert codes[:3] == [200, 200, 200]
+        assert codes[3] == 429, "/health 必须受 IP 匿名档限速"
+
+    def test_lock_covers_unauthenticated_surface(self, actors):
+        """自查①联动：在 /api 触发锁定的来源，/health 同样被挡。"""
+        with _client() as c:
+            for _ in range(5):
+                c.get("/api/capabilities", headers=AUTH_BAD)
+            r = c.get("/health")
+        assert r.status_code == 423
+
+    def test_corrupt_binding_offsets_zero_coverage(self, actors):
+        """自查③：绑定偏移数据损坏（负数/超界）按零覆盖保守处理，
+        不放大覆盖范围、不让反查报错。"""
+        from mariposa import db
+        from mariposa.memory import service as memory
+        from mariposa.relations import routing
+        from mariposa.source import binding, importer
+        src = pathlib.Path(tempfile.mkdtemp()) / "corrupt.json"
+        src.write_text(json.dumps([{
+            "uuid": "conv-cor", "chat_messages": [
+                {"uuid": m, "sender": "human", "parent_message_uuid": p,
+                 "created_at": "2026-09-20T10:00:%02d.000Z" % (10 + i),
+                 "content": [{"type": "text", "text": m * 11}]}
+                for i, (m, p) in enumerate(
+                    [("a", None), ("b", "a"), ("c", "b")])]}]),
+            encoding="utf-8")
+        importer.import_file("jiaming", str(src))
+        with db.formal() as conn:
+            conv = conn.execute(
+                "SELECT id FROM source_conversations WHERE"
+                " provider_conversation_id='conv-cor'").fetchone()
+        mem_id = memory.hold(
+            actors["jiaming"], text="cor 记忆", memory_date="2026-09-20",
+            date_confidence="exact", original_title="cor",
+            categories=["daily"], creation_mode="contemporaneous",
+            raw_pending=False)["memory_id"]
+        binding.bind("jiaming", mem_id, conv["id"], "b", "b",
+                     start_char_offset=2, end_char_offset=6)
+        # 数据损坏：负数 start 偏移
+        with db.formal() as conn:
+            conn.execute(
+                "UPDATE memory_source_bindings SET start_char_offset=-5")
+        out = routing.list_relations({"resource": {
+            "type": "source_range", "conversation_id": conv["id"],
+            "start_message_id": "b", "end_message_id": "b",
+            "start_char_offset": 0, "end_char_offset": 4},
+            "direction": "in", "domains": ["source_binding"],
+            "limit": 10, "offset": 0})
+        assert len(out["relations"]) == 0, \
+            "负数绑定偏移按零覆盖，不得放大命中范围"
