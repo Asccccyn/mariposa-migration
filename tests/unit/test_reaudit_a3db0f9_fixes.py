@@ -780,3 +780,200 @@ class TestSelfAudit20261005:
             "limit": 10, "offset": 0})
         assert len(out["relations"]) == 0, \
             "负数绑定偏移按零覆盖，不得放大命中范围"
+
+
+class TestFourthRound20261005:
+    """四轮复审修复回归：CR-NAV-01 + AF-GATE-01/02/03。"""
+
+    @staticmethod
+    def _register(name, profile, disabled=False, key="k"):
+        from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class G(typesafe_jev.TypeSafeJevJudge):
+            def __init__(self):
+                super().__init__()
+                self._api_key = key
+                self._data_profile = (None if disabled
+                                      else frozenset(profile))
+                self._disabled_reason = ("allowed_data_policy_missing"
+                                         if disabled else None)
+
+        jb.register_for_tests(name, G())
+
+    @staticmethod
+    def _fake_http(monkeypatch):
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class _Resp:
+            def __init__(self, body):
+                self._body = body.encode("utf-8")
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            typesafe_jev.urllib.request, "urlopen",
+            lambda req, timeout=None: _Resp(json.dumps(
+                {"model": "m",
+                 "answers": {"candidate_0": {"noul": 0.9}}})))
+
+    def test_judge_down_navigate_replay_keeps_structured_cards(
+            self, actors, monkeypatch):
+        """CR-NAV-01：judge 不可用（缺策略/缺 key/空 profile）时
+        fresh navigate 交付无正文结构卡——同 operation 重放同权。"""
+        from mariposa import config as cfg
+        from mariposa.capabilities import registry
+        from mariposa.identity import service as identity
+        from mariposa.memory import service as memory
+        self._fake_http(monkeypatch)
+        self._register("r4_full", {"event_excerpt", "title_cue",
+                                   "word_excerpt", "source_excerpt",
+                                   "structured_metadata"})
+        self._register("r4_no_policy", None, disabled=True)
+        self._register("r4_no_key", {"event_excerpt"}, key="")
+        old = cfg.RECALL_JUDGE_PROVIDER
+        try:
+            j = identity.Principal("jiaming", "周家明", "agent",
+                                   "claude_chat", "bj")
+            memory.hold(j, text="四轮导航较早事件", memory_date="2026-09-10",
+                        date_confidence="exact", original_title="早",
+                        categories=["daily"],
+                        creation_mode="contemporaneous", raw_pending=False)
+            memory.hold(j, text="四轮导航锚词事件", memory_date="2026-09-20",
+                        date_confidence="exact", original_title="晚",
+                        categories=["daily"],
+                        creation_mode="contemporaneous", raw_pending=False)
+            plan = {"query_plan": {"original_request": "四轮导航锚词",
+                                   "channels": ["event"],
+                                   "lexical_terms": ["四轮导航锚词"]},
+                    "operation_id": "r4-1"}
+            cfg.RECALL_JUDGE_PROVIDER = "r4_full"
+            r1 = registry.invoke(j, "memory.recall.start", dict(plan),
+                                 None)["data"]["data"]
+            nav_args = {"session_id": r1["recall_session_id"],
+                        "direction": "earlier",
+                        "operation_id": "r4n-1"}
+            full = registry.invoke(j, "memory.recall.navigate",
+                                   dict(nav_args), None)["data"]["data"]
+            n_full = len(full["candidates"])
+            assert n_full >= 1
+            for down in ("r4_no_policy", "r4_no_key"):
+                cfg.RECALL_JUDGE_PROVIDER = down
+                fresh = registry.invoke(
+                    j, "memory.recall.navigate",
+                    {**nav_args, "operation_id": f"r4n-{down}"},
+                    None)["data"]["data"]["candidates"]
+                replay = registry.invoke(j, "memory.recall.navigate",
+                                         dict(nav_args),
+                                         None)["data"]["data"]
+                assert len(fresh) == n_full, f"{down} fresh 导航不得丢卡"
+                assert len(replay["candidates"]) == n_full, \
+                    f"{down} judge 不可用时导航重放不得丢结构卡"
+                assert "四轮导航较早事件" not in json.dumps(
+                    replay, ensure_ascii=False)
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old
+
+    def test_afgate01_overflow_stickiness(self, monkeypatch):
+        """AF-GATE-01：容量腾出后，仍在溢出桶窗口内的主体不得获得
+        独立新桶（否则同主体 60s 内双份配额）。"""
+        from mariposa import gate
+        from mariposa import config as cfg
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(gate, "_MAX_TRACKED_KEYS", 3)
+        monkeypatch.setattr(cfg, "GATE_RATE_READ_PER_MIN", 2)
+        gate.check_rate("anon", "10.9.0.1")
+        gate.check_rate("anon", "10.9.0.2")
+        gate.check_rate("anon", "10.9.0.3")     # 容量满
+        fake_now[0] += 59
+        assert gate.check_rate("read", "p-main") == 0   # 入溢出桶
+        assert gate.check_rate("read", "p-main") == 0   # 溢出桶满 2
+        assert gate.check_rate("read", "p-main") > 0    # 第 3 次超限
+        fake_now[0] += 1                                # t60：旧键回收
+        gate._maintain()
+        # 溢出桶内 p-main 的 t59 计数未滑出 → 粘性：不得建独立桶
+        assert gate.check_rate("read", "p-main") > 0, \
+            "溢出窗口未滑出前不得给独立新桶（双份配额）"
+        fake_now[0] += 60                               # 溢出滑空
+        gate._maintain()
+        assert gate.check_rate("read", "p-main") == 0, \
+            "溢出桶滑空后恢复独立桶资格"
+
+    def test_afgate02_mcp_protocol_errors_metered(self, actors,
+                                                  monkeypatch):
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_READ_PER_MIN", 1)
+        with _client() as c:
+            first = c.post("/mcp", content=b"{bad json",
+                           headers=AUTH_J)
+            second = c.post("/mcp", content=b"{bad json",
+                            headers=AUTH_J)
+        # 坏 JSON 是 RPC 层 -32700（传输层 200）；计档后超限是 429
+        assert first.status_code == 200
+        assert first.json()["error"]["code"] == -32700
+        assert second.status_code == 429, "协议错误路径必须计读档"
+
+    def test_afgate02_unknown_paths_locked_and_metered(self, actors,
+                                                       monkeypatch):
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_ANON_PER_MIN", 3)
+        with _client() as c:
+            for _ in range(5):
+                c.get("/api/capabilities", headers=AUTH_BAD)
+            r = c.get("/apiX")            # 未注册路径（宽前缀豁免曾漏）
+            assert r.status_code == 423, "锁定必须覆盖未注册路径"
+        from mariposa import gate
+        gate.reset_for_tests()            # 解除上一段的锁定再测 404 补计
+        with _client() as c:
+            codes = [c.get("/api/unknown-path").status_code
+                     for _ in range(5)]
+        assert codes[:3] == [404, 404, 404]
+        assert codes[3] == 429, "404 路径必须事后补计匿名档"
+
+    def test_afgate03_maintain_consumes_pending_expiry(self, actors,
+                                                       monkeypatch):
+        """AF-GATE-03：原来源不回来的到期事件由维护流程有界消费
+        （sink 落审计）并回收，不再永久积压。"""
+        from mariposa import db, gate
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(gate, "_MAX_TRACKED_KEYS", 3)
+        consumed = []
+
+        def sink(events):
+            consumed.extend(events)
+
+        gate.set_expiry_sink(sink)
+        for i in range(20):
+            for _ in range(5):
+                gate.note_auth_failure(f"10.8.0.{i}")
+        fake_now[0] += 7 * 86400  # 锁到期且远超 TTL
+        gate._maintain()
+        gate._maintain()          # 消费标记后下一轮回收
+        assert len(consumed) == 20, "20 条到期事件必须经 sink 消费"
+        assert not gate._auth_failures, "消费后按 TTL 回收，不积压"
+
+    def test_afgate03_sink_failure_keeps_state(self, monkeypatch):
+        from mariposa import gate
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+
+        def boom(events):
+            raise RuntimeError("audit down")
+
+        gate.set_expiry_sink(boom)
+        for _ in range(5):
+            gate.note_auth_failure("10.7.0.1")
+        fake_now[0] += 7 * 86400
+        gate._maintain()
+        st = gate._auth_failures.get("10.7.0.1")
+        assert st is not None and not st.get("expired_reported"), \
+            "sink 失败时保留未消费状态（下轮重试），不静默丢"

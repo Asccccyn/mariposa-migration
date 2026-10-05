@@ -51,18 +51,37 @@ _MAINTAIN_EVERY_OPS = 256
 _last_maintain = 0.0
 _ops_since_maintain = 0
 
+#: AF-GATE-01（四轮复审）：曾因容量满被路由进溢出桶的键——溢出桶
+#: 滑空前保持粘性（继续路由溢出桶，不建独立桶），否则旧容量腾出
+#: 后同主体获得"溢出计数 + 新独立桶"双份配额
+_ovf_members: set = set()
+
+#: AF-GATE-03（四轮复审）：到期事件消费回调——维护流程发现有界批量
+#: 的未消费到期事件时经此落审计（app 启动时注入 record_isolated
+#: 包装）；None 时（测试/未装配）直接标记消费，不写审计
+_expiry_sink = None
+
+
+def set_expiry_sink(fn) -> None:
+    """注入到期事件消费回调（fn(events: list[tuple[ip, payload]])）。"""
+    global _expiry_sink
+    _expiry_sink = fn
+
+
 _now = time.monotonic
 
 
 def reset_for_tests() -> None:
     """测试隔离：清空全部计数（conftest reset_all 调用；生产无入口
     可达——HTTP/MCP 路由不触达本函数）。"""
-    global _last_maintain, _ops_since_maintain
+    global _last_maintain, _ops_since_maintain, _ovf_members, _expiry_sink
     with _LOCK:
         _auth_failures.clear()
         _rate_windows.clear()
+        _ovf_members.clear()
         _last_maintain = _now()
         _ops_since_maintain = 0
+    _expiry_sink = None
 
 
 def _maybe_maintain() -> None:
@@ -92,6 +111,11 @@ def _maintain() -> None:
     """
     global _last_maintain, _ops_since_maintain
     now = _now()
+    # AF-GATE-03（四轮复审）：有界批量消费"已到期未报告"事件——
+    # 锁内收集，锁外交付 sink（audit 隔离事务），成功后标记并按
+    # TTL 正常回收；原来源之后再来时 take_lock_expired_event 返回
+    # None，不重复。无 sink（测试/未装配）直接标记（重启等价语义）
+    pending_expiry: list[tuple[str, dict]] = []
     with _LOCK:
         _last_maintain = now
         _ops_since_maintain = 0
@@ -102,6 +126,10 @@ def _maintain() -> None:
                 window.popleft()
             if not window:
                 del _rate_windows[key]
+                if key[1] == "\x00_overflow":
+                    # 溢出桶滑空：粘性成员恢复独立桶资格（AF-GATE-01）
+                    for m in [m for m in _ovf_members if m[0] == key[0]]:
+                        _ovf_members.discard(m)
         for ip in list(_auth_failures.keys()):
             st = _auth_failures[ip]
             locked_until = st.get("locked_until", 0.0)
@@ -110,8 +138,10 @@ def _maintain() -> None:
             last = st.get("last_fail", 0.0)
             if st.get("fails", 0) > 0 and now - last < _WINDOW_SECONDS:
                 continue
-            # 未消费的到期事件不回收（RE-GATE-02）：等来源下次请求
-            if (locked_until > 0 and not st.get("expired_reported")):
+            if locked_until > 0 and not st.get("expired_reported"):
+                pending_expiry.append(
+                    (ip, {"lock_level": st.get("lock_level", 0),
+                          "locked_until": locked_until}))
                 continue
             anchor = max(last, locked_until)
             if now - anchor < _STATE_TTL_S:
@@ -127,9 +157,28 @@ def _maintain() -> None:
                     continue
                 if (st.get("locked_until", 0.0) > 0
                         and not st.get("expired_reported")):
-                    continue  # 未消费到期事件：容量淘汰也绕过
+                    continue  # 交由 pending 消费流程处理，不静默丢
                 del _auth_failures[ip]
                 overflow -= 1
+    if pending_expiry:
+        if _expiry_sink is not None:
+            try:
+                _expiry_sink(pending_expiry)
+            except Exception as e:
+                # 消费失败不丢事件：保留未标记状态，下轮维护重试；
+                # stderr 留痕（不静默）
+                import sys
+                sys.stderr.write(
+                    f"[gate] expiry sink failed ({len(pending_expiry)} "
+                    f"events): {e!r}\n")
+                return
+        with _LOCK:
+            for ip, payload in pending_expiry:
+                st = _auth_failures.get(ip)
+                if (st is not None
+                        and st.get("locked_until") == payload.get(
+                            "locked_until")):
+                    st["expired_reported"] = True
 
 
 def client_ip(request) -> str:
@@ -256,11 +305,17 @@ def check_rate(kind: str, key: str) -> float:
     now = _now()
     if limit <= 0:
         return _WINDOW_SECONDS
+    ovf_key = (kind, "\x00_overflow")
     with _LOCK:
         bucket_key = (kind, key)
-        if (bucket_key not in _rate_windows
-                and len(_rate_windows) >= _MAX_TRACKED_KEYS):
-            bucket_key = (kind, "\x00_overflow")
+        if bucket_key not in _rate_windows:
+            # AF-GATE-01：曾进溢出桶的键保持粘性（该 kind 的溢出桶
+            # 滑空前不建独立桶）；或容量满时新键入溢出桶
+            ovf_window = _rate_windows.get(ovf_key)
+            sticky = bucket_key in _ovf_members and ovf_window
+            if sticky or len(_rate_windows) >= _MAX_TRACKED_KEYS:
+                bucket_key = ovf_key
+                _ovf_members.add((kind, key))
         window = _rate_windows.setdefault(bucket_key, deque())
         while window and window[0] <= now - _WINDOW_SECONDS:
             window.popleft()
