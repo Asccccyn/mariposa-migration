@@ -618,7 +618,60 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                     "source_ref": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}},
             "creation_mode": {"type": "string",
                                "enum": ["contemporaneous", "retrospective"]},
+            # WP2（迁移 31）：宿主自动化路径——operation_id+可选钉住成员
+            # 的来源片段（带 selections 必带 op；旧调用不带两字段不变）
+            "operation_id": {"type": "string", "minLength": 1,
+                             "maxLength": 200},
+            "source_selections": {"type": "array", "maxItems": 20, "items": {
+                "type": "object",
+                "required": ["conversation_id", "members"],
+                "additionalProperties": False,
+                "properties": {
+                    "conversation_id": {"type": "string", "minLength": 1},
+                    "members": {"type": "array", "minItems": 1,
+                                "maxItems": 500, "items": {
+                        "type": "object",
+                        "required": ["source_message_id", "content_hash"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "source_message_id": {"type": "string",
+                                                  "minLength": 1},
+                            "content_hash": {"type": "string",
+                                             "minLength": 64,
+                                             "maxLength": 64}}}},
+                    "start_char_offset": {"type": "integer", "minimum": 0},
+                    "end_char_offset": {"type": "integer", "minimum": 0}}}},
         },
+    },
+    "memory.hold.status": {
+        "type": "object", "required": ["operation_id"],
+        "additionalProperties": False,
+        "properties": {"operation_id": {"type": "string", "minLength": 1,
+                                        "maxLength": 200}},
+    },
+    "source.selection.open": {
+        "type": "object", "required": ["selection"],
+        "additionalProperties": False,
+        "properties": {
+            "include_content": {"type": "boolean"},
+            "selection": {
+                "type": "object",
+                "required": ["conversation_id", "members"],
+                "additionalProperties": False,
+                "properties": {
+                    "conversation_id": {"type": "string", "minLength": 1},
+                    "members": {"type": "array", "minItems": 1,
+                                "maxItems": 500, "items": {
+                        "type": "object",
+                        "required": ["source_message_id"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "source_message_id": {"type": "string",
+                                                  "minLength": 1},
+                            "content_hash": {"type": "string",
+                                             "maxLength": 64}}}},
+                    "start_char_offset": {"type": "integer", "minimum": 0},
+                    "end_char_offset": {"type": "integer", "minimum": 0}}}},
     },
     "memory.open": {
         "type": "object", "required": ["memory_id"], "additionalProperties": False,

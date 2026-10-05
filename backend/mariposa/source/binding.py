@@ -23,10 +23,16 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
          start_message_id: str, end_message_id: str,
          start_char_offset: int | None = None,
          end_char_offset: int | None = None,
-         confidence: str = "exact", conn=None) -> dict:
+         confidence: str = "exact", conn=None,
+         members: list[dict] | None = None) -> dict:
     """把 memory 绑定到一个连续消息区间（可重复调用叠加多个 range）。
 
     conn 由纠错改绑传入：插入与纠错同事务（§5.4 原子操作）。
+    members（迁移 31/WP2）：钉住成员 manifest——中间每条消息的修订与
+    次序入库（memory_source_binding_members），不只钉首尾 hash。
+    start/end 此时取首/末成员（旧字段继续填充兼容）；片段内成员必须
+    都在首→末 parent 路径上且按路径序出现（多段间隙由多片段表达，
+    不能靠 min/max sequence 伪造连续覆盖——契约 §4.4）。
     """
     if confidence not in ("exact", "high", "low"):
         raise Forbidden("confidence must be exact/high/low")
@@ -35,10 +41,16 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
                             (memory_id,)).fetchone():
             raise NotFound("memory not found", memory_id=memory_id)
+        start_id, end_id = start_message_id, end_message_id
+        if members is not None:
+            _validate_members(conn, conversation_id, members,
+                              start_char_offset, end_char_offset)
+            start_id = members[0]["source_message_id"]
+            end_id = members[-1]["source_message_id"]
         # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
         resolved = source_query.validate_range(
-            conversation_id, start_message_id, end_message_id,
-            start_char_offset, end_char_offset)
+            conversation_id, start_id, end_id,
+            start_char_offset, end_char_offset, conn=conn)
         binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
         conn.execute(
             "INSERT INTO memory_source_bindings(binding_id, memory_id,"
@@ -51,6 +63,19 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
              start_char_offset, end_char_offset, confidence,
              resolved["start_content_hash"],
              resolved["end_content_hash"], principal_id, _now()))
+        if members is not None:
+            # 钉住的成员 hash 以 manifest 为准（validate 已核与行一致）
+            for ordinal, m in enumerate(members):
+                conn.execute(
+                    "INSERT INTO memory_source_binding_members(binding_id,"
+                    " ordinal, source_message_id, content_hash,"
+                    " start_char_offset, end_char_offset)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (binding_id, ordinal, m["source_message_id"],
+                     m["content_hash"],
+                     start_char_offset if ordinal == 0 else None,
+                     end_char_offset if ordinal == len(members) - 1
+                     else None))
         audit.record(conn, "source.bound", principal_id,
                      resource_id=memory_id,
                      payload={"binding_id": binding_id,
@@ -59,6 +84,8 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
                               "start": resolved["start"]["id"],
                               "end": resolved["end"]["id"],
                               "confidence": confidence,
+                              "members_pinned": len(members) if members
+                              is not None else None,
                               "offset_convention":
                                   source_query.OFFSET_CONVENTION})
         return {"binding_id": binding_id, "memory_id": memory_id,
@@ -68,7 +95,9 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
                 "start_content_hash": resolved["start_content_hash"],
                 "end_content_hash": resolved["end_content_hash"],
                 "offset_convention": source_query.OFFSET_CONVENTION,
-                "confidence": confidence}
+                "confidence": confidence,
+                "members_pinned": len(members) if members is not None
+                else None}
 
     if conn is not None:
         return _insert(conn)
@@ -81,6 +110,150 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         except Exception:
             c.execute("ROLLBACK")
             raise
+
+
+def _validate_members(conn, conversation_id: str, members: list[dict],
+                      start_char_offset, end_char_offset) -> None:
+    """成员 manifest 校验（契约 §4.4）：形状/归属/发布/路径序/钉 hash。"""
+    if not isinstance(members, list) or not members:
+        raise Forbidden("members 必须是非空数组", code="INVALID_ARGUMENT")
+    ids: list[str] = []
+    for i, m in enumerate(members):
+        if not isinstance(m, dict):
+            raise Forbidden(f"members[{i}] 不是对象", code="INVALID_ARGUMENT")
+        sid, chash = m.get("source_message_id"), m.get("content_hash")
+        if not isinstance(sid, str) or not sid:
+            raise Forbidden(f"members[{i}].source_message_id 必填",
+                            code="INVALID_ARGUMENT")
+        if not isinstance(chash, str) or not chash:
+            raise Forbidden(f"members[{i}].content_hash 必填（钉住证据"
+                            "版本）", code="INVALID_ARGUMENT")
+        if sid in ids:
+            raise Forbidden(f"members[{i}] 重复成员：{sid}",
+                            code="INVALID_ARGUMENT")
+        ids.append(sid)
+    rows = []
+    for sid in ids:
+        row = conn.execute(
+            "SELECT * FROM source_messages WHERE id=?", (sid,)).fetchone()
+        if row is None or not row["published"]:
+            raise NotFound("member not found or unpublished",
+                           source_message_id=sid)
+        rows.append(row)
+    conv_id = rows[0]["conversation_id"]
+    for row in rows:
+        if row["conversation_id"] != conv_id:
+            raise Forbidden("members 跨会话", code="INVALID_ARGUMENT")
+    # 成员必须都在目标会话内（conversation_id 可传行 id 或 provider id）
+    target = source_query._find_conversation(conn, conversation_id)
+    if target is None or target["id"] != conv_id:
+        raise NotFound("member not in selection conversation",
+                       conversation_id=conversation_id)
+    # 成员必须在首→末 parent 路径上且按路径序（复用区间解析器）
+    resolved = source_query.validate_range(
+        conversation_id, ids[0], ids[-1], None, None, conn=conn)
+    order = {mid: idx for idx, mid in enumerate(resolved["path_order"])}
+    last_idx = -1
+    for sid in ids:
+        if sid not in order:
+            raise Forbidden(
+                "成员不在首→末 parent 路径上（sibling/分支成员不能入"
+                "manifest）", code="SOURCE_RANGE_NOT_PATH",
+                source_message_id=sid)
+        if order[sid] <= last_idx:
+            raise Forbidden("成员次序与 parent 路径序不符",
+                            code="SOURCE_RANGE_NOT_PATH",
+                            source_message_id=sid)
+        last_idx = order[sid]
+    # 钉住的 hash 必须与当前行一致（漂移在此拒绝，不静默改绑）
+    for m, row in zip(members, rows):
+        if row["content_hash"] is not None and \
+                row["content_hash"] != m["content_hash"]:
+            raise Forbidden(
+                "成员 content_hash 与当前行不符（消息已修订；按新修订"
+                "重新生成 manifest）", code="SOURCE_HASH_MISMATCH",
+                source_message_id=m["source_message_id"])
+
+
+def open_selection(selection: dict, include_content: bool = False) -> dict:
+    """按 manifest 读回片段（source.selection.open；契约 §4.4）。
+
+    与旧 range.open 的差别：逐成员核对钉住的 content_hash——当前行与
+    manifest 不符时该成员显式标 version_drift（结构性披露，不静默给
+    新正文也不拒整段）；旧修订证据可另走 source.message.get。
+    """
+    if not isinstance(selection, dict):
+        raise Forbidden("selection 必须是对象", code="INVALID_ARGUMENT")
+    members = selection.get("members")
+    conversation_id = selection.get("conversation_id")
+    if not isinstance(conversation_id, str) or not conversation_id:
+        raise Forbidden("selection.conversation_id 必填",
+                        code="INVALID_ARGUMENT")
+    if not isinstance(members, list) or not members:
+        raise Forbidden("selection.members 必须是非空数组",
+                        code="INVALID_ARGUMENT")
+    with db.formal() as conn:
+        conv = source_query._find_conversation(conn, conversation_id)
+        if conv is None:
+            raise NotFound("source conversation not found",
+                           conversation_id=conversation_id)
+        out_members = []
+        drifted = []
+        for i, m in enumerate(members):
+            sid = m.get("source_message_id") if isinstance(m, dict) else None
+            if not isinstance(sid, str):
+                raise Forbidden(f"members[{i}].source_message_id 必填",
+                                code="INVALID_ARGUMENT")
+            row = conn.execute(
+                f"SELECT {source_query._COLS}, conversation_id,"
+                " content_json FROM source_messages WHERE id=? AND"
+                " published=1",
+                (sid,)).fetchone()
+            if row is None or row["conversation_id"] != conv["id"]:
+                raise NotFound("member not found in conversation",
+                               source_message_id=sid)
+            item = source_query._serialize(
+                row, include_content=include_content,
+                char_offsets=(
+                    selection.get("start_char_offset") if i == 0 else None,
+                    selection.get("end_char_offset")
+                    if i == len(members) - 1 else None))
+            pinned = m.get("content_hash")
+            member_drift = None
+            if isinstance(pinned, str):
+                if row["content_hash"] is not None and \
+                        row["content_hash"] != pinned:
+                    # 行级不符（理论上不可变行不该发生；防御性披露）
+                    member_drift = {"pinned": pinned,
+                                    "current": row["content_hash"]}
+            if member_drift is None and isinstance(pinned, str):
+                # 在线修订换代：钉住行不可变，漂移信号=同 origin 消息已
+                # 有更新修订（谱系表判定，不比对不可变行自身）
+                lr = conn.execute(
+                    "SELECT l.revision, (SELECT MAX(l2.revision) FROM"
+                    " source_live_revisions l2 WHERE l2.stream_id="
+                    " l.stream_id AND l2.origin_message_id="
+                    " l.origin_message_id) AS max_rev, (SELECT"
+                    " l3.content_hash FROM source_live_revisions l3"
+                    " WHERE l3.stream_id=l.stream_id AND"
+                    " l3.origin_message_id=l.origin_message_id ORDER BY"
+                    " l3.revision DESC LIMIT 1) AS latest_hash FROM"
+                    " source_live_revisions l WHERE l.source_message_id=?",
+                    (sid,)).fetchone()
+                if lr is not None and lr["max_rev"] is not None and \
+                        lr["max_rev"] > lr["revision"]:
+                    member_drift = {"pinned": pinned,
+                                    "current": lr["latest_hash"],
+                                    "pinned_revision": lr["revision"],
+                                    "latest_revision": lr["max_rev"]}
+            if member_drift is not None:
+                item["version_drift"] = member_drift
+                drifted.append(sid)
+            out_members.append(item)
+    return {"conversation": dict(conv), "members": out_members,
+            "drifted_members": drifted, "include_content": include_content,
+            "source": "source_layer", "content_role": "retrieved_memory",
+            "instruction_authority": "none"}
 
 
 def ranges_of(memory_id: str) -> list[dict]:
