@@ -105,6 +105,18 @@ def import_file(principal_id: str, path: str,
     if not src.is_file():
         raise NotFound("source file not found", path=str(src))
 
+    # P1-01（2026-10-05 审计）：复制前按 stat 预检大小——上传通道有
+    # SOURCE_UPLOAD_MAX_BYTES 流式截停，但直读路径此前不设防，任意
+    # 大文件会先被整体复制进暂存目录（塞盘）才在格式层拒绝
+    size = src.stat().st_size
+    if size > config.SOURCE_UPLOAD_MAX_BYTES:
+        _e = MariposaError(
+            f"source file {size} > {config.SOURCE_UPLOAD_MAX_BYTES}"
+            "（直读导入与上传通道同一字节上限）",
+            code="SOURCE_IMPORT_TOO_LARGE")
+        _e.http_status = 413
+        raise _e
+
     # ---- 1) 一次固定快照（SL-02）：复制到受控暂存，此后不再读原路径 ----
     staged = archive.stage_input(src)
     try:
@@ -1115,6 +1127,10 @@ def _record_failed_import(principal_id: str, staged: Path, provider: str,
             " ON CONFLICT(provider, sha256) DO UPDATE SET"
             " error=excluded.error, imported_by=excluded.imported_by,"
             " import_started_at=excluded.import_started_at,"
-            " import_finished_at=excluded.import_finished_at",
+            " import_finished_at=excluded.import_finished_at"
+            # P3（2026-10-05 审计）：与 _fail_batch 同款 completed 保护——
+            # 此前该保护只是"碰巧"成立（失败探测恒记 provider=unknown），
+            # 未来任何路径记真实 provider 失败时不得覆盖已完成的终态
+            " WHERE source_import_batches.status <> 'completed'",
             (batch_id, provider, filename or "", size, sha256, "",
              PARSER_VERSION, _now(), _now(), reason[:2000], principal_id))

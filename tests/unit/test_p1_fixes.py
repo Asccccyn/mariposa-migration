@@ -125,7 +125,9 @@ class TestB02CrashWindow:
         assert e.value.code == "IDEMPOTENCY_CONFLICT"
 
     def test_reconcile_clears_guard_then_retry_executes(self, actors):
-        self._seed_running("crash-key", 120)
+        # P2-01（2026-10-05 审计）：服务端新鲜度下限 600s——种子年龄
+        # 必须超过下限才会被对账
+        self._seed_running("crash-key", 700)
         from mariposa.maintenance import service as maintenance
         out = maintenance.idempotency_reconcile(
             "qiaosheng", "jiaming", "memory.hold", "crash-key")

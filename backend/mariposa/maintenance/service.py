@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from .. import db
 from ..errors import Forbidden
 
+#: P2-01（2026-10-05 审计）：幂等对账新鲜度下限——低于该时长的 running
+#: 记录一律拒绝判 failed（并发中的真实执行最常见，见函数注释）
+MIN_RECONCILE_STALE_S = 600
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -64,16 +68,23 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
 
     只有 failed 之后同 key 重试才能重新占位执行。调用方必须先核实业务结果
     （副作用可能已发生）；本工具只清除占位，不伪造结果。
+
+    P2-01（2026-10-05 审计）：新鲜度下限服务端钉死——此前 stale_seconds
+    完全由调用方给（schema 最小 1），把一条真实并发中的写占位判成
+    failed 即可让同 key 重执行双写副作用；跨主体对账 + 无审计同理
+    收口：对账动作与 UPDATE 同事务落 audit。
     """
     from ..errors import NotFound as _NF
     from datetime import datetime as _dt
     from ..capabilities import registry as _reg
+    from ..audit import service as _audit
+    stale_seconds = max(int(stale_seconds or 0), MIN_RECONCILE_STALE_S)
     with db.formal() as conn:
         # RA-004 后 transport 幂等记录统一存 t: 前缀键；对账入口收
         # 的是调用方原始 key，必须先映射再查（裸键回退仅服务迁移前
         # 旧行）。否则真实崩溃留下的 t: running 记录永远无法经公开
         # 入口对账清除（审计 2026-10-03：红测 fixture 种裸键掩盖了
-        # 此断层）
+        # 这一断层）
         row = conn.execute(
             "SELECT * FROM idempotency_records WHERE principal_id=? AND"
             " capability=? AND idempotency_key=?",
@@ -102,12 +113,19 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
                             " in flight; refuse to reconcile"}
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE idempotency_records SET status='failed', result_ref=?"
                 " WHERE principal_id=? AND capability=? AND idempotency_key=?"
                 " AND status='running'",
                 (None, record_principal, capability,
                  row["idempotency_key"]))
+            if cur.rowcount:
+                _audit.record(conn, "maintenance.idempotency.reconciled",
+                              principal_id,
+                              resource_id=f"{record_principal}:{capability}"
+                                          f":{row['idempotency_key']}",
+                              payload={"age_seconds": int(age),
+                                       "stale_floor": MIN_RECONCILE_STALE_S})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

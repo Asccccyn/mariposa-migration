@@ -214,6 +214,13 @@ def deletion_request(principal_id: str, memory_id: str, reason: str,
                 " human_reason, status, submitted_by, submitted_local_date,"
                 " created_at) VALUES(?,?,?,'pending',?,?,?)",
                 (rid, memory_id, reason, principal_id, local_date, _iso()))
+            # P1-04（2026-10-05 审计）：申请落库同事务写审计——敏感
+            # 生命周期动作（申请/撤回/驳回）此前全部无审计痕迹，
+            # 违反 §19"审计与正式写入同一事务"
+            audit.record(conn, "deletion.requested", principal_id,
+                         resource_id=memory_id,
+                         payload={"request_id": rid,
+                                  "reason": reason[:200]})
             if operation_key:
                 # 同事务存完成回执：同 key 重放返回本申请，不重复计数
                 # （CB-008：op: 前缀与 transport 幂等键空间隔离）
@@ -259,6 +266,10 @@ def deletion_withdraw(principal_id: str, request_id: str) -> dict:
                 "UPDATE deletion_requests SET status='withdrawn',"
                 " decided_at=? WHERE request_id=? AND status='pending'",
                 (_iso(), request_id))
+            # P1-04（2026-10-05 审计）：撤回同事务留痕
+            audit.record(conn, "deletion.withdrawn", principal_id,
+                         resource_id=row["memory_id"],
+                         payload={"request_id": request_id})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -328,6 +339,13 @@ def deletion_decide(principal_id: str, request_id: str, decision: str,
                     "UPDATE deletion_requests SET status='rejected',"
                     " rejection_reason=?, decided_at=? WHERE request_id=?",
                     (rejection_reason.strip(), _iso(), request_id))
+                # P1-04（2026-10-05 审计）：驳回同事务留痕——此前只有
+                # approve 侧经 memory.deleted 间接可见，拒绝这一敏感
+                # 决策在审计流水里查不到
+                audit.record(conn, "deletion.rejected", principal_id,
+                             resource_id=row["memory_id"],
+                             payload={"request_id": request_id,
+                                      "reason": rejection_reason[:200]})
             else:
                 # 技术拦截（关系硬门）不是主观拒绝：抛出→回滚→保 pending
                 _execute_delete(conn, row["memory_id"], principal_id)
