@@ -109,9 +109,13 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                 "UPDATE memories SET current_version_no=?, memory_date=?,"
                 " date_confidence=?, updated_at=? WHERE memory_id=?",
                 (new_version,
-                 # WR-04：why_remember（可空列）显式 null=清空；
-                 # memory_date/date_confidence 是 NOT NULL 列，不支持
-                 # 清空——null 等同未提供（保留现值，语义文档化）
+                 # WR-04 + RE-WR-02（2026-10-04 复审勘误）：why_remember
+                 # （可空列）显式 null=清空。memory_date 列**实际可空**
+                 # （PRAGMA notnull=0，此前注释所称 NOT NULL 不实）——
+                 # 显式 null 清空是**未实现的残留接口限制**：null 等同
+                 # 未提供（保留现值）。date_confidence 同；其公开 schema
+                 # 不收 null（入口即拒，非"保留"语义）。是否支持日期
+                 # 清空属产品决策，未定案前如实标注、不冒充已修。
                  m["memory_date"] if (memory_date is _UNSET
                                       or memory_date is None)
                  else memory_date,
