@@ -977,3 +977,65 @@ class TestFourthRound20261005:
         st = gate._auth_failures.get("10.7.0.1")
         assert st is not None and not st.get("expired_reported"), \
             "sink 失败时保留未消费状态（下轮重试），不静默丢"
+
+
+class TestSelfAuditRound2:
+    """2026-10-05 第二轮自查（第五轮前）。"""
+
+    def test_sink_partial_failure_no_duplicate_audit(self, actors,
+                                                     monkeypatch):
+        """自查 B：sink 批内单条审计失败——不重复写已成功条目
+        （到期事件一次性语义），状态照常回收，失败条 stderr 留痕。"""
+        from mariposa import db, gate
+        from mariposa.audit import service as audit_service
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        calls = {"n": 0}
+
+        def flaky_record(event_type, actor, resource_id=None, payload=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("2nd write fails")
+            return _orig_record_isolated(event_type, actor,
+                                         resource_id=resource_id,
+                                         payload=payload)
+
+        _orig_record_isolated = audit_service.record_isolated
+        monkeypatch.setattr(audit_service, "record_isolated",
+                            flaky_record)
+        # lifespan sink 直接经 gate 注入等价行为
+        def sink(events):
+            for ip, payload in events:
+                try:
+                    audit_service.record_isolated(
+                        "auth.lock.expired", "system", resource_id=ip,
+                        payload={**payload, "consumer": "maintain"})
+                except Exception:
+                    pass  # app sink 的单条留痕语义（此处测 gate 端）
+
+        gate.set_expiry_sink(sink)
+        for i in range(3):
+            for _ in range(5):
+                gate.note_auth_failure(f"10.6.0.{i}")
+        fake_now[0] += 7 * 86400
+        gate._maintain()
+        gate._maintain()
+        with db.formal() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM audit_events WHERE"
+                " event_type='auth.lock.expired'").fetchone()["c"]
+        assert n == 2, "第 2 条失败不得重试重写（3 锁至多 2 条成功）"
+        assert not gate._auth_failures, "部分失败仍照常回收，不积压"
+
+    def test_trailing_slash_paths_do_not_crash(self, actors):
+        """自查 C：/mcp/、/api/ 尾斜杠等 redirect/404 路径不炸，
+        且经过 middleware 门禁链。"""
+        with _client() as c:
+            r1 = c.post("/mcp/", json={"jsonrpc": "2.0", "id": 1,
+                                       "method": "tools/list"},
+                        headers=AUTH_J, follow_redirects=False)
+            r2 = c.get("/api/", headers=AUTH_J)
+            r3 = c.get("/static/nothing.png")
+        assert r1.status_code in (307, 404, 200)
+        assert r2.status_code in (404, 307, 200)
+        assert r3.status_code == 404
