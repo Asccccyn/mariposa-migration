@@ -102,6 +102,18 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         _audit.record_isolated(event_type, "system", resource_id=_ip,
                                payload={**payload, "transport": "mcp"})
 
+    def _proto_rate_guard(msg_id=None):
+        """AF-GATE-02（四轮复审）：协议/信封错误返回前统一计读档
+        ——错误路径不是免费通行；超限时以 429 顶替原协议错误。"""
+        import math as _math
+        _w = _gate.check_rate("read", principal.principal_id)
+        if _w > 0:
+            _s = max(1, _math.ceil(_w))
+            return _gate_rpc_error(
+                msg_id, "RATE_LIMITED",
+                f"请求过于频繁（读档），{_s}s 后重试", 429, _s)
+        return None
+
     _ip = _gate.client_ip(request)
     _expired = _gate.take_lock_expired_event(_ip)
     if _expired is not None:
@@ -155,11 +167,14 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     try:
         clen_n = int(clen) if clen else None
     except ValueError:
-        return _rpc_error(None, -32600,
-                          "invalid Content-Length header")
+        _r = _proto_rate_guard()
+        return _r or _rpc_error(None, -32600,
+                                "invalid Content-Length header")
     if clen_n is not None and clen_n > _BODY_MAX_BYTES:
-        return _rpc_error(None, -32600,
-                          f"request body too large (> {_BODY_MAX_BYTES})")
+        _r = _proto_rate_guard()
+        return _r or _rpc_error(None, -32600,
+                                f"request body too large"
+                                f" (> {_BODY_MAX_BYTES})")
     # 复审（2026-10-01）：流式累计 + 即时截停（chunked 无 CL 同样护住）
     total = 0
     chunks: list[bytes] = []
@@ -168,26 +183,30 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             continue
         total += len(chunk)
         if total > _BODY_MAX_BYTES:
-            return _rpc_error(None, -32600,
-                              f"request body too large"
-                              f" (> {_BODY_MAX_BYTES})")
+            _r = _proto_rate_guard()
+            return _r or _rpc_error(None, -32600,
+                                    f"request body too large"
+                                    f" (> {_BODY_MAX_BYTES})")
         chunks.append(chunk)
     raw = b"".join(chunks)
     try:
         body = json.loads(raw)
     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        return _rpc_error(None, -32700, "Parse error")
+        _r = _proto_rate_guard()
+        return _r or _rpc_error(None, -32700, "Parse error")
     # CB-048（2026-10-02 审计 P2）：合法 JSON 不等于合法 RPC envelope
     # ——body=[]/null/数值、method 非字符串、params/arguments 非
     # object 都是结构化 -32600，不是未处理 500
     if not isinstance(body, dict):
-        return _rpc_error(None, -32600,
-                          "invalid request: body must be an object")
+        _r = _proto_rate_guard()
+        return _r or _rpc_error(None, -32600,
+                                "invalid request: body must be an object")
     msg_id = body.get("id")
     method = body.get("method", "")
     if not isinstance(method, str):
-        return _rpc_error(msg_id, -32600,
-                          "invalid request: method must be a string")
+        _r = _proto_rate_guard(msg_id)
+        return _r or _rpc_error(msg_id, -32600,
+                                "invalid request: method must be a string")
 
     # RE-GATE-03（三轮复审）：元方法（initialize/notifications/未知
     # method）与 tools/list 统一计读档——认证入口不存在不限速分支；
@@ -203,8 +222,10 @@ async def handle(request: Request, profile: str) -> JSONResponse:
 
     allowed = PROFILE_PRINCIPALS[profile]
     if principal.principal_id not in allowed:
-        return _rpc_error(msg_id, -32002,
-                          f"binding principal not allowed on this profile")
+        _r = _proto_rate_guard(msg_id)
+        return _r or _rpc_error(
+            msg_id, -32002,
+            f"binding principal not allowed on this profile")
 
     if method == "initialize":
         result = {
@@ -225,8 +246,9 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     if method == "tools/call":
         params = body.get("params") or {}
         if not isinstance(params, dict):
-            return _rpc_error(msg_id, -32600,
-                              "invalid params: must be an object")
+            _r = _proto_rate_guard(msg_id)
+            return _r or _rpc_error(msg_id, -32600,
+                                    "invalid params: must be an object")
         name = str(params.get("name", ""))
         # RA-008：缺省与 false/[]/0 区分——显式非 object 一律拒绝，
         # false 不得经 or {} 变空参执行成写请求
@@ -234,8 +256,10 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         if arguments is None:
             arguments = {}
         if not isinstance(arguments, dict):
-            return _rpc_error(msg_id, -32600,
-                              "invalid params: arguments must be an object")
+            _r = _proto_rate_guard(msg_id)
+            return _r or _rpc_error(msg_id, -32600,
+                                    "invalid params: arguments must be"
+                                    " an object")
         canonical = _canonical_name(name)
         # GATE-01：成功调用按能力分类计档（读扣读档、写扣写档，
         # 与 HTTP /api 通道同一档位语义）

@@ -33,49 +33,84 @@ async def lifespan(app: FastAPI):
     schema.migrate()
     schema.migrate_runtime()
     v1_compat.register_v1_compat()
+    # AF-GATE-03：门禁维护流程的到期事件消费端（隔离事务写审计）
+    def _gate_expiry_sink(events):
+        import sys
+        from .audit import service as _audit
+        for ip, payload in events:
+            try:
+                _audit.record_isolated(
+                    "auth.lock.expired", "system", resource_id=ip,
+                    payload={**payload, "consumer": "maintain"})
+            except Exception as e:
+                sys.stderr.write(
+                    f"[gate] auth.lock.expired (maintain) audit write "
+                    f"failed for {ip}: {e!r}\n")
+                raise
+    gate.set_expiry_sink(_gate_expiry_sink)
     yield
 
 
 app = FastAPI(title="mariposa", version="0.1.0", lifespan=lifespan)
 
 
-@app.middleware("http")
-async def _unauthenticated_surface_gate(request: Request, call_next):
-    """非 /api、/mcp 路径的 IP 级门禁（自查①，2026-10-05）。
+def _locked_response(seconds: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=423,
+        content={"ok": False, "error": {"code": "AUTH_LOCKED",
+                                        "message": "来源已临时锁定"
+                                        f"（约 {seconds} 秒后解除）",
+                                        "detail": {"retry_after":
+                                                   seconds}}},
+        headers={"Retry-After": str(seconds)})
 
-    /health、/、/static、/app 此前完全绕过限速与锁定——公网上是
-    免费打点面。这些路径无认证语义，只做 IP 级匿名档限速 + 锁定
-    检查（在 /api 上触发锁定的来源，静态面同样被挡）。/api 与
-    /mcp 不在此计档——端点内的 _authenticate_tracked 已有完整
-    语义（认证失败才计匿名档），middleware 再计会双扣。
+
+def _rate_limited_response(seconds: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"ok": False, "error": {"code": "RATE_LIMITED",
+                                        "message": "请求过于频繁，"
+                                        f"约 {seconds} 秒后重试",
+                                        "detail": {"retry_after":
+                                                   seconds}}},
+        headers={"Retry-After": str(seconds)})
+
+
+def _surface_managed(path: str) -> bool:
+    """有真实 handler 的路径（其门禁语义由端点/适配器承担）——
+    精确匹配，宽 startswith 会把 /apiX、/mcpjunk 等未注册路径错误
+    豁免（AF-GATE-02）。"""
+    return (path.startswith("/api/")
+            or path == "/mcp" or path == "/mcp/maintenance")
+
+
+@app.middleware("http")
+async def _surface_gate(request: Request, call_next):
+    """全路径 IP 级门禁（自查① + AF-GATE-02，2026-10-05）。
+
+    - 锁定检查对**一切路径**生效（含 /api、/mcp 与未注册路径）：
+      IP 封禁不该有绕行面；
+    - 匿名档预检覆盖无 handler 的面（静态/未知路径）；
+    - 404/405 事后补计匿名档：请求未被任何端点处理，不存在双扣
+      （/api/unknown、/apiX、错误 HTTP 方法等不再免费通行）。
     """
-    path = request.url.path
-    if path.startswith(("/api", "/mcp")):
-        return await call_next(request)
     ip = gate.client_ip(request)
     remain = gate.assert_not_locked(ip)
     if remain > 0:
-        seconds = max(1, math.ceil(remain))
-        return JSONResponse(
-            status_code=423,
-            content={"ok": False, "error": {"code": "AUTH_LOCKED",
-                                            "message": "来源已临时锁定"
-                                            f"（约 {seconds} 秒后解除）",
-                                            "detail": {"retry_after":
-                                                       seconds}}},
-            headers={"Retry-After": str(seconds)})
-    wait = gate.check_rate("anon", ip)
-    if wait > 0:
-        seconds = max(1, math.ceil(wait))
-        return JSONResponse(
-            status_code=429,
-            content={"ok": False, "error": {"code": "RATE_LIMITED",
-                                            "message": "请求过于频繁，"
-                                            f"约 {seconds} 秒后重试",
-                                            "detail": {"retry_after":
-                                                       seconds}}},
-            headers={"Retry-After": str(seconds)})
-    return await call_next(request)
+        return _locked_response(max(1, math.ceil(remain)))
+    path = request.url.path
+    if not _surface_managed(path):
+        wait = gate.check_rate("anon", ip)
+        if wait > 0:
+            return _rate_limited_response(max(1, math.ceil(wait)))
+    response = await call_next(request)
+    if response.status_code in (404, 405):
+        # 未被任何端点处理的请求：事后补计匿名档；计数即满时以
+        # 429 顶替 404/405（本请求不再免费通行）
+        wait = gate.check_rate("anon", ip)
+        if wait > 0:
+            return _rate_limited_response(max(1, math.ceil(wait)))
+    return response
 
 
 @app.get("/health")

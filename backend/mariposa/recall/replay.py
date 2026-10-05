@@ -84,14 +84,23 @@ def revalidate_replayed(fn_name: str, saved: dict,
             _judge_down = True
     if _judge_down and isinstance(saved.get("candidates"), list) \
             and saved["candidates"]:
+        # CR-NAV-01（2026-10-05 四轮复审）：judge 不可用时抑制的是
+        # **带正文的业务候选**；无正文结构卡（导航卡，fresh 的
+        # navigate 不经 judge、任何 judge 状态下都交付）不在抑制
+        # 范围——按必要角色为空集识别，与 fresh 导航同权保留
+        from ..retrieval.judges.typesafe_jev import \
+            required_excerpt_roles as _nav_roles
+        _nav_kept = [c for c in saved["candidates"]
+                     if isinstance(c, dict) and not _nav_roles(c)]
         degraded = dict(saved)
-        degraded["candidates"] = []
-        degraded["degraded_reasons"] = list(
-            saved.get("degraded_reasons") or []) + [
-                "judge_disabled_replay_body_suppressed"]
-        degraded["coverage"] = dict(saved.get("coverage") or {})
-        degraded["coverage"]["judge"] = "unavailable"
-        degraded["delivery_action"] = "no_candidates"
+        degraded["candidates"] = _nav_kept
+        if len(_nav_kept) != len(saved["candidates"]):
+            degraded["degraded_reasons"] = list(
+                saved.get("degraded_reasons") or []) + [
+                    "judge_disabled_replay_body_suppressed"]
+            degraded["coverage"] = dict(saved.get("coverage") or {})
+            degraded["coverage"]["judge"] = "unavailable"
+            degraded["delivery_action"] = "no_candidates"
         saved = degraded
     elif (_profile is not None
             and isinstance(saved.get("candidates"), list)):
