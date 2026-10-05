@@ -102,11 +102,19 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         _audit.record_isolated(event_type, "system", resource_id=_ip,
                                payload={**payload, "transport": "mcp"})
 
+    _meta_metered = False
+
     def _proto_rate_guard(msg_id=None):
         """AF-GATE-02（四轮复审）：协议/信封错误返回前统一计读档
-        ——错误路径不是免费通行；超限时以 429 顶替原协议错误。"""
+        ——错误路径不是免费通行；超限时以 429 顶替原协议错误。
+        五轮修订：method 级 meta 计档（initialize/notifications/未知
+        method）已扣过读档时共享，不再二次扣（wrong_profile 双扣）。"""
+        nonlocal _meta_metered
+        if _meta_metered:
+            return None
         import math as _math
         _w = _gate.check_rate("read", principal.principal_id)
+        _meta_metered = True
         if _w > 0:
             _s = max(1, _math.ceil(_w))
             return _gate_rpc_error(
@@ -214,6 +222,7 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     if method != "tools/call":
         import math as _math
         _meta_wait = _gate.check_rate("read", principal.principal_id)
+        _meta_metered = True  # 本请求读档已计（协议错误分支共享）
         if _meta_wait > 0:
             _ws = max(1, _math.ceil(_meta_wait))
             return _gate_rpc_error(
