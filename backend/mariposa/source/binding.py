@@ -41,16 +41,21 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         if not conn.execute("SELECT 1 FROM memories WHERE memory_id=?",
                             (memory_id,)).fetchone():
             raise NotFound("memory not found", memory_id=memory_id)
-        start_id, end_id = start_message_id, end_message_id
+        resolved = None
         if members is not None:
-            _validate_members(conn, conversation_id, members,
-                              start_char_offset, end_char_offset)
+            # 自审⑤：成员校验内部已解析首→末区间（含路径序/偏移/钉
+            # hash），结果直接复用——不再跑第二遍 validate_range
+            resolved = _validate_members(
+                conn, conversation_id, members,
+                start_char_offset, end_char_offset)
             start_id = members[0]["source_message_id"]
             end_id = members[-1]["source_message_id"]
-        # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
-        resolved = source_query.validate_range(
-            conversation_id, start_id, end_id,
-            start_char_offset, end_char_offset, conn=conn)
+        else:
+            start_id, end_id = start_message_id, end_message_id
+            # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
+            resolved = source_query.validate_range(
+                conversation_id, start_id, end_id,
+                start_char_offset, end_char_offset, conn=conn)
         binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
         conn.execute(
             "INSERT INTO memory_source_bindings(binding_id, memory_id,"
@@ -113,8 +118,12 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
 
 
 def _validate_members(conn, conversation_id: str, members: list[dict],
-                      start_char_offset, end_char_offset) -> None:
-    """成员 manifest 校验（契约 §4.4）：形状/归属/发布/路径序/钉 hash。"""
+                      start_char_offset, end_char_offset) -> dict:
+    """成员 manifest 校验（契约 §4.4）：形状/归属/发布/路径序/钉 hash。
+
+    返回首→末区间解析结果（含偏移校验，与 legacy 路径同一契约）——
+    调用方直接复用，不二次校验。
+    """
     if not isinstance(members, list) or not members:
         raise Forbidden("members 必须是非空数组", code="INVALID_ARGUMENT")
     ids: list[str] = []
@@ -149,9 +158,10 @@ def _validate_members(conn, conversation_id: str, members: list[dict],
     if target is None or target["id"] != conv_id:
         raise NotFound("member not in selection conversation",
                        conversation_id=conversation_id)
-    # 成员必须在首→末 parent 路径上且按路径序（复用区间解析器）
+    # 首末区间+偏移一次性解析（路径/偏移/发布同一契约；SIBLING 拒绝）
     resolved = source_query.validate_range(
-        conversation_id, ids[0], ids[-1], None, None, conn=conn)
+        conversation_id, ids[0], ids[-1], start_char_offset,
+        end_char_offset, conn=conn)
     order = {mid: idx for idx, mid in enumerate(resolved["path_order"])}
     last_idx = -1
     for sid in ids:
@@ -173,6 +183,7 @@ def _validate_members(conn, conversation_id: str, members: list[dict],
                 "成员 content_hash 与当前行不符（消息已修订；按新修订"
                 "重新生成 manifest）", code="SOURCE_HASH_MISMATCH",
                 source_message_id=m["source_message_id"])
+    return resolved
 
 
 def open_selection(selection: dict, include_content: bool = False) -> dict:
@@ -199,6 +210,7 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
                            conversation_id=conversation_id)
         out_members = []
         drifted = []
+        fetched: list = []
         for i, m in enumerate(members):
             sid = m.get("source_message_id") if isinstance(m, dict) else None
             if not isinstance(sid, str):
@@ -212,12 +224,38 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
             if row is None or row["conversation_id"] != conv["id"]:
                 raise NotFound("member not found in conversation",
                                source_message_id=sid)
+            fetched.append((sid, m, row))
+        # 自审④：读回路径与写入路径同一偏移口径——非布尔整数、
+        # 0<=off<=len(text)（code point 半开区间），不做静默钳制
+        for label, off, bound_row in (
+                ("start_char_offset", selection.get("start_char_offset"),
+                 fetched[0][2]),
+                ("end_char_offset", selection.get("end_char_offset"),
+                 fetched[-1][2])):
+            if off is None:
+                continue
+            if isinstance(off, bool) or not isinstance(off, int):
+                raise Forbidden(f"{label} 必须是整数（code point 口径）",
+                                code="SOURCE_RANGE_OFFSET", value=repr(off))
+            if not (0 <= off <= len(bound_row["text"] or "")):
+                raise Forbidden(
+                    f"{label} 超出成员文本范围（半开区间口径）",
+                    code="SOURCE_RANGE_OFFSET", offset=off,
+                    text_len=len(bound_row["text"] or ""))
+        if len(fetched) == 1 and \
+                selection.get("start_char_offset") is not None and \
+                selection.get("end_char_offset") is not None and \
+                selection["start_char_offset"] > selection[
+                    "end_char_offset"]:
+            raise Forbidden("同一条消息上 start 偏移不得大于 end 偏移",
+                            code="SOURCE_RANGE_OFFSET")
+        for i, (sid, m, row) in enumerate(fetched):
             item = source_query._serialize(
                 row, include_content=include_content,
                 char_offsets=(
                     selection.get("start_char_offset") if i == 0 else None,
                     selection.get("end_char_offset")
-                    if i == len(members) - 1 else None))
+                    if i == len(fetched) - 1 else None))
             pinned = m.get("content_hash")
             member_drift = None
             if isinstance(pinned, str):
