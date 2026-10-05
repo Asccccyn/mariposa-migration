@@ -334,7 +334,8 @@ def open_range(conversation_id: str, start_message_id: str,
 def validate_range(conversation_id: str, start_message_id: str,
                    end_message_id: str,
                    start_char_offset=None, end_char_offset=None,
-                   include_unpublished: bool = False) -> dict:
+                   include_unpublished: bool = False,
+                   conn=None) -> dict:
     """区间语义校验（binding 与 range.open 共用；SL-05/06）。
 
     - 消息必须存在且属于同一会话；
@@ -342,44 +343,60 @@ def validate_range(conversation_id: str, start_message_id: str,
       无断链/循环）；sibling 分支拒绝（SOURCE_RANGE_NOT_PATH）；
     - 偏移必须是非布尔整数，且 0 <= off <= len(text)；同一条消息上
       start 偏移不得大于 end 偏移。
+
+    conn（迁移 31/WP2）：调用方事务注入——hold 与来源绑定合并提交时
+    在同一写事务内校验，不在写锁内另读一份旧快照（方案 §3.3）。
     """
-    with db.formal() as conn:
-        conv = _find_conversation(conn, conversation_id)
-        if conv is None:
-            raise NotFound("source conversation not found",
-                           conversation_id=conversation_id)
-        pubflt = "" if include_unpublished else " AND published=1"
-        start = _find_message_any(conn, start_message_id, pubflt,
-                                  provider=conv["provider"])
-        end = _find_message_any(conn, end_message_id, pubflt,
-                                provider=conv["provider"])
-        if start is None or end is None:
-            raise NotFound("range message not found",
-                           start=start_message_id, end=end_message_id)
-        for label, m in (("start", start), ("end", end)):
-            if m["conversation_id"] != conv["id"]:
-                raise NotFound(f"{label} message not in conversation")
-        # 偏移口径校验（SL-05）：非布尔整数拒绝，不做 int() 静默截断
-        for label, off in (("start_char_offset", start_char_offset),
-                           ("end_char_offset", end_char_offset)):
-            if off is not None and (isinstance(off, bool)
-                                    or not isinstance(off, int)):
-                raise Forbidden(
-                    f"{label} 必须是整数（Unicode code point 口径）",
-                    code="SOURCE_RANGE_OFFSET", value=repr(off))
-        for label, m, off in (("start", start, start_char_offset),
-                              ("end", end, end_char_offset)):
-            if off is not None and not (0 <= off <= len(m["text"] or "")):
-                raise Forbidden(
-                    f"{label}_char_offset 超出消息文本范围（半开区间口径）",
-                    code="SOURCE_RANGE_OFFSET", offset=off,
-                    text_len=len(m["text"] or ""))
-        if (start["id"] == end["id"] and start_char_offset is not None
-                and end_char_offset is not None
-                and start_char_offset > end_char_offset):
-            raise Forbidden("同一条消息上 start 偏移不得大于 end 偏移",
-                            code="SOURCE_RANGE_OFFSET")
-        path_ids = _parent_path_ids(conn, start, end, pubflt)
+    if conn is not None:
+        return _validate_range_on(conn, conversation_id, start_message_id,
+                                  end_message_id, start_char_offset,
+                                  end_char_offset, include_unpublished)
+    with db.formal() as c:
+        return _validate_range_on(c, conversation_id, start_message_id,
+                                  end_message_id, start_char_offset,
+                                  end_char_offset, include_unpublished)
+
+
+def _validate_range_on(conn, conversation_id: str, start_message_id: str,
+                       end_message_id: str,
+                       start_char_offset, end_char_offset,
+                       include_unpublished: bool) -> dict:
+    conv = _find_conversation(conn, conversation_id)
+    if conv is None:
+        raise NotFound("source conversation not found",
+                       conversation_id=conversation_id)
+    pubflt = "" if include_unpublished else " AND published=1"
+    start = _find_message_any(conn, start_message_id, pubflt,
+                              provider=conv["provider"])
+    end = _find_message_any(conn, end_message_id, pubflt,
+                            provider=conv["provider"])
+    if start is None or end is None:
+        raise NotFound("range message not found",
+                       start=start_message_id, end=end_message_id)
+    for label, m in (("start", start), ("end", end)):
+        if m["conversation_id"] != conv["id"]:
+            raise NotFound(f"{label} message not in conversation")
+    # 偏移口径校验（SL-05）：非布尔整数拒绝，不做 int() 静默截断
+    for label, off in (("start_char_offset", start_char_offset),
+                       ("end_char_offset", end_char_offset)):
+        if off is not None and (isinstance(off, bool)
+                                or not isinstance(off, int)):
+            raise Forbidden(
+                f"{label} 必须是整数（Unicode code point 口径）",
+                code="SOURCE_RANGE_OFFSET", value=repr(off))
+    for label, m, off in (("start", start, start_char_offset),
+                          ("end", end, end_char_offset)):
+        if off is not None and not (0 <= off <= len(m["text"] or "")):
+            raise Forbidden(
+                f"{label}_char_offset 超出消息文本范围（半开区间口径）",
+                code="SOURCE_RANGE_OFFSET", offset=off,
+                text_len=len(m["text"] or ""))
+    if (start["id"] == end["id"] and start_char_offset is not None
+            and end_char_offset is not None
+            and start_char_offset > end_char_offset):
+        raise Forbidden("同一条消息上 start 偏移不得大于 end 偏移",
+                        code="SOURCE_RANGE_OFFSET")
+    path_ids = _parent_path_ids(conn, start, end, pubflt)
     return {"conversation": conv, "start": start, "end": end,
             "path_ids": set(path_ids), "path_order": path_ids,
             "start_content_hash": start["content_hash"],

@@ -182,7 +182,10 @@ _DOMAIN_IDEMPOTENT_CAPS = frozenset({
     "memory.delete", "memory.deletion.request",
     "memory.deletion.decide",
     # RE-MEM-01（2026-10-04 复审）：plan 链接纠错同走 atomic_write
-    "plan.memory.correct"})
+    "plan.memory.correct",
+    # WP2（迁移 31，2026-10-05）：宿主自动化 hold 带 operation_id 时走
+    # atomic_write——业务提交与完成回执同事务，t 层崩溃按领域回执恢复
+    "memory.hold"})
 
 #: MEM-07（2026-10-04 二批）：各能力的领域归一化 payload 构造——
 #: 崩溃恢复必须比对领域 payload 身份，不得把另一项操作的结果缓存
@@ -222,7 +225,31 @@ _DOMAIN_PAYLOAD_BUILDERS = {
         "link_id": a.get("link_id"),
         "correction_action": a.get("correction_action"),
         "replacement": a.get("replacement"), "note": a.get("note")},
+    # WP2：与 registry._hold 传给 atomic_write 的 payload 逐字段一致
+    # （改 handler 时同步改这里——MEM-07 同款纪律）。operation_id 是
+    # 键本身，不进 payload
+    "memory.hold": lambda a: hold_domain_payload(a),
 }
+
+
+def hold_domain_payload(a: dict) -> dict:
+    """memory.hold 的领域归一化载荷（handler 与传输恢复共用一份）。"""
+    return {
+        "text": a.get("text"),
+        "why_remember": a.get("why_remember"),
+        "memory_date": a.get("memory_date"),
+        "date_confidence": a.get("date_confidence", "unknown"),
+        "raw_pending": bool(a.get("raw_pending", True)),
+        "original_title": a.get("original_title"),
+        "categories": a.get("categories"),
+        "plan_ids": a.get("plan_ids"),
+        "mood": a.get("mood"),
+        "our_words": a.get("our_words"),
+        "creation_mode": a.get("creation_mode"),
+        "occurred_start": a.get("occurred_start"),
+        "occurred_end": a.get("occurred_end"),
+        "source_selections": a.get("source_selections"),
+    }
 
 
 def _recover_transport_from_domain(principal: Principal, cap: Capability,

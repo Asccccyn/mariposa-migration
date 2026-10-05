@@ -129,11 +129,16 @@ def test_mcp_tools_expose_source(c):
     body = r.json()
     assert body["result"]["content"][0]["text"].startswith("{")
 
-    # worker 的 MCP 工具列表不含 source
+    # worker 的 MCP 工具列表只含 live ingest 两个窄能力（WP1 迁移 30
+    # 起 source.ingest/status 属 worker；真调用还需 stream grant 绑定
+    # 同一 binding）——owner 的其余 source 工具（import/search/绑定）
+    # 仍不泄露给 worker
     r = c.post("/mcp/maintenance", headers=auth("worker"), json={
         "jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     names = {t["name"] for t in r.json()["result"]["tools"]}
-    assert not any(n.startswith("mariposa_source_") for n in names)
+    worker_source = {n for n in names if n.startswith("mariposa_source_")}
+    assert worker_source == {"mariposa_source_ingest",
+                             "mariposa_source_ingest_status"}
 
 
 def test_upload_broken_json_records_failed(c, tmp_path):
