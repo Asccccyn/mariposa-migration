@@ -167,3 +167,126 @@ class TestClientIPResolution:
         from mariposa import gate
         req = self._req("127.0.0.1", {"X-Forwarded-For": "5.5.5.5, 1.1.1.1"})
         assert gate.client_ip(req) == "5.5.5.5"
+
+
+class TestREGATE01WindowQuotaPreserved:
+
+    def test_maintain_keeps_in_window_counts(self, monkeypatch):
+        """RE-GATE-01：回收不得清掉窗口内仍有效的计数（旧实现按
+        最老时间戳删整个 deque，提前释放配额）。"""
+        from mariposa import gate
+        from mariposa import config as cfg
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(cfg, "GATE_RATE_READ_PER_MIN", 3)
+        gate.check_rate("read", "p1")             # t0
+        fake_now[0] += 59
+        gate.check_rate("read", "p1")             # t59
+        gate.check_rate("read", "p1")             # t59（满 3）
+        assert gate.check_rate("read", "p1") > 0  # 第 4 次超限
+        fake_now[0] += 1                          # t60：触发维护
+        gate._maintain()
+        # 复审反例（旧实现）：t60 能"再计 3 次"（维护删整窗提前放
+        # 配额，5 次全过）。正确行为：t0 恰满 60s 合法滑出，窗口
+        # 剩 t59×2 → t60 只能再放 1 次，第 2 次即超限
+        assert gate.check_rate("read", "p1") == 0
+        assert gate.check_rate("read", "p1") > 0, \
+            "窗口内有效计数不得被维护整窗清掉（t60 不得重新放 3 次）"
+
+    def test_capacity_overflow_does_not_evict_active(self, monkeypatch):
+        """RE-GATE-01：容量压力下活跃 principal 窗口不被其他来源
+        挤掉（新键走溢出桶）。"""
+        from mariposa import gate
+        monkeypatch.setattr(gate, "_MAX_TRACKED_KEYS", 3)
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        # 先建 principal-a 的活跃窗口（2 次计数），再施容量压力
+        gate.check_rate("read", "principal-a")
+        gate.check_rate("read", "principal-a")
+        gate.check_rate("anon", "10.0.0.2")
+        gate.check_rate("anon", "10.0.0.3")
+        # 新来源键超容 → 溢出桶；principal-a 的键与计数不受影响
+        assert gate.check_rate("anon", "10.0.0.4") == 0
+        assert ("read", "principal-a") in gate._rate_windows, \
+            "容量压力不得挤掉既有主体的活跃窗口"
+        assert len(gate._rate_windows[("read", "principal-a")]) == 2, \
+            "主体计数不得被容量压力清掉"
+
+
+class TestREGATE02LockExpirySurvivesMaintain:
+
+    def test_uncosumed_expiry_not_reclaimed_by_other_sources(
+            self, actors, monkeypatch):
+        """RE-GATE-02：锁定到期后，其他来源触发的维护不得回收该
+        状态（TTL 锚 = max(last_fail, locked_until)）；来源下次请求
+        仍能产出一次性 auth.lock.expired 审计。"""
+        from mariposa import db, gate
+        from mariposa import config as cfg
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(cfg, "GATE_LOCKOUT_BASE_SECONDS", 10)
+        gate.reset_for_tests()
+        with _client() as c:
+            for _ in range(5):
+                c.get("/api/capabilities", headers=AUTH_BAD)
+            fake_now[0] += 11  # 锁到期
+            # 其他来源触发限速 → _maintain 跑过
+            gate.check_rate("anon", "8.8.8.8")
+            gate._maintain()
+            st = gate._auth_failures.get("testclient")
+            assert st is not None, "到期未消费状态不得被维护回收"
+            # 原来源成功认证 → 一次性到期事件落审计
+            r = c.get("/api/capabilities", headers=AUTH_J)
+            assert r.status_code == 200
+        with db.formal() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM audit_events WHERE"
+                " event_type='auth.lock.expired'").fetchone()["c"]
+        assert n == 1
+
+
+class TestREGATE03MCPMetaMethods:
+
+    def test_initialize_and_unknown_method_rate_limited(self, actors,
+                                                        monkeypatch):
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_READ_PER_MIN", 1)
+        with _client() as c:
+            first = c.post("/mcp", json={"jsonrpc": "2.0", "id": 1,
+                                         "method": "initialize"},
+                           headers=AUTH_J)
+            second = c.post("/mcp", json={"jsonrpc": "2.0", "id": 2,
+                                          "method": "initialize"},
+                            headers=AUTH_J)
+            unknown = c.post("/mcp", json={"jsonrpc": "2.0", "id": 3,
+                                           "method": "no/such"},
+                             headers=AUTH_J)
+        assert first.status_code == 200
+        assert second.status_code == 429, "initialize 必须计读档"
+        assert unknown.status_code == 429, "未知 method 必须计读档"
+
+
+class TestREGATE04SubsecondConsistency:
+
+    def test_lock_subsecond_retry_after_consistent(self, actors,
+                                                   monkeypatch):
+        """RE-GATE-04：亚秒锁定剩余（如 0.4s）时 body 的
+        retry_after、message 与 Retry-After 头必须是同一个 ceil 值
+        （≥1），不再出现 body=0 / header=1 分裂。"""
+        from mariposa import gate
+        from mariposa import config as cfg
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(cfg, "GATE_LOCKOUT_BASE_SECONDS", 1)
+        gate.reset_for_tests()
+        with _client() as c:
+            for _ in range(5):
+                c.get("/api/capabilities", headers=AUTH_BAD)
+            fake_now[0] += 0.6  # 锁还剩 0.4s
+            r = c.get("/api/capabilities", headers=AUTH_J)
+        assert r.status_code == 423
+        header = int(r.headers["Retry-After"])
+        detail = r.json()["error"]["detail"]["retry_after"]
+        assert header == detail == 1, \
+            f"Retry-After({header}) 与 detail({detail}) 必须同为 ceil≥1"
+        assert "约 1 秒" in r.json()["error"]["message"]

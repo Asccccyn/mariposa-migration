@@ -30,30 +30,24 @@ class JudgeUnavailable(Exception):
 
 
 def required_excerpt_roles(candidate: dict) -> frozenset:
-    """候选**必要证据角色**集合（无副作用共享判定，CR-01-R1/R2）。
+    """候选**必要证据角色**集合（无副作用共享判定，CR-01-R1/R2/R3）。
 
-    与 fresh 真正的门控（`_candidate_segments` 的段构成）同源：
-    - raw/source 通道：必要段 raw_messages → source_excerpt；
-    - words 专项通道：必要段 our_words（话语本体即目标）→
-      word_excerpt；
-    - 普通召回中 our_words 命中（word target）：必要段 our_words
-      match → word_excerpt（event_text 主体段是"尽量在场"，不是
-      交付前提，不并入必要集）；
-    - **普通事件卡：event_text 段永远在场**（命中时双标 match+event、
-      仅标题命中/结构拉入时单标 event_evidence——"事件事实主体，
-      标题不能替代"）→ 必要角色恒为 event_excerpt，**matched_fields
-      里的标题命中不能把它降级成 title_cue**（CR-01-R2：上版判定
-      复刻了无运行时调用者的 _outbound_excerpt，导致 title-only
-      命中在缺事件许可时仍重放出正文、且纯事件许可误杀重放）。
+    语义以 2026-10-05 三轮复审的六场景 × 32 许可子集实测矩阵为准
+    （fresh 交付 ⟺ 必要角色齐备）：
+    - raw/source 通道 → source_excerpt；
+    - words 专项通道 → word_excerpt；
+    - **其余全部 event 卡——包括 our_words 命中（word-target）与
+      event_text+our_words 双命中——恒为 event_excerpt**：fresh 对
+      word-target 在 event 许可下交付（match 段可由事件正文回退
+      支撑），缺 event 许可时不交付。matched_fields 里出现
+      our_words **不改变通道归属**，不得当成 words 专项（CR-01-R3
+      上下两版的教训：双必要误杀 event-only 格、单凭 word 许可
+      又漏正文——正解是通道单一真源）。
     """
     channel = candidate.get("channel") or "event"
-    fields = {f.split(".", 1)[0] if isinstance(f, str) else f
-              for f in (candidate.get("matched_fields") or [])}
     if channel in ("raw", "source"):
         return frozenset({"source_excerpt"})
     if channel in ("word", "words"):
-        return frozenset({"word_excerpt"})
-    if "our_words" in fields:
         return frozenset({"word_excerpt"})
     return frozenset({"event_excerpt"})
 

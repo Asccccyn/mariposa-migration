@@ -229,27 +229,30 @@ def list_relations(a: dict) -> dict:
                     q_sid, q_eid = q_path[0], q_path[-1]
                     q_set = set(q_path)
 
-                    def _cover_on(mid, start_id, end_id, s_off, e_off):
-                        """区间在消息 mid 上的覆盖（lo, hi）；hi=None
-                        表示覆盖到消息末尾（开区间端/内部消息）。
-                        ASRC-07：lo>=hi（有界端）是空半开覆盖——
-                        返回 None 表示该消息上零覆盖。"""
+                    def _cover_on(mid, start_id, end_id, s_off, e_off,
+                                  text_len):
+                        """区间在消息 mid 上的覆盖 [lo, hi)。
+
+                        ASRC-07（三轮复审）：None 尾端用消息**真实
+                        长度**归一（此前视为无界，s_off==len 的零
+                        覆盖漏过空检测）；归一后 lo>=hi 是空半开
+                        覆盖——返回 None 表示该消息上零覆盖。"""
                         lo = 0
-                        hi = None
+                        hi = text_len
                         if mid == start_id and s_off is not None:
                             lo = s_off
                         if mid == end_id and e_off is not None:
                             hi = e_off
-                        if hi is not None and lo >= hi:
+                        if lo >= hi:
                             return None
                         return lo, hi
 
                     def _ints_overlap(q, b) -> bool:
                         qs, qe = q
                         bs, be = b
-                        if be is not None and qs >= be:
+                        if qs >= be:
                             return False
-                        if qe is not None and bs >= qe:
+                        if bs >= qe:
                             return False
                         return True
 
@@ -260,6 +263,19 @@ def list_relations(a: dict) -> dict:
                         " c.provider_conversation_id=b.conversation_id"
                         " WHERE c.id=? OR c.provider_conversation_id=?",
                         (conv_id, conv_id)).fetchall()
+                    # 共享消息的真实文本长度（code point，与 validate
+                    # 的 Python len 同口径）——零覆盖判定需要
+                    _len_cache: dict[str, int] = {}
+
+                    def _text_len(mid):
+                        if mid not in _len_cache:
+                            row = conn.execute(
+                                "SELECT text FROM source_messages WHERE"
+                                " id=?", (mid,)).fetchone()
+                            _len_cache[mid] = len(
+                                (row["text"] or "") if row else "")
+                        return _len_cache[mid]
+
                     for r in rows:
                         # 绑定路径按查询的会话身份解析——绑定的端点
                         # 消息不属于该会话（含他方会话撞序号）时
@@ -278,11 +294,13 @@ def list_relations(a: dict) -> dict:
                             qc = _cover_on(
                                 m_id, q_sid, q_eid,
                                 anchor.get("start_char_offset"),
-                                anchor.get("end_char_offset"))
+                                anchor.get("end_char_offset"),
+                                _text_len(m_id))
                             bc = _cover_on(
                                 m_id, b_sid, b_eid,
                                 r["start_char_offset"],
-                                r["end_char_offset"])
+                                r["end_char_offset"],
+                                _text_len(m_id))
                             # ASRC-07：任一侧在该消息上零覆盖
                             #（空半开区间）即跳过
                             if qc is None or bc is None:

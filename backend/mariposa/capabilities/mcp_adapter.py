@@ -115,10 +115,13 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     try:
         _remain = _gate.assert_not_locked(_ip)
         if _remain > 0:
+            # RE-GATE-04：ceil 且至少 1，message/data/header 同值
+            import math as _math
+            _lock_s = max(1, _math.ceil(_remain))
             raise _ME(
-                f"认证失败次数过多，来源已临时锁定（约 {int(_remain)} 秒"
+                f"认证失败次数过多，来源已临时锁定（约 {_lock_s} 秒"
                 "后自动解除）", code="AUTH_LOCKED", http_status=423,
-                retry_after=int(_remain))
+                retry_after=_lock_s)
         token = _bearer(request)
         principal = identity.authenticate(token)
     except _ME as e:
@@ -130,10 +133,11 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                     "auth.locked", {"lock_level": level,
                                     "seconds": seconds}))
             if _wait > 0:
+                import math as _math
+                _ws = max(1, _math.ceil(_wait))
                 return _gate_rpc_error(
                     None, "RATE_LIMITED",
-                    f"认证失败请求过于频繁，{int(_wait) + 1}s 后重试",
-                    429, int(_wait) + 1)
+                    f"认证失败请求过于频繁，{_ws}s 后重试", 429, _ws)
         return JSONResponse(
             {"jsonrpc": "2.0", "id": None,
              "error": {"code": -32001, "message": f"{e.code}: {e}",
@@ -141,8 +145,8 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                                 "retry_after": e.detail.get("retry_after"),
                                 "detail": e.detail}}},
             status_code=e.http_status,
-            headers=({"Retry-After": str(int(
-                e.detail.get("retry_after") or 1))}
+            headers=({"Retry-After": str(max(1, int(
+                e.detail.get("retry_after") or 1)))}
                 if e.http_status in (423, 429) else None))
     _gate.note_auth_success(_ip)
     # GATE-01：主体限速在读体/分发处按 method 分类扣减，认证段不扣
@@ -185,6 +189,18 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         return _rpc_error(msg_id, -32600,
                           "invalid request: method must be a string")
 
+    # RE-GATE-03（三轮复审）：元方法（initialize/notifications/未知
+    # method）与 tools/list 统一计读档——认证入口不存在不限速分支；
+    # tools/call 的能力级读/写档在 call 分支单独计，不在此重复扣
+    if method != "tools/call":
+        import math as _math
+        _meta_wait = _gate.check_rate("read", principal.principal_id)
+        if _meta_wait > 0:
+            _ws = max(1, _math.ceil(_meta_wait))
+            return _gate_rpc_error(
+                msg_id, "RATE_LIMITED",
+                f"请求过于频繁（读档），{_ws}s 后重试", 429, _ws)
+
     allowed = PROFILE_PRINCIPALS[profile]
     if principal.principal_id not in allowed:
         return _rpc_error(msg_id, -32002,
@@ -203,13 +219,7 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         return JSONResponse(status_code=202, content=None)
 
     if method == "tools/list":
-        # GATE-01：按 method 分类扣减（读档）
-        _wait = _gate.check_rate("read", principal.principal_id)
-        if _wait > 0:
-            return _gate_rpc_error(
-                msg_id, "RATE_LIMITED",
-                f"请求过于频繁（读档），{int(_wait) + 1}s 后重试",
-                429, int(_wait) + 1)
+        # 读档已在 method 级统一计（RE-GATE-03 调整）
         return _rpc_result(msg_id, {"tools": _tools_for(principal)})
 
     if method == "tools/call":
@@ -233,10 +243,12 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         _kind = "write" if (_cap is not None and _cap.write) else "read"
         _wait = _gate.check_rate(_kind, principal.principal_id)
         if _wait > 0:
+            import math as _math
+            _ws = max(1, _math.ceil(_wait))
             return _gate_rpc_error(
                 msg_id, "RATE_LIMITED",
                 f"{'写入操作' if _kind == 'write' else '请求'}过于频繁，"
-                f"{int(_wait) + 1}s 后重试", 429, int(_wait) + 1)
+                f"{_ws}s 后重试", 429, _ws)
         try:
             out = registry.invoke(principal, canonical, arguments,
                                   params.get("_client_idempotency_key"))

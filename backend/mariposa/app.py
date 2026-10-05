@@ -6,6 +6,7 @@ MCP / CC 适配器（后续 Phase）复用同一 Registry。
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import asynccontextmanager
 
@@ -115,7 +116,8 @@ def _gate_error_response(e: MariposaError) -> JSONResponse:
     headers = None
     ra = e.detail.get("retry_after")
     if e.http_status in (423, 429):
-        seconds = max(1, int(ra or 1))
+        seconds = max(1, int(ra) if isinstance(ra, (int, float))
+                      else 1)
         headers = {"Retry-After": str(seconds)}
     return JSONResponse(
         status_code=e.http_status,
@@ -157,10 +159,13 @@ def _authenticate_tracked(request: Request):
                 f"{audit_err!r}\n")
     remain = gate.assert_not_locked(ip)
     if remain > 0:
+        # RE-GATE-04：等待秒数 ceil 且至少 1——message/detail/header
+        # 复用同一值，亚秒锁定不再出现 body=0 / header=1 的分裂
+        seconds = max(1, math.ceil(remain))
         raise MariposaError(
-            f"认证失败次数过多，来源已临时锁定（约 {int(remain)} 秒后"
+            f"认证失败次数过多，来源已临时锁定（约 {seconds} 秒后"
             "自动解除）", code="AUTH_LOCKED", http_status=423,
-            retry_after=int(remain))
+            retry_after=seconds)
     try:
         principal = identity.authenticate(_bearer(request))
     except MariposaError:
@@ -171,28 +176,37 @@ def _authenticate_tracked(request: Request):
                                    {"lock_level": level,
                                     "seconds": seconds}))
         if wait > 0:
-            raise MariposaError("认证失败请求过于频繁，请稍后重试",
-                                code="RATE_LIMITED", http_status=429,
-                                retry_after=int(wait) + 1)
+            raise MariposaError(
+                f"认证失败请求过于频繁，约 {max(1, math.ceil(wait))} 秒"
+                "后重试", code="RATE_LIMITED", http_status=429,
+                retry_after=max(1, math.ceil(wait)))
         raise
     gate.note_auth_success(ip)
     return principal
 
 
+def _gate_wait_seconds(wait: float) -> int:
+    """RE-GATE-04：门禁等待秒数统一 ceil 且至少 1——message、
+    detail 与 Retry-After 头复用同一值，不再出现亚秒分裂。"""
+    return max(1, math.ceil(wait))
+
+
 def _rate_limit_read(principal: Principal) -> None:
     wait = gate.check_rate("read", principal.principal_id)
     if wait > 0:
-        raise MariposaError("请求过于频繁（读档），请稍后重试",
+        s = _gate_wait_seconds(wait)
+        raise MariposaError(f"请求过于频繁（读档），约 {s} 秒后重试",
                             code="RATE_LIMITED", http_status=429,
-                            retry_after=int(wait) + 1)
+                            retry_after=s)
 
 
 def _rate_limit_write(principal: Principal) -> None:
     wait = gate.check_rate("write", principal.principal_id)
     if wait > 0:
-        raise MariposaError("写入操作过于频繁，请稍后重试",
+        s = _gate_wait_seconds(wait)
+        raise MariposaError(f"写入操作过于频繁，约 {s} 秒后重试",
                             code="RATE_LIMITED", http_status=429,
-                            retry_after=int(wait) + 1)
+                            retry_after=s)
 
 
 def _rate_limit_capability(principal: Principal, name: str) -> None:

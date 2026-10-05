@@ -328,17 +328,17 @@ class TestF08IntervalSemantics:
         assert m_wide in got, "跨消息带偏移的重叠区间应命中"
         # 查询 [m0@0 .. m0@4) vs 绑定 [m0..m2]（同起点消息，绑定无
         # 起点偏移=消息粒度）：命中；但查询 [m2@9999 .. m2@10000)
-        # ASRC-07（2026-10-04 复审）：查询偏移与范围一并送共享
-        # validator——起点越过消息末尾是超界输入，解析失败保守
-        # 返回空（HTTP 200、total=0），不得静默按消息粒度命中，
-        # 也不得抛错
-        out2 = routing.list_relations({"resource": {
-            "type": "source_range", "conversation_id": conv,
-            "start_message_id": msgs[2], "end_message_id": msgs[2],
-            "start_char_offset": 9999, "end_char_offset": 10000}})
-        got2 = {r["other"]["memory_id"] for r in out2["relations"]
-                if r["domain"] == "source_binding"}
-        assert m_wide not in got2
+        # ASRC-07（2026-10-04 三轮复审）：查询偏移与范围一并送共享
+        # validator——起点越过消息末尾是超界输入，SOURCE_RANGE_OFFSET
+        # 向上冒泡 403（与字符串 offset 的 schema 拒绝一致，不再
+        # 静默 200+空）
+        from mariposa.errors import Forbidden as _F
+        with pytest.raises(_F) as ei:
+            routing.list_relations({"resource": {
+                "type": "source_range", "conversation_id": conv,
+                "start_message_id": msgs[2], "end_message_id": msgs[2],
+                "start_char_offset": 9999, "end_char_offset": 10000}})
+        assert ei.value.code == "SOURCE_RANGE_OFFSET"
 
     def test_anchor_from_other_conversation_never_matches(self, actors):
         """锚定消息属于另一会话（同 sequence）不得命中本会话绑定。"""

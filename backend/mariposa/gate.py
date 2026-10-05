@@ -76,13 +76,19 @@ def _maybe_maintain() -> None:
 
 
 def _maintain() -> None:
-    """锁内全局清理（GATE-03）：
+    """锁内全局清理（GATE-03；RE-GATE-01/02 三轮修订）：
 
-    - 滑动窗口：空 deque 或整窗滑出（最老时间戳已出窗）→ 删键；
-    - 失败状态：锁定中保留；未锁且窗口内仍有活跃失败计数保留；
-      其余（含锁已到期的）在 TTL 内保留升级层级，TTL 过后删除；
-    - 容量：清理后仍超上限 → 淘汰最旧的未锁状态（dict 保插入序）；
-      全在锁中（极端）时不淘汰——锁定状态是安全语义，不做牺牲。
+    - 滑动窗口：**逐项**弹出已滑出窗口的时间戳，全部弹出后才删键
+      （此前"最老时间戳过期即删整个 deque"，把窗口内仍有效的计数
+      一起清掉，提前释放配额——RE-GATE-01）；
+    - 失败状态：锁定中保留；TTL 锚 = max(last_fail, locked_until)
+      （此前只看 last_fail，锁刚到期就被回收，承诺的锁后保留期、
+      到期事件与升级层级一并丢失——RE-GATE-02）；**未消费的到期
+      事件（expired_reported=False 且锁已到期）不回收**——等待该
+      来源下一次请求触发一次性审计，容量淘汰同样绕过；
+    - 容量：滑动窗口只删空键（活跃计数永不被容量挤掉，配额安全
+      优先于内存上限；新键超容走溢出桶，见 check_rate）；失败状态
+      超容时淘汰最旧的未锁且无未消费到期事件的状态。
     """
     global _last_maintain, _ops_since_maintain
     now = _now()
@@ -91,16 +97,24 @@ def _maintain() -> None:
         _ops_since_maintain = 0
         for key in list(_rate_windows.keys()):
             window = _rate_windows[key]
-            if not window or window[0] <= now - _WINDOW_SECONDS:
+            cutoff = now - _WINDOW_SECONDS
+            while window and window[0] <= cutoff:
+                window.popleft()
+            if not window:
                 del _rate_windows[key]
         for ip in list(_auth_failures.keys()):
             st = _auth_failures[ip]
-            if st.get("locked_until", 0.0) > now:
+            locked_until = st.get("locked_until", 0.0)
+            if locked_until > now:
                 continue
             last = st.get("last_fail", 0.0)
             if st.get("fails", 0) > 0 and now - last < _WINDOW_SECONDS:
                 continue
-            if now - last < _STATE_TTL_S:
+            # 未消费的到期事件不回收（RE-GATE-02）：等来源下次请求
+            if (locked_until > 0 and not st.get("expired_reported")):
+                continue
+            anchor = max(last, locked_until)
+            if now - anchor < _STATE_TTL_S:
                 continue
             del _auth_failures[ip]
         if len(_auth_failures) > _MAX_TRACKED_KEYS:
@@ -111,14 +125,10 @@ def _maintain() -> None:
                 st = _auth_failures[ip]
                 if st.get("locked_until", 0.0) > now:
                     continue
+                if (st.get("locked_until", 0.0) > 0
+                        and not st.get("expired_reported")):
+                    continue  # 未消费到期事件：容量淘汰也绕过
                 del _auth_failures[ip]
-                overflow -= 1
-        if len(_rate_windows) > _MAX_TRACKED_KEYS:
-            overflow = len(_rate_windows) - _MAX_TRACKED_KEYS
-            for key in list(_rate_windows.keys()):
-                if overflow <= 0:
-                    break
-                del _rate_windows[key]
                 overflow -= 1
 
 
@@ -237,6 +247,9 @@ def check_rate(kind: str, key: str) -> float:
 
     GATE-04：非正 limit（零/负配置）恒拒绝（60s 等待）——不依赖
     非空 deque 假设，杜绝 IndexError 500。
+    RE-GATE-01：新键插入在容量满时计入**共享溢出桶**——活跃键的
+    计数永不被容量挤掉（配额安全优先）；溢出桶本身有界（多源
+    共享一个窗口，攻击面收窄为聚合限速）。
     """
     _maybe_maintain()
     limit = _limit_for(kind)
@@ -244,7 +257,11 @@ def check_rate(kind: str, key: str) -> float:
     if limit <= 0:
         return _WINDOW_SECONDS
     with _LOCK:
-        window = _rate_windows.setdefault((kind, key), deque())
+        bucket_key = (kind, key)
+        if (bucket_key not in _rate_windows
+                and len(_rate_windows) >= _MAX_TRACKED_KEYS):
+            bucket_key = (kind, "\x00_overflow")
+        window = _rate_windows.setdefault(bucket_key, deque())
         while window and window[0] <= now - _WINDOW_SECONDS:
             window.popleft()
         if len(window) >= limit:

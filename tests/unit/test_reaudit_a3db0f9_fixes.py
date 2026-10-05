@@ -205,16 +205,53 @@ class TestASRC07OffsetsAndEmptyIntervals:
         # 正文 11 个 code points；绑定 [2,6)
         binding.bind("jiaming", mem_id, conv_id, "b", "b",
                      start_char_offset=2, end_char_offset=6)
+        from mariposa.errors import Forbidden as _F
         cases = [
             ("b", "b", 4, 4, 0),   # 空查询 [4,4) → 不命中
             ("b", "b", 2, 6, 1),   # 精确重叠 → 命中
             ("b", "b", 4, 8, 1),   # 部分重叠 → 命中
-            ("b", "b", 999, 1000, 0),  # 超界 → 解析失败不命中不抛错
             ("b", "b", 0, 2, 0),   # 半开相邻 [0,2) 不重叠
         ]
         for s, e, so, eo, want in cases:
             got = len(self._reverse(conv_id, s, e, so, eo)["relations"])
             assert got == want, f"[{so},{eo}) 期望 {want} 得 {got}"
+        # 超界：SOURCE_RANGE_OFFSET 向上冒泡 403（不再静默 200+空）
+        with pytest.raises(_F) as ei:
+            self._reverse(conv_id, "b", "b", 999, 1000)
+        assert ei.value.code == "SOURCE_RANGE_OFFSET"
+
+    def test_tail_omitted_zero_coverage(self, actors):
+        """ASRC-07（三轮）：None 尾端用真实长度归一——start 偏移
+        ==len(text) 的零覆盖不得算相交。"""
+        from mariposa.memory import service as memory
+        from mariposa.source import binding, importer
+        src = pathlib.Path(tempfile.mkdtemp()) / "z0.json"
+        src.write_text(json.dumps([{
+            "uuid": "conv-z0", "chat_messages": [
+                {"uuid": m, "sender": "human", "parent_message_uuid": p,
+                 "created_at": "2026-09-20T10:00:%02d.000Z" % (10 + i),
+                 "content": [{"type": "text", "text": m * 11}]}
+                for i, (m, p) in enumerate(
+                    [("a", None), ("b", "a"), ("c", "b")])]}]),
+            encoding="utf-8")
+        importer.import_file("jiaming", str(src))
+        from mariposa import db
+        with db.formal() as conn:
+            conv = conn.execute(
+                "SELECT id FROM source_conversations WHERE"
+                " provider_conversation_id='conv-z0'").fetchone()
+        mem_id = memory.hold(
+            actors["jiaming"], text="z0 记忆", memory_date="2026-09-20",
+            date_confidence="exact", original_title="z0",
+            categories=["daily"], creation_mode="contemporaneous",
+            raw_pending=False)["memory_id"]
+        # 绑定 [2,11)（尾端省略 = 到消息末尾），查询 [11,末尾) 零覆盖
+        binding.bind("jiaming", mem_id, conv["id"], "b", "b",
+                     start_char_offset=2)
+        got = len(self._reverse(conv["id"], "b", "b", 11)["relations"])
+        assert got == 0, "s_off==len 的零覆盖不得命中"
+        got2 = len(self._reverse(conv["id"], "b", "b", 2)["relations"])
+        assert got2 == 1, "同起点的正常覆盖仍应命中"
 
     def test_empty_binding_zero_coverage(self, actors):
         from mariposa.source import binding
@@ -418,3 +455,171 @@ class TestGATE06IsolatedAudit:
                 c.get("/api/capabilities", headers=AUTH_BAD)
             r = c.get("/api/capabilities", headers=AUTH_J)
         assert r.status_code == 423, "审计失败不得撤销锁定（安全优先）"
+
+
+class TestCR01R3FullProfileMatrix:
+    """CR-01-R3（2026-10-04 三轮复审）：通道 × 许可子集全矩阵回归。
+
+    教训（R1→R2→R3）：逐格修复审点名的反例永远收敛不了——本轮
+    改为**全矩阵**断言"同权"：对每个场景先以全量许可建 session 与
+    operation，再逐个许可子集切换，断言同 operation 重放的候选数
+    与 fresh 新请求完全一致（fresh 是基准，无论其内部门控细节）。
+    5 个文本角色共 32 个子集 × 3 场景 × 2 通道卡。
+    """
+
+    ALL_ROLES = ("event_excerpt", "title_cue", "word_excerpt",
+                 "source_excerpt", "structured_metadata")
+
+    @staticmethod
+    def _register(name, profile):
+        from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class G(typesafe_jev.TypeSafeJevJudge):
+            def __init__(self):
+                super().__init__()
+                self._api_key = "k"
+                self._data_profile = frozenset(profile)
+                self._disabled_reason = None
+
+        jb.register_for_tests(name, G())
+
+    @pytest.fixture()
+    def seeded(self, actors):
+        from mariposa.identity import service as identity
+        from mariposa.memory import service as memory
+        reset_all()
+        j = identity.Principal("jiaming", "周家明", "agent",
+                               "claude_chat", "bj")
+        # ① 正文命中（普通事件卡）——锚词互不重叠，避免分词后串台
+        memory.hold(j, text="柚子茶冲泡事件正文", memory_date="2026-09-20",
+                    date_confidence="exact", original_title="柚子茶标题",
+                    categories=["daily"], creation_mode="contemporaneous",
+                    raw_pending=False)
+        # ② 标题独占命中（title-only 事件卡）
+        memory.hold(j, text="凤梨酥场景的事件正文", memory_date="2026-09-21",
+                    date_confidence="exact", original_title="凤梨酥只在标题",
+                    categories=["daily"], creation_mode="contemporaneous",
+                    raw_pending=False)
+        # ③ 话语命中：同一召回返回两张卡（word-target 事件卡 + words 卡）
+        memory.hold(j, text="杨枝甘露场景的事件正文", memory_date="2026-09-22",
+                    date_confidence="exact", original_title="杨枝甘露标题",
+                    categories=["daily"], creation_mode="contemporaneous",
+                    raw_pending=False,
+                    our_words=[{"speaker": "qiaosheng",
+                                "text": "杨枝甘露在原话里",
+                                "expression_kind": "paraphrase"}])
+        return j
+
+    def _run(self, monkeypatch, seeded, plan, tag):
+        """返回 {(profile 子集): (fresh_n, replay_n)}。"""
+        import itertools
+        from mariposa import config as cfg
+        from mariposa.capabilities import registry
+        from mariposa.retrieval.judges import typesafe_jev
+
+        class _Resp:
+            def __init__(self, body):
+                self._body = body.encode("utf-8")
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            typesafe_jev.urllib.request, "urlopen",
+            lambda req, timeout=None: _Resp(json.dumps(
+                {"model": "m",
+                 "answers": {f"candidate_{i}": {"noul": 0.9}
+                             for i in range(8)}})))
+        results = {}
+        old = cfg.RECALL_JUDGE_PROVIDER
+        try:
+            cfg.RECALL_JUDGE_PROVIDER = f"mx_{tag}_full"
+            self._register(f"mx_{tag}_full", set(self.ALL_ROLES))
+            base = registry.invoke(
+                seeded, "memory.recall.start",
+                {**plan, "operation_id": f"mx-{tag}-base"},
+                None)["data"]["data"]
+            for n in range(1, len(self.ALL_ROLES) + 1):
+                for combo in itertools.combinations(self.ALL_ROLES, n):
+                    key = ",".join(combo)
+                    pname = f"mx_{tag}_{n}_{abs(hash(key)) % 10**8}"
+                    self._register(pname, set(combo))
+                    cfg.RECALL_JUDGE_PROVIDER = pname
+                    fresh = registry.invoke(
+                        seeded, "memory.recall.start",
+                        {**plan, "operation_id": f"mx-{tag}-{n}-"
+                         f"{abs(hash(key)) % 10**8}"},
+                        None)["data"]["data"]
+                    replay = registry.invoke(
+                        seeded, "memory.recall.start",
+                        {**plan, "operation_id": f"mx-{tag}-base"},
+                        None)["data"]["data"]
+                    results[key] = (len(fresh["candidates"]),
+                                    len(replay["candidates"]))
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old
+        return results, len(base["candidates"])
+
+    def test_event_anchor_matrix(self, seeded, monkeypatch):
+        plan = {"query_plan": {
+            "original_request": "柚子茶", "channels": ["event"],
+            "lexical_terms": ["柚子茶"]}}
+        results, base_n = self._run(monkeypatch, seeded, plan, "ev")
+        assert base_n == 1
+        bad = {k: v for k, v in results.items() if v[0] != v[1]}
+        assert not bad, f"正文命中矩阵重放/新建不一致: {bad}"
+
+    def test_title_only_matrix(self, seeded, monkeypatch):
+        plan = {"query_plan": {
+            "original_request": "凤梨酥只在标题", "channels": ["event"],
+            "lexical_terms": ["凤梨酥只在标题"]}}
+        results, base_n = self._run(monkeypatch, seeded, plan, "ti")
+        assert base_n == 1
+        bad = {k: v for k, v in results.items() if v[0] != v[1]}
+        assert not bad, f"标题命中矩阵重放/新建不一致: {bad}"
+
+    def test_words_anchor_matrix(self, seeded, monkeypatch):
+        """CR-01-R3 主反例场景：话语命中（word-target 事件卡 + words
+        卡同场）——事件许可撤回时两卡 fresh/replay 同权。"""
+        plan = {"query_plan": {
+            "original_request": "杨枝甘露在原话里",
+            "channels": ["event", "words"],
+            "lexical_terms": ["杨枝甘露在原话里"]}}
+        results, base_n = self._run(monkeypatch, seeded, plan, "wd")
+        assert base_n == 2
+        # CR-01-R3 权威语义（三轮复审 6×32 实测矩阵）：word-target
+        # 卡交付以 event_excerpt 为准——不预设各格 fresh 值（随
+        # fixture 段回退细节而异），合同是**每格 replay==fresh**：
+        # fresh=0 的格（复审反例：缺事件许可）replay 必须 0；
+        # fresh=1 的格 replay 保留且不弱于 fresh 的正文口径
+        bad = {k: v for k, v in results.items() if v[0] != v[1]}
+        assert not bad, f"话语命中矩阵重放/新建不一致: {bad}"
+
+    def test_event_and_words_double_hit_matrix(self, seeded, monkeypatch):
+        """CR-01-R3 第二反例场景：event_text 与 our_words 双命中——
+        通道仍是 event，必要角色恒 event_excerpt（word 许可不参与
+        交付判定），全格 replay==fresh。"""
+        plan = {"query_plan": {
+            "original_request": "双命中锚词",
+            "channels": ["event", "words"],
+            "lexical_terms": ["双命中锚词"]}}
+        from mariposa.identity import service as identity
+        from mariposa.memory import service as memory
+        memory.hold(seeded, text="双命中锚词的事件正文",
+                    memory_date="2026-09-23", date_confidence="exact",
+                    original_title="双命中标题", categories=["daily"],
+                    creation_mode="contemporaneous", raw_pending=False,
+                    our_words=[{"speaker": "qiaosheng",
+                                "text": "双命中锚词的原话",
+                                "expression_kind": "paraphrase"}])
+        results, base_n = self._run(monkeypatch, seeded, plan, "dh")
+        assert base_n >= 1
+        bad = {k: v for k, v in results.items() if v[0] != v[1]}
+        assert not bad, f"双命中矩阵重放/新建不一致: {bad}"
