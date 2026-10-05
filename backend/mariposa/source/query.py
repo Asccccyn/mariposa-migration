@@ -182,21 +182,27 @@ def covered_path_ids(conversation_id: str, start_message_id: str,
     （调用方按保守跳过该绑定，不猜）。
     """
     order = ordered_path_ids(conversation_id, start_message_id,
-                             end_message_id, include_unpublished)
+                             end_message_id,
+                             include_unpublished=include_unpublished)
     return set(order) if order is not None else None
 
 
 def ordered_path_ids(conversation_id: str, start_message_id: str,
                      end_message_id: str,
+                     start_char_offset=None, end_char_offset=None,
                      include_unpublished: bool = False) -> list[str] | None:
     """区间的实际 parent 路径（start→end 有序；RSRC-07 共享解析器）。
 
     重叠判定需要路径**次序与端点身份**（字符偏移只在共享边界消息
-    上比较），set 不够用。解析失败返回 None（调用方保守跳过，不猜）。
+    上比较），set 不够用。ASRC-07（2026-10-04 复审 P2）：查询偏移
+    与范围一并送共享 validator——超界/负数/同消息逆序在入口即拒
+    （解析失败返回 None，调用方保守跳过，不猜）。解析失败返回
+    None（调用方保守跳过，不猜）。
     """
     try:
         resolved = validate_range(
             conversation_id, start_message_id, end_message_id,
+            start_char_offset, end_char_offset,
             include_unpublished=include_unpublished)
         return list(resolved["path_order"])
     except Exception:
