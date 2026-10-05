@@ -17,9 +17,13 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "backend"))
 
 from mariposa import oauth  # noqa: E402
 from mariposa import schema  # noqa: E402
+from mariposa.identity import service as identity_service  # noqa: E402
 
 schema.migrate()
 schema.migrate_runtime()
+# principal_credentials 有外键指向 principals——生产库只 migrate 不 seed，
+# 没有身份行会 FK 报错。seed({}) 幂等补 principals，不建任何 token 绑定。
+identity_service.seed({})
 
 PROMPTS = [
     ("qiaosheng", "网页登录密码（你自己，qiaosheng）"),
