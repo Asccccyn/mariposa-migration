@@ -35,6 +35,13 @@ async def lifespan(app: FastAPI):
     v1_compat.register_v1_compat()
     # AF-GATE-03：门禁维护流程的到期事件消费端（隔离事务写审计）
     def _gate_expiry_sink(events):
+        """AF-GATE-03 到期事件消费端。
+
+        单条失败 stderr 留痕、**不阻断批次**（自查 B，2026-10-05）：
+        若失败即 raise，gate 会保留整批 pending 下轮重试——同批已
+        成功的条目将被重复写审计，破坏"到期事件一次性"语义。单条
+        record_isolated 自身两表原子；放弃的是该条的审计记录，换
+        取不重复、不积压。"""
         import sys
         from .audit import service as _audit
         for ip, payload in events:
@@ -46,7 +53,6 @@ async def lifespan(app: FastAPI):
                 sys.stderr.write(
                     f"[gate] auth.lock.expired (maintain) audit write "
                     f"failed for {ip}: {e!r}\n")
-                raise
     gate.set_expiry_sink(_gate_expiry_sink)
     yield
 
