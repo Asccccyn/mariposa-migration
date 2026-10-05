@@ -194,19 +194,25 @@ def ordered_path_ids(conversation_id: str, start_message_id: str,
     """区间的实际 parent 路径（start→end 有序；RSRC-07 共享解析器）。
 
     重叠判定需要路径**次序与端点身份**（字符偏移只在共享边界消息
-    上比较），set 不够用。ASRC-07（2026-10-04 复审 P2）：查询偏移
-    与范围一并送共享 validator——超界/负数/同消息逆序在入口即拒
-    （解析失败返回 None，调用方保守跳过，不猜）。解析失败返回
-    None（调用方保守跳过，不猜）。
+    上比较），set 不够用。ASRC-07（2026-10-04 三轮复审）：查询偏移
+    与范围一并送共享 validator——**偏移校验错误（SOURCE_RANGE_
+    OFFSET：超界/负数/同消息逆序）向上冒泡**成 403（与字符串
+    offset 的 schema 拒绝一致，不静默 200+空）；其余解析失败
+    （消息不存在/断链/sibling）保守返回 None，调用方按无重叠处理。
     """
+    from ..errors import Forbidden
     try:
         resolved = validate_range(
             conversation_id, start_message_id, end_message_id,
             start_char_offset, end_char_offset,
             include_unpublished=include_unpublished)
-        return list(resolved["path_order"])
+    except Forbidden as e:
+        if e.code == "SOURCE_RANGE_OFFSET":
+            raise
+        return None
     except Exception:
         return None
+    return list(resolved["path_order"])
 
 
 def open_range(conversation_id: str, start_message_id: str,
