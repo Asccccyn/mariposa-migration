@@ -197,6 +197,12 @@ def _oauth_login_page(fields: dict, error: str | None) -> str:
         f'<input type="hidden" name="{_esc(k)}" value="{_esc(v)}">'
         for k, v in fields.items() if v is not None)
     err = (f'<p class="error">{_esc(error)}</p>' if error else "")
+    # P2-04（2026-10-05 审计）：授权前展示回调去向——动态注册对任何人
+    # 开放，攻击者可注册指向自己服务器的 client 制造"输完密码即 302
+    # 到陌生地址"的钓鱼链；把 redirect_uri 摆到密码框上方，肉眼可核
+    dest = fields.get("redirect_uri")
+    dest_html = (f'<p class="dest">授权后将跳转到：<br/>'
+                 f'<code>{_esc(dest)}</code></p>' if dest else "")
     return f"""<!doctype html>
 <html lang="zh">
 <head><meta charset="utf-8"/><meta name="viewport"
@@ -217,10 +223,15 @@ button {{ margin-top:16px; width:100%; border:0; border-radius:10px;
  padding:12px; font-weight:700; color:#020617; background:#38bdf8; }}
 .error {{ color:#fecaca; background:#7f1d1d; border-radius:10px;
  padding:10px 12px; }}
+.dest {{ color:#fde68a; background:rgba(217,160,91,.12);
+ border:1px dashed #d9a05b; border-radius:10px; padding:10px 12px;
+ font-size:13px; word-break:break-all; }}
+.dest code {{ color:#fde68a; }}
 </style></head>
 <body><main>
 <h1>连接 mariposa</h1>
 <p>输入密码完成授权。只有你自己主动连接时才确认。</p>
+{dest_html}
 {err}
 <form method="post">
 {hidden}
@@ -228,7 +239,7 @@ button {{ margin-top:16px; width:100%; border:0; border-radius:10px;
 <input id="password" name="password" type="password"
  autocomplete="current-password" autofocus required/>
 <button type="submit">授权</button>
-</form></main></body></html>"""
+</form></main></html></body></html>"""
 
 
 async def _oauth_form_body(request: Request) -> dict:
@@ -260,6 +271,14 @@ def _oauth_authorize_handle(request: Request, form: dict):
     if method != "S256":
         return JSONResponse(status_code=400, content={
             "error": "unsupported_code_challenge_method"})
+    # P2-04（2026-10-05 审计）：PKCE 必选——客户端是公开客户端
+    # （token_endpoint_auth_methods=none），无 challenge 的 code 流
+    # 只剩 redirect_uri 精确匹配一道防线；MCP 规范本身要求 PKCE，
+    # 网页登录走 password grant 不经此路径，收紧无兼容代价
+    if not challenge:
+        return JSONResponse(status_code=400, content={
+            "error": "invalid_request",
+            "error_description": "code_challenge required (PKCE S256)"})
     if not _oauth.client_redirect_allowed(client_id, redirect_uri):
         return JSONResponse(status_code=400, content={
             "error": "unauthorized_client"})
@@ -389,8 +408,14 @@ async def invoke(name: str, request: Request):
     if _prof:
         _args = {**_args, "output_profile": _prof}
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
+    # P2-03（2026-10-05 审计）：同步 handler 让出事件循环——invoke 内部
+    # 含幂等等待（最长 8s time.sleep）与 SQLite busy_timeout（30s），
+    # 此前直接在 async 端点里同步执行，单个慢请求可冻结整个服务
+    # （含 /health 与静态面）；to_thread 后等待只占线程池不占循环
+    import asyncio as _asyncio
     try:
-        result = registry.invoke(principal, name, _args, idem)
+        result = await _asyncio.to_thread(
+            registry.invoke, principal, name, _args, idem)
     except MariposaError as e:
         return _gate_error_response(e)
     return result

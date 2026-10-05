@@ -703,6 +703,9 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
     _cref = f"cont_{_u_start.uuid4().hex[:12]}"
     packet["continuation"] = {"continue_request_ref": _cref,
                               "for_revision": 1}
+    # P3（2026-10-05 审计）：continuation 在预算执行后注入——补一次
+    # 终检，存储的 operation 回执与首次响应同一份受控包
+    packet = _enforce_output_budget(packet)
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -1049,6 +1052,13 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # F03（2026-10-05 审计补齐）：写锁内复查——与 reject/
+            # accept/close/refine 同款，终态/过期 session 不再接收
+            # navigate 的候选写入（此前预检后可被并发关闭，仍写入
+            # 带过期 revision 的 seen 行）
+            fresh = store.require_session_in_tx(conn, a["session_id"])
+            state_machine.require_action(fresh, "navigate")
+            require_owned_session(principal, fresh, a)
             for c in cards:
                 store.upsert_candidates(conn, a["session_id"], [{
                     "candidate_ref": c["candidate_ref"],
@@ -1057,7 +1067,7 @@ def navigate(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     "content_version": c["content_version"],
                     "representation_version": c["representation_version"],
                     "state": "seen", "scores": {}}],
-                    session["current_revision"])
+                    fresh["current_revision"])
             # RA-015（2026-10-02 复审 P2）：导航包绑定查询指纹——
             # 必须在 operation 记录前注入（存的 result 带指纹），同
             # key 重试不再被指纹校验误判 stale

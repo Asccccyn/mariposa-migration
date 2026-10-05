@@ -208,7 +208,10 @@ def client_ip(request) -> str:
         cf = request.headers.get("CF-Connecting-IP", "").strip()
         if cf:
             return cf
-        xff = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        # P3（2026-10-05 审计）：取最后一项（可信代理追加的位置）——
+        # 首项可由客户端自带 XFF 伪造，用于轮换假 IP 逃失败锁定
+        xff = request.headers.get("X-Forwarded-For", ""
+                                  ).split(",")[-1].strip()
         if xff:
             return xff
     return peer
@@ -257,6 +260,11 @@ def note_auth_failure(ip: str, record_audit=None) -> None:
         state = _auth_failures.setdefault(
             ip, {"fails": 0, "locked_until": 0.0, "lock_level": 0,
                  "last_fail": _now(), "expired_reported": False})
+        # P3（2026-10-05 审计）：更新即移到插入序末尾——容量淘汰的
+        # "最旧"随之从"最早创建"修正为"最久未失败"（LRU 语义）
+        if len(_auth_failures) > 1:
+            _auth_failures[ip] = _auth_failures.pop(ip)
+        state = _auth_failures[ip]
         state["fails"] += 1
         state["last_fail"] = _now()
         if state["fails"] < config.GATE_AUTH_FAIL_THRESHOLD:

@@ -393,7 +393,10 @@ class TestFullAuditP2Misc:
         tmp = tempfile.mkdtemp()
         f = f"{tmp}/nn.md"
         open(f, "w").write("# you asked\nmessage time: 2026-10-02 23:47:15\n\nnull文件名正文\n")
-        r = registry.invoke(actors["jiaming"], "source.import",
+        # P1-01（2026-10-05 审计）：宿主直读限 qiaosheng——本用例主题
+        # 是 filename=None，身份换成直读许可持有者
+        qs = identity.Principal("qiaosheng", "江乔生", "human", "web", "bq")
+        r = registry.invoke(qs, "source.import",
                             {"path": f, "filename": None}, None)
         assert r["data"]["status"] == "completed"
 

@@ -157,14 +157,21 @@ def get_message(message_id: str | None = None,
         # include_unpublished 诊断分支照旧全放
         pubflt = "" if include_unpublished else \
             " AND published=1 AND live_superseded=0"
+        # P3（2026-10-05 审计）：sequence 跨快照修订非唯一（A11）——
+        # 裸 sequence 比较在重号时由行序 nondeterministic 决定邻居；
+        # 加 id 决胜让窗口至少确定且稳定（同锚点重放不漂移）
         prev = conn.execute(
             f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-            f" AND sequence<?{pubflt} ORDER BY sequence DESC LIMIT ?",
-            (row["conversation_id"], row["sequence"], context)).fetchall()
+            f" AND (sequence<? OR (sequence=? AND id<?)){pubflt}"
+            " ORDER BY sequence DESC, id DESC LIMIT ?",
+            (row["conversation_id"], row["sequence"], row["sequence"],
+             row["id"], context)).fetchall()
         nxt = conn.execute(
             f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
-            f" AND sequence>?{pubflt} ORDER BY sequence ASC LIMIT ?",
-            (row["conversation_id"], row["sequence"], context)).fetchall()
+            f" AND (sequence>? OR (sequence=? AND id>?)){pubflt}"
+            " ORDER BY sequence ASC, id ASC LIMIT ?",
+            (row["conversation_id"], row["sequence"], row["sequence"],
+             row["id"], context)).fetchall()
     return {
         "message": _serialize(row, include_content=include_content),
         "context_before": [_serialize(r) for r in reversed(prev)],

@@ -126,15 +126,22 @@ class TestAuthorizationCodeFlow:
             assert tok.status_code == 400
 
     def test_refresh_rotation_http(self, actors):
+        # P2-04（2026-10-05 审计）：authorize 现要求 PKCE——补 challenge
+        # 与 verifier（其余流程不变）
+        import base64 as _b64, hashlib as _hl
         with _client() as c:
             cid = self._register(c)
+            challenge = _b64.urlsafe_b64encode(_hl.sha256(
+                b"rot-verifier").digest()).rstrip(b"=").decode()
             good = c.post("/oauth/authorize", data={
                 "client_id": cid, "redirect_uri": REDIRECT,
+                "code_challenge": challenge,
                 "password": actors["mcp"]}, follow_redirects=False)
             code = good.headers["location"].split("code=")[1].split("&")[0]
             tok = c.post("/oauth/token", data={
                 "grant_type": "authorization_code", "code": code,
-                "client_id": cid, "redirect_uri": REDIRECT})
+                "client_id": cid, "redirect_uri": REDIRECT,
+                "code_verifier": "rot-verifier"})
             rt = tok.json()["refresh_token"]
             r1 = c.post("/oauth/token", data={
                 "grant_type": "refresh_token", "refresh_token": rt,

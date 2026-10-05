@@ -144,13 +144,25 @@ def handoff_write(principal_id: str, entry_source: str | None, content: str) -> 
     hid = f"ho_{uuid.uuid4().hex[:10]}"
     now = _now()
     expires = now + timedelta(hours=HANDOFF_ACTIVE_HOURS)
+    # P1-04（2026-10-05 审计）：交接便签是跨入口的业务动作，与插入
+    # 同事务留审计（§19）
+    from ..audit import service as _audit
     with db.formal() as conn:
-        conn.execute(
-            "INSERT INTO handoffs(id, author, content, entry_source, created_at, expires_at)"
-            " VALUES(?,?,?,?,?,?)",
-            (hid, principal_id, str(content), entry_source, now.isoformat(),
-             expires.isoformat()),
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT INTO handoffs(id, author, content, entry_source, created_at, expires_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (hid, principal_id, str(content), entry_source, now.isoformat(),
+                 expires.isoformat()),
+            )
+            _audit.record(conn, "handoff.written", principal_id,
+                          resource_id=hid,
+                          payload={"entry_source": entry_source})
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return {"handoff_id": hid, "expires_at": expires.isoformat()}
 
 

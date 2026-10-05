@@ -54,10 +54,18 @@ def require_resolvable_sources(conn, validated: list[dict]) -> None:
                 "（raw 前缀已退役；无来源请省略字段）",
                 code="INVALID_SOURCE_REF", got=ref)
         msg_id = ref[len("source_msg:"):]
-        if not conn.execute(
-                "SELECT 1 FROM source_messages WHERE"
-                " (id=? OR provider_message_id=?) AND published=1",
-                (msg_id, msg_id)).fetchone():
+        # P3（2026-10-05 审计）：跨 provider UUID 撞号（F13 预期场景）
+        # 下 fetchone 非确定解析——与 query._find_message 同收紧：多于
+        # 一行命中即拒绝写入（不猜绑定到哪条）
+        rows = conn.execute(
+            "SELECT 1 FROM source_messages WHERE"
+            " (id=? OR provider_message_id=?) AND published=1",
+            (msg_id, msg_id)).fetchall()
+        if len(rows) > 1:
+            raise Forbidden(
+                "source_ref 撞号（多 provider 同 ID），拒绝猜测绑定",
+                code="SOURCE_MESSAGE_AMBIGUOUS", got=ref)
+        if not rows:
             raise Forbidden(
                 "source_ref 指向的消息不存在或未发布——"
                 "不得写入 dangling provenance",
@@ -119,12 +127,13 @@ def list_for(memory_id: str) -> list[dict]:
                     if isinstance(ref, str)
                     and ref.startswith("raw_msg:")
                     else "invalid_or_missing")
-        row = conn.execute(
+        # P3：撞号=无法确定指向哪条，按 invalid 分类（fail-closed）
+        rows = conn.execute(
             "SELECT published FROM source_messages WHERE id=? OR"
             " provider_message_id=?",
             (ref[len("source_msg:"):],
-             ref[len("source_msg:") :])).fetchone()
-        if row is None or not row["published"]:
+             ref[len("source_msg:") :])).fetchall()
+        if len(rows) != 1 or not rows[0]["published"]:
             return "invalid_or_missing"
         return None
 
@@ -253,9 +262,14 @@ def correct_source(principal_id: str, word_id: str,
             # MEM-01（2026-10-04 二批）：与写侧同一收紧——改绑的新
             # 来源必须是当前已发布消息；未发布/不存在一律结构化拒绝，
             # 旧绑定保留且不写纠错回执
-            _msg_row = conn.execute(
+            _msg_rows = conn.execute(
                 "SELECT published FROM source_messages WHERE id=? OR"
-                " provider_message_id=?", (msg_id, msg_id)).fetchone()
+                " provider_message_id=?", (msg_id, msg_id)).fetchall()
+            if len(_msg_rows) > 1:
+                raise Forbidden(
+                    "改绑来源撞号（多 provider 同 ID），拒绝猜测",
+                    code="SOURCE_MESSAGE_AMBIGUOUS", ref=new_ref)
+            _msg_row = _msg_rows[0] if _msg_rows else None
             if _msg_row is None:
                 raise NotFound("source message not found", ref=new_ref)
             if not _msg_row["published"]:

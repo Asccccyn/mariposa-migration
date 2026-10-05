@@ -453,6 +453,20 @@ def open_for_memory(memory_id: str, include_content: bool = False) -> dict:
                            "confidence": rng["bind_confidence"],
                            "bound_at": rng["created_at"]})
             continue
+        except Forbidden as e:
+            # P2-06（2026-10-05 审计）：绑定漂移类 Forbidden（live ingest
+            # 让范围涨过条数上限 / 分支不再是路径）此前让整个
+            # open_for_memory 失败——一条坏绑定毒死同 memory 全部
+            # 可读范围。降级为单绑定 unresolvable，其余照常返回
+            if e.code not in ("SOURCE_RANGE_TOO_LARGE",
+                              "SOURCE_RANGE_NOT_PATH"):
+                raise
+            opened.append({"binding_id": rng["binding_id"],
+                           "status": "unresolvable",
+                           "reason": e.code,
+                           "confidence": rng["bind_confidence"],
+                           "bound_at": rng["created_at"]})
+            continue
         # 版本漂移检测（当前行内容与绑定时 hash 不同 → 显式标注）
         drift = None
         for label, bound_hash, key in (

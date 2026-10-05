@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -79,15 +80,19 @@ class TestID:
 
 
 class TestRET:
-    def test_T_RET_05_late_embedding_rejected(self, actors):
+    def test_T_RET_05_late_embedding_rejected(self, actors, monkeypatch):
         """T-RET-05：迟到向量（旧 projection_hash）不参与命中。"""
         from mariposa import config as _cfg
         old = _cfg.SEMANTIC_PROVIDER
         _cfg.SEMANTIC_PROVIDER = "local_bge_zh"
+        # P2-08（2026-10-05 审计）：此前 setdefault Windows 写死路径——
+        # Mac/Linux 上落成仓库根字面 `D:\` 垃圾目录（91MB 曾被误提交），
+        # 且环境变量泄漏给同 session 后续测试。统一指本地 canonical
+        # 缓存（与 integration 冒烟同一份权重），monkeypatch 自动还原
+        monkeypatch.setenv(
+            "FASTEMBED_CACHE_PATH",
+            str(Path(__file__).resolve().parents[2] / "runtime" / "models"))
         try:
-            import os
-            os.environ.setdefault("FASTEMBED_CACHE_PATH",
-                                  r"D:\mariposa\runtime\models")
             h = _hold(actors, "迟到的向量测试：阳台的三角梅开了两朵")
             with db.formal() as conn:
                 from mariposa.retrieval import semantic
@@ -114,21 +119,20 @@ class TestRET:
             assert models.get(
                 "BAAI/bge-small-zh-v1.5|eventbody-v1") == proj[
                 "search_text_hash"]
-            assert models.get(
-                "BAAI/bge-small-zh-v1.5|eventbody-v1") == proj["search_text_hash"]
             assert h["memory_id"] in {x["memory_id"] for x in hits}  # 自愈用新向量
         finally:
             _cfg.SEMANTIC_PROVIDER = old
 
-    def test_T_RET_11_filter_before_vector(self, actors):
+    def test_T_RET_11_filter_before_vector(self, actors, monkeypatch):
         """T-RET-11：禁用资源不进语义候选（hidden 桶高相关也不命中）。"""
         from mariposa import config as _cfg
         old = _cfg.SEMANTIC_PROVIDER
         _cfg.SEMANTIC_PROVIDER = "local_bge_zh"
+        # P2-08：同上——Windows 写死路径换本地 canonical 缓存
+        monkeypatch.setenv(
+            "FASTEMBED_CACHE_PATH",
+            str(Path(__file__).resolve().parents[2] / "runtime" / "models"))
         try:
-            import os
-            os.environ.setdefault("FASTEMBED_CACHE_PATH",
-                                  r"D:\mariposa\runtime\models")
             h = _hold(actors, "语义过滤：窗台薄荷长势旺盛")
             with db.formal() as conn:
                 from mariposa.retrieval import semantic

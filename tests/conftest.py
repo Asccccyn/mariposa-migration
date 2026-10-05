@@ -73,6 +73,13 @@ os.environ.setdefault("MARIPOSA_ALLOW_CREATE", "1")
 os.environ.setdefault("MARIPOSA_RECALL_ENABLED", "1")
 os.environ.setdefault("MARIPOSA_WORDS_RECALL_ENABLED", "1")
 os.environ.setdefault("MARIPOSA_RAW_FALLBACK_ENABLED", "1")
+# P2-08（2026-10-05 审计）：fastembed 缓存路径全局兜底——此前个别测试
+# setdefault Windows 写死路径，Mac/Linux 上在仓库根落出字面 `D:\`
+# 垃圾目录（91MB 曾被误提交进 git）。默认指仓库本地 canonical 缓存
+# （integration 冒烟同源；无网络下载），测试内 setenv/monkeypatch 仍可覆盖
+os.environ.setdefault(
+    "FASTEMBED_CACHE_PATH",
+    str(_REPO_ROOT / "runtime" / "models"))
 # recall-closure S10 出站硬门：未判断候选不得交付——测试链需要稳定
 # 判断源。确定性 fake Jev（03 验收：结构级用 fake），不联网。
 os.environ.setdefault("MARIPOSA_RECALL_JUDGE_PROVIDER", "test_deterministic")

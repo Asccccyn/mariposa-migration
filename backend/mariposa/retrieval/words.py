@@ -46,7 +46,29 @@ def rebuild_words_index(conn) -> int:
 
     绑定当前 memory 版本与表示；遗忘生效 / restore / 话语变更使指纹
     变化，下次读取触发重建（读取时校验兜底，v1.4 §7.3/§10.3）。
+
+    P1-02（2026-10-05 审计）：重建原子化——此前 DELETE+逐行 INSERT 裸跑
+    在 autocommit 连接上，两条并发 words_search 在指纹失效后同时重建，
+    交错插入撞 word_id 主键 → sqlite3.IntegrityError 让读路径整轮 500。
+    未处于事务时自行 BEGIN IMMEDIATE；调用方已持事务（如删除链路）
+    则就地原子执行。
     """
+    owns_tx = not conn.in_transaction
+    if owns_tx:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        n = _rebuild_rows(conn)
+        if owns_tx:
+            conn.execute("COMMIT")
+        return n
+    except Exception:
+        if owns_tx and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _rebuild_rows(conn) -> int:
+    """重建本体（调用方保证处于写事务内）。"""
     conn.execute("DELETE FROM words_fts")
     conn.execute("DELETE FROM words_search_docs")
     rows = conn.execute(
@@ -80,22 +102,40 @@ def rebuild_words_index(conn) -> int:
 
 
 def ensure_index_current(conn) -> bool:
-    """读取时校验：正表指纹与派生索引不一致即重建（含遗忘行清除）。"""
+    """读取时校验：正表指纹与派生索引不一致即重建（含遗忘行清除）。
+
+    P1-02（2026-10-05 审计）：重建走**专用写连接 + 单事务**，事务内
+    二次核指纹——并发读到同一个过期指纹时，后拿写锁的一方在锁内
+    看到前者已重建的新指纹即跳过，不再出现双方同时重建撞主键。
+    检测仍用调用方连接（只读，不动调用方事务状态）。
+    """
+    if _index_fresh(conn):
+        return False
+    with db.formal() as wconn:
+        wconn.execute("BEGIN IMMEDIATE")
+        try:
+            if not _index_fresh(wconn):
+                _rebuild_rows(wconn)
+            wconn.execute("COMMIT")
+        except Exception:
+            wconn.execute("ROLLBACK")
+            raise
+    return True
+
+
+def _index_fresh(conn) -> bool:
+    """指纹一致判定（只读；不成立不代表没人正在重建，锁内还会复核）。"""
     meta = conn.execute(
         "SELECT value FROM mariposa_db_meta WHERE key=?",
         (WORDS_INDEX_META_KEY,)).fetchone()
     fp = _fingerprint(conn)
     if meta is None:
-        rebuild_words_index(conn)
-        return True
+        return False
     try:
         recorded = json.loads(meta["value"]).get("fingerprint")
     except (ValueError, TypeError):
         recorded = None
-    if recorded != fp:
-        rebuild_words_index(conn)
-        return True
-    return False
+    return recorded == fp
 
 
 def _g(row, key, default=None):
@@ -117,10 +157,11 @@ def _source_ref_valid(conn, source_ref) -> bool:
     if conn is None:
         return False
     msg_id = source_ref[len("source_msg:"):]
-    row = conn.execute(
+    # P3：撞号=无法确定指向哪条 → 不能宣称 valid（fail-closed）
+    rows = conn.execute(
         "SELECT published FROM source_messages WHERE id=? OR"
-        " provider_message_id=?", (msg_id, msg_id)).fetchone()
-    return row is not None and bool(row["published"])
+        " provider_message_id=?", (msg_id, msg_id)).fetchall()
+    return len(rows) == 1 and bool(rows[0]["published"])
 
 
 def _word_evidence(row, conn=None) -> list[dict]:

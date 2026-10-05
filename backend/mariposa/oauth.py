@@ -37,6 +37,9 @@ REFRESH_TTL_S = 30 * 24 * 3600
 SCOPES = ("mariposa",)
 GRANT_TYPES = ("authorization_code", "refresh_token", "password")
 
+#: P2-04（2026-10-05 审计）：动态注册容量上限（见 register_client）
+MAX_REGISTERED_CLIENTS = 500
+
 
 # ---------------------------------------------------------------- 密码
 
@@ -248,15 +251,27 @@ def _purge_expired_codes() -> None:
 
 def register_client(client_name: str | None,
                     redirect_uris: list[str]) -> dict:
-    """RFC 7591 动态客户端注册（MCP 客户端连接时自注册）。"""
+    """RFC 7591 动态客户端注册（MCP 客户端连接时自注册）。
+
+    P2-04（2026-10-05 审计）：无认证开放注册配容量上限——公网隧道下
+    匿名档限速（60/min/IP）仍允许单 IP 每天灌 8 万行 client，无限
+    表增长。个人部署真实客户端个位数，500 上限足够且触发时结构化
+    拒绝（不是静默丢）。
+    """
     if not redirect_uris or not all(
             isinstance(u, str) and u.startswith(("http://", "https://"))
             for u in redirect_uris):
         raise MariposaError("redirect_uris 必须是 http(s) URL 数组",
                             code="INVALID_CLIENT_METADATA",
                             http_status=400)
-    client_id = f"mcp_{secrets.token_hex(10)}"
     with db.formal() as conn:
+        existing = conn.execute(
+            "SELECT COUNT(*) AS c FROM oauth_clients").fetchone()["c"]
+        if existing >= MAX_REGISTERED_CLIENTS:
+            raise MariposaError(
+                "已注册客户端数达上限；请让服务管理员清理闲置 client",
+                code="REGISTRATION_CAPACITY", http_status=503)
+        client_id = f"mcp_{secrets.token_hex(10)}"
         conn.execute(
             "INSERT INTO oauth_clients(client_id, client_name,"
             " redirect_uris, created_at) VALUES(?,?,?,?)",

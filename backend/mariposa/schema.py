@@ -1190,6 +1190,19 @@ DROP TABLE IF EXISTS proposal_versions;
 DROP TABLE IF EXISTS work_items;
 DROP TABLE IF EXISTS workspace_task_leases;
 """),
+    (7, """
+-- ===== P2-07（2026-10-05 审计）：workspace 库死表清理 =====
+-- workspace 迁移 1 曾复制了一套 recall_* 表，但 recall_sessions 只在
+-- runtime 库（RUNTIME_MIGRATIONS）创建——这批表在 workspace 库里
+-- 外键指向不存在的表、代码从不容经 db.workspace() 访问（recall 全链
+-- 走 db.recall_runtime()），属未完成迁移的永久死重。旧库补删；fresh
+-- 库迁移序列执行后同样收敛到零残留。
+DROP TABLE IF EXISTS recall_query_revisions;
+DROP TABLE IF EXISTS recall_candidates;
+DROP TABLE IF EXISTS recall_attempts;
+DROP TABLE IF EXISTS recall_receipts;
+DROP TABLE IF EXISTS recall_operation_keys;
+"""),
 ]
 
 

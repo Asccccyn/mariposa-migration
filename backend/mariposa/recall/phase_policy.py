@@ -283,20 +283,14 @@ def phase_of(memory_id: str, *, now: datetime | None = None,
              plan_status: str | None = None,
              resource_kind: str = "memory") -> PhaseResult:
     """便捷入口：装载事实并计算阶段。"""
-    from datetime import timezone as _tzmod
     facts = facts_of(memory_id)
-    # P1-08：有 plan 绑定的桶按 plan 资源计算（open→WIDE / 终态→CORE），
-    # 事件 H 不参与；显式 resource_kind="plan" 的调用保持原语义
-    plan_states = facts.get("plan_states") or []
-    if (resource_kind == "memory" and "plan" in (facts["categories"] or [])
-            and plan_states):
-        # 全量审计 P1-08 复审：plan 生命周期只由 plan 分类触发——
-        # 仅 link 无 plan 分类是关系数据，不改事件阶段（daily 桶不因
-        # 被关联而变 plan）；plan 分类无绑定则落到 compute_phase 的
-        # PLAN_MAPPING_GAP
-        resource_kind = "plan"
-        plan_status = ("active" if any(st in PLAN_OPEN
-                                       for st in plan_states) else "done")
+    if resource_kind == "memory" and plan_status is None:
+        # 默认路径与批量路径共用 phase_from_facts（含 P1-08 plan
+        # 升级），单桶/批量不漂移
+        return phase_from_facts(facts, now=now)
+    # 显式 resource_kind/plan_status 的调用保持原语义（plan 资源
+    # 直连入口自带状态，不触发 memory→plan 升级）
+    from datetime import timezone as _tzmod
     return compute_phase(
         now=now or datetime.now(_tzmod.utc),
         first_held_at=facts["first_held_at"],
@@ -355,9 +349,16 @@ def facts_for_many(conn, memory_ids: list[str]) -> dict[str, dict]:
     return facts
 
 
-def phase_from_facts(facts: dict, *, now: datetime,
+def phase_from_facts(facts: dict, *, now: datetime | None = None,
                      **kw) -> PhaseResult:
-    """用 facts_for_many 的结果直接计算阶段。"""
+    """用 facts_for_many 的结果直接计算阶段。
+
+    P1-05（2026-10-05 审计）：now 可省（默认当前时刻）——批量调用方
+    统一时刻显式传入，memory.search 兼容路径省略。
+    """
+    if now is None:
+        from datetime import timezone as _tzmod
+        now = datetime.now(_tzmod.utc)
     plan_states = facts.get("plan_states") or []
     if "plan" in (facts.get("categories") or []) and plan_states:
         # P1-08 复审：plan 分类 + 有效绑定才按 plan 资源自管；

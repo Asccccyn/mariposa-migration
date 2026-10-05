@@ -39,6 +39,13 @@ def upload_prepare(principal_id: str, mime: str, size: int) -> dict:
     if size <= 0 or size > _MAX_SIZE:
         raise Forbidden(f"size out of range 1..{_MAX_SIZE}")
     token = secrets.token_urlsafe(24)
+    # P3（2026-10-05 审计）：此前过期项只在同 token 再被触碰时删除，
+    # 被放弃的 prepare 永不回收（有界字典慢速泄漏）；prepare 顺手全扫
+    from datetime import datetime as _dt, timezone as _tz
+    cutoff = (_dt.now(_tz.utc).timestamp() - _STAGING_TTL_S)
+    for k in [k for k, v in _staging.items()
+              if _dt.fromisoformat(v["created"]).timestamp() < cutoff]:
+        _staging.pop(k, None)
     _staging[token] = {"mime": mime, "size": size, "owner": principal_id,
                        "created": _now(), "staged": False}
     return {"upload_token": token, "stage_url": f"/api/media/stage/{token}",

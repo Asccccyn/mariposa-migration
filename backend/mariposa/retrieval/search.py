@@ -18,9 +18,16 @@ def _allowed_field_kinds(conn, memory_ids: list[str]) -> dict[str, set[str]]:
     from ..recall import phase_policy
     from . import field_projection
     out: dict[str, set[str]] = {}
+    # P1-05（2026-10-05 审计）：批量装载事实——此前逐桶 phase_of 每桶
+    # 新开一条 formal 连接，与 recall 主线同病
+    facts = phase_policy.facts_for_many(conn, memory_ids)
     for mid in memory_ids:
+        f = facts.get(mid)
+        if f is None:
+            continue
         try:
-            fields = phase_policy.eligible_fields(phase_policy.phase_of(mid))
+            fields = phase_policy.eligible_fields(
+                phase_policy.phase_from_facts(f))
         except phase_policy.DataGap:
             # v1 存量桶（held_at 缺失）无阶段事实：保守按最小允许集
             # （仅事件正文）处理，不用猜测的宽松阶段放大命中面

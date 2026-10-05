@@ -550,5 +550,7 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return packet
+    # P3（2026-10-05 审计）：continuation 在预算执行后注入——补一次
+    # 终检，S16 的 24KB 上限对最终出站包（含游标）同样成立
+    return _enforce_output_budget(packet)
 

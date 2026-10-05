@@ -78,11 +78,6 @@ def main() -> int:
         copied = True
     except (OSError, subprocess.CalledProcessError):
         copied = False
-    try:
-        subprocess.run(["pbcopy"], input=token.encode(), check=True)
-        copied = True
-    except (OSError, subprocess.CalledProcessError):
-        copied = False
     if copied:
         print("✓ 受限 binding 已建（principal=worker，白名单："
               + ", ".join(ALLOWLIST) + ")")
