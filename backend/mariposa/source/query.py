@@ -181,11 +181,24 @@ def covered_path_ids(conversation_id: str, start_message_id: str,
     大小近似——sibling 不在路径上就不算覆盖。解析失败返回 None
     （调用方按保守跳过该绑定，不猜）。
     """
+    order = ordered_path_ids(conversation_id, start_message_id,
+                             end_message_id, include_unpublished)
+    return set(order) if order is not None else None
+
+
+def ordered_path_ids(conversation_id: str, start_message_id: str,
+                     end_message_id: str,
+                     include_unpublished: bool = False) -> list[str] | None:
+    """区间的实际 parent 路径（start→end 有序；RSRC-07 共享解析器）。
+
+    重叠判定需要路径**次序与端点身份**（字符偏移只在共享边界消息
+    上比较），set 不够用。解析失败返回 None（调用方保守跳过，不猜）。
+    """
     try:
         resolved = validate_range(
             conversation_id, start_message_id, end_message_id,
             include_unpublished=include_unpublished)
-        return set(resolved["path_ids"])
+        return list(resolved["path_order"])
     except Exception:
         return None
 
@@ -356,7 +369,7 @@ def validate_range(conversation_id: str, start_message_id: str,
                             code="SOURCE_RANGE_OFFSET")
         path_ids = _parent_path_ids(conn, start, end, pubflt)
     return {"conversation": conv, "start": start, "end": end,
-            "path_ids": path_ids,
+            "path_ids": set(path_ids), "path_order": path_ids,
             "start_content_hash": start["content_hash"],
             "end_content_hash": end["content_hash"]}
 
@@ -366,14 +379,16 @@ def validate_range(conversation_id: str, start_message_id: str,
 _PATH_WALK_LIMIT = 10000
 
 
-def _parent_path_ids(conn, start, end, pubflt: str) -> set[str]:
-    """从 end 沿 parent 回溯到 start；失败即 SOURCE_RANGE_NOT_PATH。"""
+def _parent_path_ids(conn, start, end, pubflt: str) -> list[str]:
+    """从 end 沿 parent 回溯到 start；失败即 SOURCE_RANGE_NOT_PATH。
+
+    RSRC-07：返回 start→end **有序**列表——重叠判定与字符偏移比较
+    需要端点身份与次序，跨快照 sequence 大小不参与（序号倒置的
+    真实路径仍按链序成立）。
+    """
     if start["id"] == end["id"]:
-        return {start["id"]}
-    # SRC-01-R1（2026-10-04 复审）：跨快照 sequence 冲突会让首见序
-    # 倒置——顺序以真实 parent 链为准，walk 失败即报（不再按首见
-    # sequence 预判逆序拒绝合法区间）
-    path = {end["id"]}
+        return [start["id"]]
+    path = [end["id"]]
     cur = end
     steps = 0
     while cur["id"] != start["id"]:
@@ -395,12 +410,13 @@ def _parent_path_ids(conn, start, end, pubflt: str) -> set[str]:
         if nxt["id"] in path:
             raise Forbidden("parent 链存在循环",
                             code="SOURCE_RANGE_NOT_PATH", kind="cycle")
-        path.add(nxt["id"])
+        path.append(nxt["id"])
         cur = nxt
         steps += 1
         if steps > _PATH_WALK_LIMIT:
             raise Forbidden("parent 回溯超上限（疑似循环/超长）",
                             code="SOURCE_RANGE_NOT_PATH", kind="too_long")
+    path.reverse()
     return path
 
 

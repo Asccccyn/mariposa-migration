@@ -189,6 +189,10 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
     # ---- 4) 原子发布归档；解析/复核只读归档 payload（SL-02） ----
     # SRC-05：归档发布与 raw_path 登记纳入租约保护——失败落库为
     # failed（可重试），不得把批次锁死在 running
+    # RSRC-05（2026-10-04 复审 P2）：stats 必须先于归档 try 初始化——
+    # 归档异常走 _fail_batch(stats) 时引用未绑定局部量，UnboundLocalError
+    # 会把真实归档异常整个吞掉，批次卡 running 且 error=NULL
+    stats = _new_stats()
     try:
         existing_payload = _existing_payload_if_consistent(
             provider, batch_id, sha256)
@@ -205,7 +209,6 @@ def _import_staged(principal_id: str, src: Path, staged: Path,
                     f"archive publish failed: {_arch_err}", stats, lease)
         raise
 
-    stats = _new_stats()
     try:
         # ---- 5) 解析归档 payload（绝不碰原始路径） ----
         try:

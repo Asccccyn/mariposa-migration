@@ -1030,7 +1030,7 @@
         "qiaosheng"
       ],
       "write": true,
-      "idempotent": true,
+      "idempotent": false,
       "description": "凭有效查看回执追加本人回忆（不索引；触发保留线索）"
     },
     {

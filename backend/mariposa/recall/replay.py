@@ -82,11 +82,6 @@ def revalidate_replayed(fn_name: str, saved: dict,
                 and type(_provider).judge is
                 TypeSafeJevJudge.judge):
             _judge_down = True
-        print("DBG provider=", type(_provider).__name__,
-              "down=", _judge_down, "profile=", _profile,
-              "reason=", getattr(_provider, "_disabled_reason", "NA"),
-              "key=", bool(getattr(_provider, "_api_key", None)),
-              "n=", len(saved.get("candidates") or []))
     if _judge_down and isinstance(saved.get("candidates"), list) \
             and saved["candidates"]:
         degraded = dict(saved)
@@ -100,25 +95,34 @@ def revalidate_replayed(fn_name: str, saved: dict,
         saved = degraded
     elif (_profile is not None
             and isinstance(saved.get("candidates"), list)):
-        # 原文许可缩权：raw/source 卡在当前 profile 缺 source_excerpt
-        # 时抑制（与 fresh continuation 的 RAW_PROFILE_WITHDRAWN 同权）
+        # 原文许可缩权（CR-01-R1 扩展）：每个候选按共享判定
+        # required_excerpt_role 算出必要证据角色，当前 profile 缺该
+        # 角色即剔卡——raw/source 缺 source_excerpt、words 缺
+        # word_excerpt、事件正文卡缺 event_excerpt、纯标题卡缺
+        # title_cue，与 fresh 的出站许可同权（撤回许可后旧 operation
+        # 不得继续释放正文）。抑制正文时 operation/canonical/预算不变
+        from ..retrieval.judges.typesafe_jev import \
+            required_excerpt_role as _need_role
         _kept = []
-        _suppressed = False
+        _suppressed_channels: set[str] = set()
         for _c in saved["candidates"]:
-            if isinstance(_c, dict) and \
-                    _c.get("channel") in ("raw", "source") and \
-                    "source_excerpt" not in _profile:
-                _suppressed = True
-                continue
+            if isinstance(_c, dict):
+                _ch = _c.get("channel") or "event"
+                if _need_role(_c) not in _profile:
+                    _suppressed_channels.add(_ch)
+                    continue
             _kept.append(_c)
-        if _suppressed:
+        if _suppressed_channels:
             degraded = dict(saved)
             degraded["candidates"] = _kept
             degraded["degraded_reasons"] = list(
                 saved.get("degraded_reasons") or []) + [
-                    "raw_profile_withdrawn_replay_body_suppressed"]
+                    "evidence_role_withdrawn_replay_body_suppressed"]
             degraded["coverage"] = dict(saved.get("coverage") or {})
-            degraded["coverage"]["raw"] = "unavailable_profile"
+            for _ch in _suppressed_channels:
+                # 通道名归一（words 通道的 coverage 键与 fresh 一致）
+                degraded["coverage"][_ch if _ch != "word" else "words"] = \
+                    "unavailable_profile"
             saved = degraded
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
