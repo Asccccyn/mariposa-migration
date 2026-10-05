@@ -67,7 +67,11 @@ def _register() -> dict[str, Capability]:
         caps[name] = Capability(name, handler, set(allowed), write, idempotent, description)
 
     add("memory.hold", _hold, {"qiaosheng", "jiaming"}, True,
-        description="写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）")
+        description="写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；"
+                    "自动化路径可带 operation_id+source_selections（同事务回执）")
+    add("memory.hold.status", _hold_status, _owners(), False,
+        description="按 operation_id 查 hold 完成回执（历史成功与当前"
+                    "资源状态分列；无记录=尚无提交证据）")
     add("memory.get", _get, _owners(), False, description="读取当前表示（遗忘桶只返回摘要）")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
@@ -180,6 +184,9 @@ def _register() -> dict[str, Capability]:
         description="按 provider UUID 精确打开原文消息（含前后上下文）")
     add("source.range.open", _source_range_open, _owners(), False,
         description="打开原文消息区间（语义绑定的动态查看入口）")
+    add("source.selection.open", _source_selection_open, _owners(), False,
+        description="按钉住成员 manifest 读回片段（逐成员 hash 核对，"
+                    "漂移显式标注不静默）")
     add("source.conversation.get", _source_conversation_get, _owners(), False,
         description="按 sequence 游标分页读原文会话（超长会话不整段拉取）")
     add("source.conversations.list", _source_conversations_list, _owners(),
@@ -373,24 +380,114 @@ from .transport import (  # noqa: E402,F401
     _revalidate_replayed_response, _transport_key, _with_operation_id,
 )
 def _hold(principal: Principal, a: dict) -> dict:
-    return memory.hold(
-        principal,
-        text=str(a.get("text", "")),
-        why_remember=a.get("why_remember"),
-        memory_date=a.get("memory_date"),
-        date_confidence=a.get("date_confidence", "unknown"),
-        entry_source=principal.entry_source,
-        raw_refs=a.get("raw_refs"),
-        raw_pending=bool(a.get("raw_pending", True)),
-        original_title=a.get("original_title"),
-        categories=a.get("categories"),
-        plan_ids=a.get("plan_ids"),
-        mood=a.get("mood"),
-        our_words=a.get("our_words"),
-        creation_mode=a.get("creation_mode"),
-        occurred_start=a.get("occurred_start"),
-        occurred_end=a.get("occurred_end"),
-    )
+    # WP2（迁移 31）：宿主自动化路径 operation_id + source_selections →
+    # 领域原子写（hold_in_tx + 全部绑定 + 完成回执同一事务，方案 §5）。
+    # 旧手工 hold（两者皆无）行为不变；只带 selections 不带 op 拒绝
+    op = a.get("operation_id")
+    sels = a.get("source_selections")
+    if op is None and sels is None:
+        return memory.hold(
+            principal,
+            text=str(a.get("text", "")),
+            why_remember=a.get("why_remember"),
+            memory_date=a.get("memory_date"),
+            date_confidence=a.get("date_confidence", "unknown"),
+            entry_source=principal.entry_source,
+            raw_refs=a.get("raw_refs"),
+            raw_pending=bool(a.get("raw_pending", True)),
+            original_title=a.get("original_title"),
+            categories=a.get("categories"),
+            plan_ids=a.get("plan_ids"),
+            mood=a.get("mood"),
+            our_words=a.get("our_words"),
+            creation_mode=a.get("creation_mode"),
+            occurred_start=a.get("occurred_start"),
+            occurred_end=a.get("occurred_end"),
+        )
+    if not isinstance(op, str) or not op:
+        raise Forbidden("带 source_selections 的自动化 hold 必须提供"
+                        " operation_id（宿主固定 op，重试沿用）",
+                        code="INVALID_ARGUMENT")
+    from .transport import hold_domain_payload
+    from ..relations.corrections import atomic_write
+    from ..source import binding as source_binding
+    from datetime import datetime, timezone
+
+    def _fn(conn):
+        out = memory.hold_in_tx(
+            conn, principal,
+            text=str(a.get("text", "")),
+            why_remember=a.get("why_remember"),
+            memory_date=a.get("memory_date"),
+            date_confidence=a.get("date_confidence", "unknown"),
+            entry_source=principal.entry_source,
+            raw_refs=a.get("raw_refs"),
+            original_title=a.get("original_title"),
+            categories=a.get("categories"),
+            plan_ids=a.get("plan_ids"),
+            mood=a.get("mood"),
+            our_words=a.get("our_words"),
+            creation_mode=a.get("creation_mode"),
+            occurred_start=a.get("occurred_start"),
+            occurred_end=a.get("occurred_end"))
+        binding_ids = []
+        for frag in (sels or []):
+            members = frag.get("members")
+            b = source_binding.bind(
+                principal.principal_id, out["memory_id"],
+                frag.get("conversation_id", ""),
+                members[0]["source_message_id"],
+                members[-1]["source_message_id"],
+                start_char_offset=frag.get("start_char_offset"),
+                end_char_offset=frag.get("end_char_offset"),
+                conn=conn, members=members)
+            binding_ids.append(b["binding_id"])
+        return {"operation_id": op, "memory_id": out["memory_id"],
+                "version": out["version"], "binding_ids": binding_ids,
+                "committed_at": datetime.now(timezone.utc).isoformat()}
+
+    return atomic_write(principal.principal_id, "memory.hold", op,
+                        hold_domain_payload(a), _fn)
+
+
+def _hold_status(principal: Principal, a: dict) -> dict:
+    """按 operation_id 查 hold 完成回执（不返回私人正文；方案 §5）。
+
+    回执=历史成功记录；当前资源状态分列出（已删/已改版如实标注，
+    与"该操作确实提交过"分开表达——重试不得因删除而重造桶）。
+    """
+    op = a.get("operation_id")
+    if not isinstance(op, str) or not op:
+        raise Forbidden("operation_id 必填", code="INVALID_ARGUMENT")
+    with db.formal() as conn:
+        row = conn.execute(
+            "SELECT principal_id, result_ref FROM idempotency_records"
+            " WHERE capability='memory.hold' AND idempotency_key=?",
+            (f"op:{op}",)).fetchone()
+        if row is None or (row["principal_id"] != principal.principal_id
+                           and principal.principal_id != "qiaosheng"):
+            return {"operation_id": op, "completed": False, "receipt": None}
+        import json as _json
+        try:
+            receipt = _json.loads(row["result_ref"])
+        except (ValueError, TypeError):
+            receipt = {"replay_ref": row["result_ref"]}
+        mid = receipt.get("memory_id")
+        m = conn.execute(
+            "SELECT visibility, current_version_no FROM memories WHERE"
+            " memory_id=?", (mid,)).fetchone() if mid else None
+    return {"operation_id": op, "completed": True, "receipt": receipt,
+            "memory_current": {
+                "exists": m is not None,
+                **({"visibility": m["visibility"],
+                    "version": m["current_version_no"]}
+                   if m is not None else {})}}
+
+
+def _source_selection_open(principal: Principal, a: dict) -> dict:
+    from ..source.binding import open_selection
+    return open_selection(a.get("selection") or {}, 
+                          bool(a.get("include_content", False)))
 
 
 def _open(principal: Principal, a: dict) -> dict:

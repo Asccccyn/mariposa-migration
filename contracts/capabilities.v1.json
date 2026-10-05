@@ -812,7 +812,18 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）"
+      "description": "写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；自动化路径可带 operation_id+source_selections（同事务回执）"
+    },
+    {
+      "canonical_name": "memory.hold.status",
+      "transport_name": "mariposa_memory_hold_status",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按 operation_id 查 hold 完成回执（历史成功与当前资源状态分列；无记录=尚无提交证据）"
     },
     {
       "canonical_name": "memory.keep.revoke",
@@ -1465,6 +1476,26 @@
       "description": "导入批次状态与统计（batch_id；失败含错误信息）"
     },
     {
+      "canonical_name": "source.ingest",
+      "transport_name": "mariposa_source_ingest",
+      "allowed_principals": [
+        "worker"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "在线原文增量入库（live_delta；estómago 归档 worker 专用，stream 授权钉 origin/说话人；同 op 幂等）"
+    },
+    {
+      "canonical_name": "source.ingest.status",
+      "transport_name": "mariposa_source_ingest_status",
+      "allowed_principals": [
+        "worker"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按 operation_id 查 ingest 完成回执（无记录=尚无提交证据）"
+    },
+    {
       "canonical_name": "source.memory.open",
       "transport_name": "mariposa_source_memory_open",
       "allowed_principals": [
@@ -1507,6 +1538,17 @@
       "write": false,
       "idempotent": false,
       "description": "原文专项检索：关键词/说话人/日期区间/会话。不是普通 Recall，不参与记忆召回（分层边界）"
+    },
+    {
+      "canonical_name": "source.selection.open",
+      "transport_name": "mariposa_source_selection_open",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按钉住成员 manifest 读回片段（逐成员 hash 核对，漂移显式标注不静默）"
     },
     {
       "canonical_name": "time.context",
