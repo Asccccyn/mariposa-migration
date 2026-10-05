@@ -255,16 +255,16 @@ def ingest(principal: Principal, a: dict) -> dict:
             code="SOURCE_SELECTION_TOO_LARGE")
     content_sha = hashlib.sha256(body).hexdigest()
 
-    # ---- 母本先落盘（原子），DB 事务后行（契约 §4.3 顺序）----
+    # ---- 母本载荷先落盘（不可变、内容寻址）；manifest 在事务成功后
+    # 写（契约 §4.3 顺序 + 自审①：被幂等冲突拒绝的尝试不得覆盖成功
+    # 批次的 manifest）----
     batch_id = "live-" + hashlib.sha256(op.encode()).hexdigest()[:20]
     # batches.sha256 唯一键口径：(op, 内容) 复合——不同 op 同内容不撞
     # UNIQUE(provider, sha256)，同 op 重放由 op 回执先行短路
     batch_sha = hashlib.sha256(
         (op + ":" + content_sha).encode()).hexdigest()
-    payload_path = archive.publish_bytes(
-        PROVIDER, batch_id, body, content_sha,
-        {"kind": "live_delta", "operation_id": op,
-         "stream_id": stream_id, "imported_by": principal.principal_id})
+    payload_path = archive.ensure_payload_bytes(
+        PROVIDER, batch_id, body, content_sha)
 
     def _tx(conn) -> dict:
         # 事务内复查：grant 撤销 / binding 撤销在途变化（fail-closed）
@@ -320,8 +320,14 @@ def ingest(principal: Principal, a: dict) -> dict:
                 "messages": ack_msgs, "batch_ref": batch_id,
                 "integrity": "verified"}
 
-    return atomic_write(principal.principal_id, "source.ingest", op,
-                        payload, _tx)
+    ack = atomic_write(principal.principal_id, "source.ingest", op,
+                       payload, _tx)
+    # manifest 只在成功（含幂等重放）后写——描述最终提交内容
+    archive.write_live_manifest(
+        PROVIDER, batch_id, body, content_sha,
+        {"kind": "live_delta", "operation_id": op, "stream_id": stream_id,
+         "imported_by": principal.principal_id})
+    return ack
 
 
 def _ingest_one(conn, principal, grant, batch_id: str, conv_id: str,

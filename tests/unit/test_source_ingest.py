@@ -247,6 +247,75 @@ class TestAcl:
         assert e.value.code == "FORBIDDEN"
 
 
+class TestSelfAudit1005b:
+    """自审批（2026-10-05 六项）回归：①manifest 不被冲突尝试污染
+    ②allowlist 空串 fail-closed ③换代旧稿退出上下文窗口。"""
+
+    def test_manifest_survives_conflicting_retry(self, env):
+        """①同 op 异 payload 被拒后，盘上 manifest 仍描述成功内容。"""
+        from mariposa.source import archive as _archive
+        from pathlib import Path
+        ack = live.ingest(env, _req("op-m", [_msg("m1", 1, "第一版")]))
+        with pytest.raises(IdempotencyConflict):
+            live.ingest(env, _req("op-m", [_msg("m1", 1, "冲突版")]))
+        mf = _archive.load_manifest(
+            live.PROVIDER, ack["batch_ref"])
+        assert mf["operation_id"] == "op-m"
+        # manifest 的 sha 必须是成功那一次的内容（第一版），不是冲突版
+        p = Path(live.config.SOURCE_RAW_DIR) / live.PROVIDER / \
+            ack["batch_ref"] / mf["payload"]
+        from mariposa.source.archive import sha256_file
+        actual, _ = sha256_file(p)
+        assert hashlib.sha256(
+            json.dumps({"operation_id": "op-m", "stream_id": STREAM,
+                        "origin_instance": "estomago",
+                        "origin_conversation_id": ROOM,
+                        "messages": [_msg("m1", 1, "第一版")]},
+                       ensure_ascii=False, sort_keys=True, default=str)
+            .encode()).hexdigest() == actual
+
+    def test_allowlist_empty_string_denies_all(self, actors):
+        """②空串白名单=受限且全拒，不当 NULL（不限）解读。"""
+        from mariposa.identity import service as idsvc
+        token = "tok-selfaudit-empty-allowlist"
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO client_bindings(binding_id, token_hash,"
+                " principal_id, entry_source, capabilities_allowlist,"
+                " created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                ("binding_sa_empty", idsvc._hash_token(token), "worker",
+                 "estomago_archive", ""))
+            conn.execute("COMMIT")
+        p = idsvc.authenticate(token)
+        assert p.capabilities_allowlist == frozenset()
+        with pytest.raises(Forbidden):
+            registry.invoke(p, "source.ingest", _req("op-1", [
+                _msg("m1", 1, "x")]), None)
+
+    def test_superseded_out_of_message_context(self, env):
+        """③换代旧修订退出 get_message 上下文窗口（当前会话视图）。"""
+        from mariposa.source import query
+        live.ingest(env, _req("op-1", [
+            _msg("m1", 1, "旧稿", sender="user"),
+            _msg("m2", 2, "第二句", sender="assistant",
+                 pred={"origin_message_id": "m1", "revision": 1})]))
+        live.ingest(env, _req("op-2", [
+            _msg("m1", 1, "新稿", rev=2, prev_rev=1)]))
+        ack = live.ingest(env, _req("op-3", [
+            _msg("m3", 3, "第三句", sender="user",
+                 pred={"origin_message_id": "m2", "revision": 1})]))
+        with db.formal() as conn:
+            pid = conn.execute(
+                "SELECT provider_message_id FROM source_messages WHERE"
+                " id=?", (ack["messages"][0]["source_message_id"],)
+            ).fetchone()["provider_message_id"]
+        out = query.get_message(provider_message_id=pid, context=10)
+        ctx_texts = [c["text"] for c in out["context_before"]]
+        assert "新稿" in ctx_texts
+        assert "旧稿" not in ctx_texts, "换代旧修订不得混入当前上下文"
+
+
 class TestAtomicity:
     def test_failure_leaves_no_partial_rows(self, env):
         live.ingest(env, _req("op-1", [_msg("m1", 1, "first")]))

@@ -107,13 +107,14 @@ def authenticate(token: str | None) -> Principal:
     # token expires_at 为 NULL = 永久，不受影响）
     if row["expires_at"] is not None and row["expires_at"] < _time.time():
         raise Unauthenticated("token expired")
+    # 受限白名单解析（自审②）：非 NULL 一律按受限对待——空串/坏 JSON
+    # fail-closed 全拒，不把"写坏了"当成"不限"
     allowlist = None
-    if row["capabilities_allowlist"]:
+    if row["capabilities_allowlist"] is not None:
         try:
             names = _json.loads(row["capabilities_allowlist"])
         except (ValueError, TypeError):
             names = None
-        # 坏白名单 fail-closed：解析失败视同全拒，不带病放行
         allowlist = frozenset(n for n in names if isinstance(n, str)) \
             if isinstance(names, list) else frozenset()
     return Principal(

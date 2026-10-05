@@ -62,7 +62,9 @@ def search(query: str | None = None, *, senders: list[str] | None = None,
     sender_filter = _resolve_senders(senders)
     where, params = _base_filters(provider, conversation_id,
                                   date_from, date_to)
-    where.append("m.published=1")
+    # 自审③：当前投影不含换代旧修订（检索投影文档只维护最新版，此处
+    # 过滤是第二道——evidence_like 通道不走 FTS 文档）
+    where.append("m.published=1 AND m.live_superseded=0")
     if speaker:
         where.append("m.speaker=?")
         params.append(speaker)
@@ -150,7 +152,11 @@ def get_message(message_id: str | None = None,
             " created_at, updated_at, message_count, first_message_at,"
             " last_message_at FROM source_conversations WHERE id=?",
             (row["conversation_id"],)).fetchone()
-        pubflt = "" if include_unpublished else " AND published=1"
+        # 上下文窗口是"当前会话视图"：换代旧修订退出（自审③）；锚点
+        # 本身若是被钉住的旧修订仍可读（上方 _find_message 不过滤）；
+        # include_unpublished 诊断分支照旧全放
+        pubflt = "" if include_unpublished else \
+            " AND published=1 AND live_superseded=0"
         prev = conn.execute(
             f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
             f" AND sequence<?{pubflt} ORDER BY sequence DESC LIMIT ?",
