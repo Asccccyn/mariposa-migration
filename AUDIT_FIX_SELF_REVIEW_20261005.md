@@ -65,7 +65,7 @@
 
 | # | 项 | 状态 | 理由 |
 |---|---|---|---|
-| E1 | coverage"gap>0 一律不签 complete" | **部分采纳** | 修复中途发现与 S19 收口裁定（江乔生指示、test_closure_s19_pool 三条测试固化）冲突：无分类桶=非参与成员不构成不完整。已按原裁定保留；实质修复保留在 DataGap 桶纳入扫描（v1 桶现在可被检索）。若重审认为 gap 应降级 coverage，需先推翻 S19 裁定 |
+| E1 | coverage"gap>0 一律不签 complete" | **部分采纳** | 修复中途发现与 S19 收口裁定（江乔生指示、test_closure_s19_pool 三条测试固化）冲突：无分类桶=非参与成员不构成不完整。已按原裁定保留；实质修复保留在 DataGap 桶纳入扫描（v1 桶现在可被检索）。若重审认为 gap 应降级 coverage，需先推翻 S19 裁定。**严重度校准（2026-10-05 晨，所有者确认后复核）**：`memory.hold` 服务层强制 `CATEGORY_REQUIRED`（v1.7 §3.2，"没有未分类默认值"），且 categories 必填 ⇒ 恒走 v2 路径 ⇒ held_at 必写。全库唯一 `INSERT INTO memories` 在 hold 链路。故**无分类桶与缺 held_at 桶经正式写路径均不可能产生**——两类"坏桶"只存在于测试夹具裸 SQL 与假设性的旧版存量导入。因此：① S19 语义与审计激进版在生产数据形态下等价（真实库 gap 恒 0），保留裁定零成本；② P1-3 修复的实际定位是**防御性**——为将来导入真实旧数据预铺，当前库无存量对象，实际严重度低于评估的 P1 一档；③ E1 的"冲突"实质是测试造脏行场景之争，不影响生产语义 |
 | E2 | `recall/replay.py:260` 仍逐桶 `phase_of` | 保留 | 一次性 replay 低频路径，N+1 影响可控；主线（pipeline/search）已批量 |
 | E3 | words 检索性能（每次全表指纹扫描 + 全池进内存 BM25） | 保留 | P1-2 只修正确性（并发崩溃）；性能优化是独立工作项，当前数据规模（个人库）不构成故障 |
 | E4 | 缺失的 input schema 本体未补（activity.list/media.list/memory.list/source.search 等） | 部分 | 以 handler 侧 `_int_arg` 钳制收口（防全表倾倒+结构化 400 已达成）；schema 声明补齐留给契约整理批次 |
