@@ -290,3 +290,87 @@ class TestREGATE04SubsecondConsistency:
         assert header == detail == 1, \
             f"Retry-After({header}) 与 detail({detail}) 必须同为 ceil≥1"
         assert "约 1 秒" in r.json()["error"]["message"]
+
+
+class TestFifthRoundMetering:
+    """五轮复审：单请求单次计档 + 锁内 claim + 有界成员集。"""
+
+    def test_wrong_profile_single_charge(self, actors, monkeypatch):
+        """AF-GATE-02：meta 计档与 profile 拒绝共享一次（原双扣）。"""
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_READ_PER_MIN", 2)
+        with _client() as c:
+            codes = [c.post("/mcp/maintenance", json={
+                "jsonrpc": "2.0", "id": i, "method": "initialize"},
+                headers={"Authorization":
+                         f"Bearer {TOKENS['worker']}"}).status_code
+                for i in range(3)]
+        assert codes == [200, 200, 429], \
+            f"一次请求只扣一次读档：{codes}"
+
+    def test_unmanaged_404_single_charge(self, actors, monkeypatch):
+        """AF-GATE-02：middleware 预检计过则 404 不补扣（原双扣）。"""
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_ANON_PER_MIN", 2)
+        with _client() as c:
+            codes = [c.get("/apiX").status_code for _ in range(3)]
+        assert codes == [404, 404, 429], \
+            f"预检+补计只算一次：{codes}"
+
+    def test_managed_trailing_slash_307_metered(self, actors,
+                                                monkeypatch):
+        """AF-GATE-02：managed 前缀的 307 重定向纳入匿名档补计。"""
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_ANON_PER_MIN", 2)
+        with _client() as c:
+            codes = [c.get("/api/capabilities/",
+                           follow_redirects=False).status_code
+                     for _ in range(3)]
+        assert codes[0] == 307
+        assert codes[2] == 429, "307 打点必须计档"
+
+    def test_concurrent_maintain_single_claim(self, monkeypatch):
+        """MIN-GATE-01：两个维护并发收集同一到期周期，只一个消费。"""
+        import threading
+        from mariposa import gate
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        sink_calls = []
+
+        def sink(events):
+            sink_calls.append(len(events))
+
+        gate.set_expiry_sink(sink)
+        for _ in range(5):
+            gate.note_auth_failure("10.5.0.1")
+        fake_now[0] += 7 * 86400
+        barrier = threading.Barrier(2)
+
+        def run():
+            barrier.wait()
+            gate._maintain()
+
+        t1 = threading.Thread(target=run)
+        t2 = threading.Thread(target=run)
+        t1.start(); t2.start(); t1.join(); t2.join()
+        total = sum(sink_calls)
+        assert total == 1, f"同一锁周期只允许一个消费者：{sink_calls}"
+
+    def test_denied_source_leaves_no_member(self, monkeypatch):
+        """MIN-GATE-02：被拒（超限）的来源不留粘性成员；放行才记。"""
+        from mariposa import gate
+        gate.reset_for_tests()  # 前序用例的桶/成员残留隔离
+        fake_now = [1000.0]
+        monkeypatch.setattr(gate, "_now", lambda: fake_now[0])
+        monkeypatch.setattr(gate, "_MAX_TRACKED_KEYS", 3)
+        from mariposa import config as cfg
+        monkeypatch.setattr(cfg, "GATE_RATE_ANON_PER_MIN", 1)
+        gate.check_rate("anon", "10.4.0.1")
+        gate.check_rate("anon", "10.4.0.2")
+        gate.check_rate("anon", "10.4.0.3")     # 容量满
+        assert gate.check_rate("anon", "10.4.0.4") == 0   # 放行→记成员
+        assert gate.check_rate("anon", "10.4.0.5") > 0    # 溢出桶满被拒
+        assert ("anon", "10.4.0.5") not in gate._ovf_members, \
+            "被拒来源不得留成员记录"
+        assert ("anon", "10.4.0.4") in gate._ovf_members, \
+            "放行消费的来源记录粘性成员（原始键）"

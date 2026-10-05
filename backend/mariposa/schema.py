@@ -976,6 +976,47 @@ ALTER TABLE memory_our_words
 -- 没有内容绑定（NULL），confirm/append 一律 fail-closed 要求重开。
 ALTER TABLE memory_view_receipts
   ADD COLUMN content_version INTEGER;
+    """),
+    (29, """
+-- OAuth 动态授权（2026-10-05 江乔生裁定：连接后输密码换临时
+-- token，两个密码各映射一个身份——网页登录密码→qiaosheng、
+-- MCP 密码→jiaming；替代静态长驻 token 的发放方式）
+CREATE TABLE principal_credentials(
+  principal_id TEXT PRIMARY KEY REFERENCES principals(principal_id),
+  password_hash TEXT NOT NULL,      -- PBKDF2-SHA256(salt, password) hex
+  salt TEXT NOT NULL,
+  iterations INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE oauth_clients(
+  client_id TEXT PRIMARY KEY,
+  client_name TEXT,
+  redirect_uris TEXT NOT NULL,      -- JSON 数组（动态注册时声明）
+  created_at TEXT NOT NULL
+);
+CREATE TABLE oauth_codes(
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,       -- 登录页密码命中的身份（签发依据）
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT,
+  scopes TEXT NOT NULL,
+  resource TEXT,
+  expires_at REAL NOT NULL,         -- epoch 秒；TTL 5 分钟
+  consumed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE oauth_refresh_tokens(
+  refresh_hash TEXT PRIMARY KEY,    -- SHA256(refresh_token)
+  client_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  scopes TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  rotated_from TEXT                 -- 轮换链（旧 hash，审计可追）
+);
+CREATE INDEX idx_oauth_codes_expiry ON oauth_codes(expires_at);
+-- 既有静态 token 不受影响（expires_at NULL = 永久）；OAuth 发的
+-- access token 带过期，authenticate 侧 fail-closed 校验
+ALTER TABLE client_bindings ADD COLUMN expires_at REAL;
 """),
 ]
 

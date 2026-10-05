@@ -90,7 +90,8 @@
       <option value="jiaming">周家明（jiaming）</option>
       <option value="worker">工具人（worker）</option>
     </select>
-    <input id="token" placeholder="token" size="26" />
+    <input id="token" placeholder="登录密码" size="26" type="password"
+           autocomplete="current-password" />
     <button id="saveToken">连接</button>
   </div>
   <span id="status"></span>
@@ -179,7 +180,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { token: localStorage.getItem('mariposa_token') || '',
+const state = { token: '',
                 who: localStorage.getItem('mariposa_who') || 'qiaosheng',
                 calY: null, calM: null, calSel: null };
 $('who').value = state.who;
@@ -223,12 +224,31 @@ document.querySelectorAll('nav button').forEach(btn => {
 });
 
 // ---------- 记忆 ----------
-$('saveToken').onclick = () => {
-  state.token = $('token').value.trim();
-  state.who = $('who').value;
-  localStorage.setItem('mariposa_token', state.token);
-  localStorage.setItem('mariposa_who', state.who);
-  searchMemories('');
+$('saveToken').onclick = async () => {
+  const pw = $('token').value;
+  if (!pw) { setStatus('请输入登录密码', true); return; }
+  setStatus('登录中…');
+  // OAuth 动态授权（2026-10-05）：密码换临时 token，明文密码与
+  // token 都不落 localStorage；token 过期后重新输密码
+  try {
+    const r = await fetch('/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=password&password=' + encodeURIComponent(pw)
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.access_token) {
+      throw new Error(body.error_description || body.error || r.status);
+    }
+    state.token = body.access_token;
+    state.tokenExpires = Date.now() + (body.expires_in || 0) * 1000;
+    state.who = $('who').value;
+    localStorage.removeItem('mariposa_token');  // 不再存长驻凭据
+    $('token').value = '';
+    setStatus('已连接（' + Math.round((body.expires_in || 0) / 3600)
+              + ' 小时内免密）');
+    refreshAll();
+  } catch (e) { setStatus('登录失败：' + e.message, true); }
 };
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });

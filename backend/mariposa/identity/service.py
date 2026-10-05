@@ -85,17 +85,22 @@ def _entry_source(pid: str) -> str:
 def authenticate(token: str | None) -> Principal:
     if not token:
         raise Unauthenticated("missing bearer token")
+    import time as _time
     row = None
     with db.formal() as conn:
         row = conn.execute(
-            "SELECT b.binding_id, b.entry_source, b.revoked, p.principal_id,"
-            " p.display_name, p.kind"
+            "SELECT b.binding_id, b.entry_source, b.revoked, b.expires_at,"
+            " p.principal_id, p.display_name, p.kind"
             " FROM client_bindings b JOIN principals p USING(principal_id)"
             " WHERE b.token_hash=?",
             (_hash_token(token),),
         ).fetchone()
     if row is None or row["revoked"]:
         raise Unauthenticated("invalid or revoked token")
+    # OAuth（2026-10-05）：动态授权 token 带过期——过期即拒（静态
+    # token expires_at 为 NULL = 永久，不受影响）
+    if row["expires_at"] is not None and row["expires_at"] < _time.time():
+        raise Unauthenticated("token expired")
     return Principal(
         principal_id=row["principal_id"],
         display_name=row["display_name"],

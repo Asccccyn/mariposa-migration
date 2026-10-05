@@ -11,10 +11,12 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import (FileResponse, HTMLResponse,
+                                JSONResponse, RedirectResponse)
 from fastapi.staticfiles import StaticFiles
 
-from . import config, gate, schema
+from . import config, db, gate, schema
+from . import oauth as _oauth
 from .capabilities import mcp_adapter
 from .capabilities import registry
 from .capabilities import v1_compat
@@ -104,15 +106,21 @@ async def _surface_gate(request: Request, call_next):
     remain = gate.assert_not_locked(ip)
     if remain > 0:
         return _locked_response(max(1, math.ceil(remain)))
+    # AF-GATE-02（五轮复审）：请求级"已计档"标记——每条请求至多
+    # 计一次匿名档（预检计过则 404/405/307 不再补计，杜绝双扣）
+    request.state._gate_metered = False
     path = request.url.path
     if not _surface_managed(path):
         wait = gate.check_rate("anon", ip)
+        request.state._gate_metered = True
         if wait > 0:
             return _rate_limited_response(max(1, math.ceil(wait)))
     response = await call_next(request)
-    if response.status_code in (404, 405):
-        # 未被任何端点处理的请求：事后补计匿名档；计数即满时以
-        # 429 顶替 404/405（本请求不再免费通行）
+    if (response.status_code in (404, 405, 307)
+            and not getattr(request.state, "_gate_metered", False)):
+        # 未被任何端点处理/只有重定向的请求：事后补计匿名档；
+        # 计数即满时以 429 顶替（本请求不再免费通行）。307 含
+        # /api/ 前缀的尾斜杠重定向——无业务正文但同样是打点
         wait = gate.check_rate("anon", ip)
         if wait > 0:
             return _rate_limited_response(max(1, math.ceil(wait)))
@@ -127,6 +135,215 @@ def health() -> dict:
         "contract_version": config.CONTRACT_VERSION,
         "projection_revision": config.PROJECTION_REVISION,
     }
+
+
+# ---------------------------------------------------------------- OAuth
+# 动态授权（2026-10-05 江乔生裁定）：连接后输密码换临时 token。
+# /oauth/* 与 /.well-known/* 不在 _surface_managed 内 → middleware 的
+# IP 匿名档 + 锁定全链生效；密码错误另计失败锁定（防在线爆破）。
+
+def _oauth_base_url(request: Request) -> str:
+    return f"{request.url.scheme}://{request.url.netloc}"
+
+
+@app.get("/.well-known/oauth-authorization-server")
+def oauth_discovery(request: Request):
+    base = _oauth_base_url(request)
+    return {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/oauth/authorize",
+        "token_endpoint": f"{base}/oauth/token",
+        "registration_endpoint": f"{base}/oauth/register",
+        "revocation_endpoint": f"{base}/oauth/revoke",
+        "grant_types_supported": list(_oauth.GRANT_TYPES),
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "scopes_supported": list(_oauth.SCOPES),
+    }
+
+
+@app.post("/oauth/register")
+async def oauth_register(request: Request):
+    raw = await request.body()
+    try:
+        meta = json.loads(raw or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse(status_code=400, content={
+            "error": "invalid_client_metadata"})
+    if not isinstance(meta, dict):
+        return JSONResponse(status_code=400, content={
+            "error": "invalid_client_metadata"})
+    uris = meta.get("redirect_uris")
+    if not isinstance(uris, list) or not uris:
+        return JSONResponse(status_code=400, content={
+            "error": "invalid_redirect_uris"})
+    try:
+        out = _oauth.register_client(meta.get("client_name"), uris)
+    except MariposaError as e:
+        return JSONResponse(status_code=e.http_status, content={
+            "error": e.code})
+    return JSONResponse(status_code=201, content=out)
+
+
+def _esc(v: str) -> str:
+    return (str(v).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;")
+            .replace("'", "&#39;"))
+
+
+def _oauth_login_page(fields: dict, error: str | None) -> str:
+    hidden = "".join(
+        f'<input type="hidden" name="{_esc(k)}" value="{_esc(v)}">'
+        for k, v in fields.items() if v is not None)
+    err = (f'<p class="error">{_esc(error)}</p>' if error else "")
+    return f"""<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"/><meta name="viewport"
+ content="width=device-width, initial-scale=1"/>
+<title>连接 mariposa</title>
+<style>
+body {{ font-family: system-ui,-apple-system,sans-serif; margin:0;
+ background:#0f172a; color:#e2e8f0; }}
+main {{ max-width:420px; margin:12vh auto; padding:32px;
+ background:#111827; border:1px solid #334155; border-radius:18px; }}
+h1 {{ margin:0 0 10px; font-size:24px; }}
+p {{ color:#cbd5e1; line-height:1.5; }}
+label {{ display:block; margin:16px 0 6px; font-weight:600; }}
+input {{ box-sizing:border-box; width:100%; padding:12px 14px;
+ border-radius:10px; border:1px solid #475569; background:#020617;
+ color:#e2e8f0; font-size:16px; }}
+button {{ margin-top:16px; width:100%; border:0; border-radius:10px;
+ padding:12px; font-weight:700; color:#020617; background:#38bdf8; }}
+.error {{ color:#fecaca; background:#7f1d1d; border-radius:10px;
+ padding:10px 12px; }}
+</style></head>
+<body><main>
+<h1>连接 mariposa</h1>
+<p>输入密码完成授权。只有你自己主动连接时才确认。</p>
+{err}
+<form method="post">
+{hidden}
+<label for="password">密码</label>
+<input id="password" name="password" type="password"
+ autocomplete="current-password" autofocus required/>
+<button type="submit">授权</button>
+</form></main></body></html>"""
+
+
+async def _oauth_form_body(request: Request) -> dict:
+    raw = await request.body()
+    from urllib.parse import parse_qs
+    parsed = parse_qs((raw or b"").decode("utf-8", "replace"),
+                      keep_blank_values=True)
+    return {k: v[0] for k, v in parsed.items()}
+
+
+@app.get("/oauth/authorize")
+async def oauth_authorize_get(request: Request):
+    # GET：参数在 query string（无 body）
+    return _oauth_authorize_handle(
+        request, dict(request.query_params))
+
+
+@app.post("/oauth/authorize")
+async def oauth_authorize_post(request: Request):
+    return _oauth_authorize_handle(request, await _oauth_form_body(request))
+
+
+def _oauth_authorize_handle(request: Request, form: dict):
+    client_id = form.get("client_id", "")
+    redirect_uri = form.get("redirect_uri", "")
+    state = form.get("state")
+    challenge = form.get("code_challenge") or None
+    method = form.get("code_challenge_method") or "S256"
+    if method != "S256":
+        return JSONResponse(status_code=400, content={
+            "error": "unsupported_code_challenge_method"})
+    if not _oauth.client_redirect_allowed(client_id, redirect_uri):
+        return JSONResponse(status_code=400, content={
+            "error": "unauthorized_client"})
+    fields = {"client_id": client_id, "redirect_uri": redirect_uri,
+              "state": state, "code_challenge": challenge,
+              "code_challenge_method": "S256"}
+    password = form.get("password")
+    if not password:
+        return HTMLResponse(_oauth_login_page(fields, None))
+    ip = gate.client_ip(request)
+    principal_id = _oauth.verify_password(password)
+    if principal_id is None:
+        # 密码错 → 计入门禁失败锁定（与 token 暴破同权）
+        def _audit(level, seconds):
+            _audit_gate_event("auth.locked", ip,
+                              {"lock_level": level, "seconds": seconds,
+                               "surface": "oauth"})
+        gate.note_auth_failure(ip, record_audit=_audit)
+        return HTMLResponse(_oauth_login_page(
+            fields, "密码不正确。"), status_code=401)
+    gate.note_auth_success(ip)
+    code = _oauth.save_authorization_code(
+        principal_id, client_id, redirect_uri, challenge,
+        list(_oauth.SCOPES), form.get("resource"))
+    from urllib.parse import urlencode
+    params = {"code": code}
+    if state:
+        params["state"] = state
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(f"{redirect_uri}{sep}{urlencode(params)}",
+                            status_code=302)
+
+
+@app.post("/oauth/token")
+async def oauth_token(request: Request):
+    form = await _oauth_form_body(request)
+    grant = form.get("grant_type", "")
+    bad = JSONResponse(status_code=400, content={"error": "invalid_grant"})
+    if grant == "password":
+        ip = gate.client_ip(request)
+        principal_id = _oauth.verify_password(form.get("password", ""))
+        if principal_id is None:
+            def _audit(level, seconds):
+                _audit_gate_event("auth.locked", ip,
+                                  {"lock_level": level,
+                                   "seconds": seconds,
+                                   "surface": "oauth"})
+            gate.note_auth_failure(ip, record_audit=_audit)
+            return JSONResponse(status_code=401, content={
+                "error": "invalid_grant",
+                "error_description": "密码不正确"})
+        gate.note_auth_success(ip)
+        return _oauth.issue_access_token(principal_id)
+    if grant == "authorization_code":
+        try:
+            return _oauth.exchange_code(
+                form.get("code", ""), form.get("client_id", ""),
+                form.get("redirect_uri", ""),
+                form.get("code_verifier") or None)
+        except MariposaError:
+            return bad
+    if grant == "refresh_token":
+        try:
+            return _oauth.rotate_refresh(form.get("refresh_token", ""),
+                                         form.get("client_id", ""))
+        except MariposaError:
+            return bad
+    return JSONResponse(status_code=400, content={
+        "error": "unsupported_grant_type"})
+
+
+@app.post("/oauth/revoke")
+async def oauth_revoke(request: Request):
+    form = await _oauth_form_body(request)
+    token = form.get("token", "")
+    if token:
+        th = _oauth._hash_token(token)
+        with db.formal() as conn:
+            conn.execute(
+                "UPDATE client_bindings SET revoked=1 WHERE token_hash=?",
+                (th,))
+            conn.execute("DELETE FROM oauth_refresh_tokens"
+                         " WHERE refresh_hash=?", (th,))
+    return JSONResponse(status_code=200, content={})
 
 
 @app.get("/api/capabilities")

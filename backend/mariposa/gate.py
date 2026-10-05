@@ -53,8 +53,11 @@ _ops_since_maintain = 0
 
 #: AF-GATE-01（四轮复审）：曾因容量满被路由进溢出桶的键——溢出桶
 #: 滑空前保持粘性（继续路由溢出桶，不建独立桶），否则旧容量腾出
-#: 后同主体获得"溢出计数 + 新独立桶"双份配额
-_ovf_members: set = set()
+#: 后同主体获得"溢出计数 + 新独立桶"双份配额。
+#: MIN-GATE-02（五轮复审）：有序 dict 保插入序、容量有界（超限
+#: 淘汰最旧成员——保守恢复独立资格，溢出桶计数仍在）；只在**实际
+#: 放行消费**时加入成员，被拒（超限）的来源不留成员记录
+_ovf_members: dict = {}
 
 #: AF-GATE-03（四轮复审）：到期事件消费回调——维护流程发现有界批量
 #: 的未消费到期事件时经此落审计（app 启动时注入 record_isolated
@@ -78,7 +81,7 @@ def reset_for_tests() -> None:
     with _LOCK:
         _auth_failures.clear()
         _rate_windows.clear()
-        _ovf_members.clear()
+        _ovf_members.clear()  # dict.clear 同义
         _last_maintain = _now()
         _ops_since_maintain = 0
     _expiry_sink = None
@@ -129,7 +132,7 @@ def _maintain() -> None:
                 if key[1] == "\x00_overflow":
                     # 溢出桶滑空：粘性成员恢复独立桶资格（AF-GATE-01）
                     for m in [m for m in _ovf_members if m[0] == key[0]]:
-                        _ovf_members.discard(m)
+                        _ovf_members.pop(m, None)
         for ip in list(_auth_failures.keys()):
             st = _auth_failures[ip]
             locked_until = st.get("locked_until", 0.0)
@@ -139,6 +142,10 @@ def _maintain() -> None:
             if st.get("fails", 0) > 0 and now - last < _WINDOW_SECONDS:
                 continue
             if locked_until > 0 and not st.get("expired_reported"):
+                # MIN-GATE-01（五轮复审）：锁内即 claim（置位）——
+                # 并发维护/原来源 take 都看不到已 claim 的周期，
+                # 同一锁周期只允许一个消费者；sink 失败在锁内回滚
+                st["expired_reported"] = True
                 pending_expiry.append(
                     (ip, {"lock_level": st.get("lock_level", 0),
                           "locked_until": locked_until}))
@@ -165,20 +172,22 @@ def _maintain() -> None:
             try:
                 _expiry_sink(pending_expiry)
             except Exception as e:
-                # 消费失败不丢事件：保留未标记状态，下轮维护重试；
-                # stderr 留痕（不静默）
+                # 消费失败：锁内回滚 claim（该周期下轮可重试）；
+                # stderr 留痕（不静默）。ccbe12c 起单条失败由 app 端
+                # sink 自行留痕不 raise，此处仅整体性异常防御
                 import sys
                 sys.stderr.write(
                     f"[gate] expiry sink failed ({len(pending_expiry)} "
                     f"events): {e!r}\n")
+                with _LOCK:
+                    for ip, payload in pending_expiry:
+                        st = _auth_failures.get(ip)
+                        if (st is not None
+                                and st.get("locked_until") == payload.get(
+                                    "locked_until")):
+                            st["expired_reported"] = False
                 return
-        with _LOCK:
-            for ip, payload in pending_expiry:
-                st = _auth_failures.get(ip)
-                if (st is not None
-                        and st.get("locked_until") == payload.get(
-                            "locked_until")):
-                    st["expired_reported"] = True
+        # 成功：claim 保持置位（已在收集时完成）
 
 
 def client_ip(request) -> str:
@@ -308,6 +317,7 @@ def check_rate(kind: str, key: str) -> float:
     ovf_key = (kind, "\x00_overflow")
     with _LOCK:
         bucket_key = (kind, key)
+        routed_ovf = False
         if bucket_key not in _rate_windows:
             # AF-GATE-01：曾进溢出桶的键保持粘性（该 kind 的溢出桶
             # 滑空前不建独立桶）；或容量满时新键入溢出桶
@@ -315,12 +325,18 @@ def check_rate(kind: str, key: str) -> float:
             sticky = bucket_key in _ovf_members and ovf_window
             if sticky or len(_rate_windows) >= _MAX_TRACKED_KEYS:
                 bucket_key = ovf_key
-                _ovf_members.add((kind, key))
+                routed_ovf = True
         window = _rate_windows.setdefault(bucket_key, deque())
         while window and window[0] <= now - _WINDOW_SECONDS:
             window.popleft()
         if len(window) >= limit:
             wait = _WINDOW_SECONDS - (now - window[0])
-            return max(0.5, wait)
+            return max(0.5, wait)  # 被拒：不留成员记录（MIN-GATE-02）
         window.append(now)
+        if routed_ovf:
+            # 实际获准消费才记粘性（记**原始键**——sticky 检查按
+            # 原始键）；成员集有界（淘汰最旧）
+            _ovf_members[(kind, key)] = now
+            while len(_ovf_members) > _MAX_TRACKED_KEYS:
+                _ovf_members.popitem(last=False)
     return 0.0
