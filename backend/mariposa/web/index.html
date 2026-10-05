@@ -493,7 +493,7 @@ function srcMsgHtml(m) {
   if (m.has_tool_content) badges.push('<span class="src-badge tool">工具内容（不入正文）</span>');
   if (m.id_synthetic) badges.push('<span class="src-badge">缺失UUID·合成ID</span>');
   for (const a of (m.attachments || []))
-    badges.push(`<span class="src-badge">附件 ${esc(a.file_name || a.filename || a.title || a.block_type || '')}</span>`);
+    badges.push(`<span class="src-badge">附件 ${esc(typeof a === 'string' ? a : (a.file_name || a.filename || a.title || a.block_type || ''))}</span>`);
   let evidence = '';
   if (m.has_thinking || m.has_tool_content || m.normalized_sender === 'unknown' || m.normalized_sender === 'system' || m.normalized_sender === 'tool')
     evidence = '<details><summary>证据内容（thinking / 工具 / 非正文块）</summary>' +

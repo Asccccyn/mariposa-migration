@@ -122,9 +122,18 @@ def publish_bytes(provider: str, batch_id: str, data: bytes, sha256: str,
     与 publish_snapshot 同一规约：原子替换、payload-<sha16> 命名、
     manifest 临时写+替换、0444 只读。幂等：同 hash 已存在且一致则
     复用（崩溃重试不重写）。调用方必须在 DB 事务提交**之前**完成
-    本调用——ACK 成功时母本必然已在盘上；DB 失败只留下待核对孤立
-    资产，不出现反向。
+    ensure_payload_bytes（本函数），在事务成功**之后**再调
+    write_live_manifest——manifest 只记录最终成功的内容，被幂等冲突
+    拒绝的尝试不得覆盖它；DB 失败只留下待核对孤立载荷，不出现反向。
     """
+    payload = ensure_payload_bytes(provider, batch_id, data, sha256)
+    write_live_manifest(provider, batch_id, data, sha256, manifest_extra)
+    return payload
+
+
+def ensure_payload_bytes(provider: str, batch_id: str, data: bytes,
+                         sha256: str) -> Path:
+    """母本载荷先落盘（不可变、内容寻址；冲突尝试不产生副作用）。"""
     dest_dir = batch_dir(provider, batch_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     payload = dest_dir / f"payload-{sha256[:16]}"
@@ -140,6 +149,15 @@ def publish_bytes(provider: str, batch_id: str, data: bytes, sha256: str,
         tmp.write_bytes(data)
         os.replace(tmp, payload)
     _mark_readonly(payload)
+    return payload
+
+
+def write_live_manifest(provider: str, batch_id: str, data: bytes,
+                        sha256: str, manifest_extra: dict) -> Path:
+    """成功提交后写清单（幂等；只描述最终内容）。"""
+    dest_dir = batch_dir(provider, batch_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    payload = dest_dir / f"payload-{sha256[:16]}"
     manifest = {
         "batch_id": batch_id,
         "provider": provider,

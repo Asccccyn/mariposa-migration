@@ -78,15 +78,37 @@ def main() -> int:
         copied = True
     except (OSError, subprocess.CalledProcessError):
         copied = False
-    print("✓ 受限 binding 已建（principal=worker，白名单："
-          + ", ".join(ALLOWLIST) + ")")
-    print(f"✓ stream grant 已登记：{json.dumps(grant, ensure_ascii=False)}")
+    try:
+        subprocess.run(["pbcopy"], input=token.encode(), check=True)
+        copied = True
+    except (OSError, subprocess.CalledProcessError):
+        copied = False
     if copied:
+        print("✓ 受限 binding 已建（principal=worker，白名单："
+              + ", ".join(ALLOWLIST) + ")")
+        print(f"✓ stream grant 已登记：{json.dumps(grant, ensure_ascii=False)}")
         print("✓ token 已复制到剪贴板（pbcopy）——粘贴到你的密码管理器；"
               "本脚本不会再次显示它")
     else:
-        print("⚠ pbcopy 不可用：token 未显示也未复制——请重跑本脚本"
-              "（binding 已建，先手动撤销或换 stream）")
+        # 自审⑥：token 没到剪贴板=永久丢失——当即将 binding/grant 撤销
+        # 成不可用态，重跑本脚本全新签发（旧 binding 留审计痕迹）
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE client_bindings SET revoked=1 WHERE"
+                    " binding_id=? AND revoked=0", (binding_id,))
+                conn.execute(
+                    "UPDATE source_stream_grants SET revoked_at=datetime"
+                    "('now') WHERE stream_id=? AND revoked_at IS NULL",
+                    (args.stream_id,))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        print("⚠ pbcopy 不可用：token 未能交付——binding 与 grant 已当场"
+              "撤销（防丢 token 变孤儿），修复剪贴板后直接重跑本脚本")
+        return 1
     return 0
 
 

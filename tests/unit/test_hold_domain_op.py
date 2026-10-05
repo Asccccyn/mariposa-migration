@@ -279,3 +279,42 @@ class TestSelectionOpen:
                              {"operation_id": "never"}, None)["data"]
         assert st == {"operation_id": "never", "completed": False,
                       "receipt": None}
+
+
+class TestSelfAudit1005bOffsets:
+    """自审④⑤：读回与写入两路径同一偏移口径；members 路径偏移在
+    首末成员上生效且越界拒绝。"""
+
+    def test_open_selection_rejects_out_of_bounds(self, seeded):
+        jiaming = seeded["actors"]["jiaming"]
+        sel = {"conversation_id": seeded["conv_id"],
+               "members": seeded["members"](0),
+               "start_char_offset": 99999}
+        with pytest.raises(Forbidden) as e:
+            registry.invoke(jiaming, "source.selection.open",
+                            {"selection": sel}, None)
+        assert e.value.code == "SOURCE_RANGE_OFFSET"
+
+    def test_open_selection_rejects_bool_offset(self, seeded):
+        jiaming = seeded["actors"]["jiaming"]
+        sel = {"conversation_id": seeded["conv_id"],
+               "members": seeded["members"](0),
+               "start_char_offset": True}
+        # schema 层先拒（integer 类型）；直接走 service 验证口径
+        from mariposa.source.binding import open_selection
+        with pytest.raises(Forbidden) as e:
+            open_selection(sel)
+        assert e.value.code == "SOURCE_RANGE_OFFSET"
+
+    def test_hold_members_offset_validated_in_tx(self, seeded):
+        """⑤ members 路径的偏移经同一 validate_range（含越界拒绝）——
+        重构后单一校验来源，不因复用丢口径。"""
+        jiaming = seeded["actors"]["jiaming"]
+        bad = _hold_args(seeded)
+        bad["source_selections"][0]["start_char_offset"] = 99999
+        with pytest.raises(Forbidden) as e:
+            registry.invoke(jiaming, "memory.hold", bad, None)
+        assert e.value.code == "SOURCE_RANGE_OFFSET"
+        with db.formal() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) c FROM memories").fetchone()["c"] == 0
