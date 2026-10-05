@@ -48,3 +48,25 @@ def record(
         )),
     )
     return event_id
+
+
+def record_isolated(event_type: str, actor_principal: str,
+                    resource_id: str | None = None,
+                    payload: dict | None = None) -> str:
+    """独立事务的审计写入（GATE-06，2026-10-04 复审 P2）。
+
+    供门禁等没有外层事务的模块使用：audit_events 与 events_outbox
+    两表 INSERT 在同一 BEGIN/COMMIT 内——半途失败整体回滚，不再留
+    "已提交但无法发布"的孤立事件（db.formal 默认 autocommit，两个
+    INSERT 裸跑会各自提交）。
+    """
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            event_id = record(conn, event_type, actor_principal,
+                              resource_id=resource_id, payload=payload)
+            conn.execute("COMMIT")
+            return event_id
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
