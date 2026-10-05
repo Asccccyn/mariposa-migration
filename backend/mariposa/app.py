@@ -39,6 +39,45 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="mariposa", version="0.1.0", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def _unauthenticated_surface_gate(request: Request, call_next):
+    """非 /api、/mcp 路径的 IP 级门禁（自查①，2026-10-05）。
+
+    /health、/、/static、/app 此前完全绕过限速与锁定——公网上是
+    免费打点面。这些路径无认证语义，只做 IP 级匿名档限速 + 锁定
+    检查（在 /api 上触发锁定的来源，静态面同样被挡）。/api 与
+    /mcp 不在此计档——端点内的 _authenticate_tracked 已有完整
+    语义（认证失败才计匿名档），middleware 再计会双扣。
+    """
+    path = request.url.path
+    if path.startswith(("/api", "/mcp")):
+        return await call_next(request)
+    ip = gate.client_ip(request)
+    remain = gate.assert_not_locked(ip)
+    if remain > 0:
+        seconds = max(1, math.ceil(remain))
+        return JSONResponse(
+            status_code=423,
+            content={"ok": False, "error": {"code": "AUTH_LOCKED",
+                                            "message": "来源已临时锁定"
+                                            f"（约 {seconds} 秒后解除）",
+                                            "detail": {"retry_after":
+                                                       seconds}}},
+            headers={"Retry-After": str(seconds)})
+    wait = gate.check_rate("anon", ip)
+    if wait > 0:
+        seconds = max(1, math.ceil(wait))
+        return JSONResponse(
+            status_code=429,
+            content={"ok": False, "error": {"code": "RATE_LIMITED",
+                                            "message": "请求过于频繁，"
+                                            f"约 {seconds} 秒后重试",
+                                            "detail": {"retry_after":
+                                                       seconds}}},
+            headers={"Retry-After": str(seconds)})
+    return await call_next(request)
+
+
 @app.get("/health")
 def health() -> dict:
     return {
