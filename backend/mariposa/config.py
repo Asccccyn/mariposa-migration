@@ -70,6 +70,11 @@ SOURCE_RANGE_MAX_TEXT_BYTES = _env_int(
     "MARIPOSA_SOURCE_RANGE_MAX_TEXT_BYTES", 1 << 20)
 # running 批次认领租约：超过该时长未完成的批次可被同文件重导接管
 SOURCE_IMPORT_LEASE_MINUTES = _env_int("MARIPOSA_SOURCE_IMPORT_LEASE_MINUTES", 120)
+# 在线 live ingest 工程初值（契约 §source.ingest：50 条/1MiB 规范化
+# JSON；是工程护栏不是业务截断许可，超限结构化报错由宿主分批）
+SOURCE_LIVE_MAX_MESSAGES = _env_int("MARIPOSA_SOURCE_LIVE_MAX_MESSAGES", 50)
+SOURCE_LIVE_MAX_JSON_BYTES = _env_int(
+    "MARIPOSA_SOURCE_LIVE_MAX_JSON_BYTES", 1 << 20)
 
 ENV_FILE = PROJECT_ROOT / ".env"
 
