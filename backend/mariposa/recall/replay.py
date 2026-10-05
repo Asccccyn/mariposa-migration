@@ -95,20 +95,22 @@ def revalidate_replayed(fn_name: str, saved: dict,
         saved = degraded
     elif (_profile is not None
             and isinstance(saved.get("candidates"), list)):
-        # 原文许可缩权（CR-01-R1 扩展）：每个候选按共享判定
-        # required_excerpt_role 算出必要证据角色，当前 profile 缺该
-        # 角色即剔卡——raw/source 缺 source_excerpt、words 缺
-        # word_excerpt、事件正文卡缺 event_excerpt、纯标题卡缺
-        # title_cue，与 fresh 的出站许可同权（撤回许可后旧 operation
-        # 不得继续释放正文）。抑制正文时 operation/canonical/预算不变
+        # 原文许可缩权（CR-01-R1/R2 扩展）：每个候选按共享判定
+        # required_excerpt_roles 算出**必要证据角色集合**，当前
+        # profile 缺任一必要角色即剔卡——与 fresh 真正的门控
+        # （_candidate_segments 的段构成）同源：普通事件的必要主体
+        # 恒为 event_excerpt（标题命中不降级 title_cue，title-only
+        # 命中缺事件许可不得重放正文；纯事件许可也不得误杀）。
+        # 撤回许可后旧 operation 与 fresh 同权；抑制正文时
+        # operation/canonical/预算不变
         from ..retrieval.judges.typesafe_jev import \
-            required_excerpt_role as _need_role
+            required_excerpt_roles as _need_roles
         _kept = []
         _suppressed_channels: set[str] = set()
         for _c in saved["candidates"]:
             if isinstance(_c, dict):
                 _ch = _c.get("channel") or "event"
-                if _need_role(_c) not in _profile:
+                if not _need_roles(_c) <= _profile:
                     _suppressed_channels.add(_ch)
                     continue
             _kept.append(_c)

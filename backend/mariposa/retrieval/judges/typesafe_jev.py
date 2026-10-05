@@ -29,26 +29,33 @@ class JudgeUnavailable(Exception):
     """超时/429/网络失败/格式错——有界降级，不伪装成已评审。"""
 
 
-def required_excerpt_role(candidate: dict) -> str:
-    """候选**必要证据角色**（无副作用共享判定，CR-01-R1）。
+def required_excerpt_roles(candidate: dict) -> frozenset:
+    """候选**必要证据角色**集合（无副作用共享判定，CR-01-R1/R2）。
 
-    与 provider 实例状态无关：fresh 外发（_outbound_excerpt）与
-    operation 重放共用同一映射，保证"撤回某角色的出站许可"对新
-    请求和旧 operation 重放同权生效：
-    - word/words 通道 → word_excerpt；
-    - raw/source 通道 → source_excerpt；
-    - 仅命中 original_title（无 event_text）→ title_cue；
-    - 其余（事件正文卡）→ event_excerpt。
+    与 fresh 真正的门控（`_candidate_segments` 的段构成）同源：
+    - raw/source 通道：必要段 raw_messages → source_excerpt；
+    - words 专项通道：必要段 our_words（话语本体即目标）→
+      word_excerpt；
+    - 普通召回中 our_words 命中（word target）：必要段 our_words
+      match → word_excerpt（event_text 主体段是"尽量在场"，不是
+      交付前提，不并入必要集）；
+    - **普通事件卡：event_text 段永远在场**（命中时双标 match+event、
+      仅标题命中/结构拉入时单标 event_evidence——"事件事实主体，
+      标题不能替代"）→ 必要角色恒为 event_excerpt，**matched_fields
+      里的标题命中不能把它降级成 title_cue**（CR-01-R2：上版判定
+      复刻了无运行时调用者的 _outbound_excerpt，导致 title-only
+      命中在缺事件许可时仍重放出正文、且纯事件许可误杀重放）。
     """
     channel = candidate.get("channel") or "event"
-    fields = candidate.get("matched_fields") or []
-    if channel in ("word", "words"):
-        return "word_excerpt"
+    fields = {f.split(".", 1)[0] if isinstance(f, str) else f
+              for f in (candidate.get("matched_fields") or [])}
     if channel in ("raw", "source"):
-        return "source_excerpt"
-    if "original_title" in fields and "event_text" not in fields:
-        return "title_cue"
-    return "event_excerpt"
+        return frozenset({"source_excerpt"})
+    if channel in ("word", "words"):
+        return frozenset({"word_excerpt"})
+    if "our_words" in fields:
+        return frozenset({"word_excerpt"})
+    return frozenset({"event_excerpt"})
 
 
 class TypeSafeJevJudge(base.JudgeProvider):
@@ -266,17 +273,6 @@ class TypeSafeJevJudge(base.JudgeProvider):
         if not fields or not fields <= TypeSafeJevJudge.PROFILE_FIELDS:
             return None
         return frozenset(fields)
-
-    def _outbound_excerpt(self, candidate: dict, excerpt: str,
-                          truncated: bool) -> tuple[str, bool]:
-        """S15：按候选来源类型核对对应字段的外发许可；
-        无许可的字段不外发（置空），不是删候选。"""
-        if not excerpt:
-            return excerpt, truncated
-        need = required_excerpt_role(candidate)
-        if need in (self._data_profile or frozenset()):
-            return excerpt, truncated
-        return "", truncated
 
     def _query_projection(self, query_plan: dict) -> dict:
         """S09/S18：实际检索目标与全部约束进入投影与缓存指纹——

@@ -217,7 +217,10 @@ def list_relations(a: dict) -> dict:
                 conv_id = str(anchor.get("conversation_id", ident))
                 s_mid = str(anchor.get("start_message_id", ""))
                 e_mid = str(anchor.get("end_message_id", s_mid))
-                q_path = _sq.ordered_path_ids(conv_id, s_mid, e_mid)
+                q_path = _sq.ordered_path_ids(
+                    conv_id, s_mid, e_mid,
+                    anchor.get("start_char_offset"),
+                    anchor.get("end_char_offset"))
                 if not q_path:
                     # 查询范围解析失败（消息不存在/断链/sibling）：
                     # 与任何绑定都不构成可判定的重叠，保守返回空
@@ -228,13 +231,17 @@ def list_relations(a: dict) -> dict:
 
                     def _cover_on(mid, start_id, end_id, s_off, e_off):
                         """区间在消息 mid 上的覆盖（lo, hi）；hi=None
-                        表示覆盖到消息末尾（开区间端/内部消息）。"""
+                        表示覆盖到消息末尾（开区间端/内部消息）。
+                        ASRC-07：lo>=hi（有界端）是空半开覆盖——
+                        返回 None 表示该消息上零覆盖。"""
                         lo = 0
                         hi = None
                         if mid == start_id and s_off is not None:
                             lo = s_off
                         if mid == end_id and e_off is not None:
                             hi = e_off
+                        if hi is not None and lo >= hi:
+                            return None
                         return lo, hi
 
                     def _ints_overlap(q, b) -> bool:
@@ -276,6 +283,10 @@ def list_relations(a: dict) -> dict:
                                 m_id, b_sid, b_eid,
                                 r["start_char_offset"],
                                 r["end_char_offset"])
+                            # ASRC-07：任一侧在该消息上零覆盖
+                            #（空半开区间）即跳过
+                            if qc is None or bc is None:
+                                continue
                             if _ints_overlap(qc, bc):
                                 overlap = True
                                 break

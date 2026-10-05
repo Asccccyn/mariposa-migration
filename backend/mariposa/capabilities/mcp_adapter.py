@@ -90,10 +90,28 @@ async def handle(request: Request, profile: str) -> JSONResponse:
     """单条 JSON-RPC 请求处理（batch 不在第一版范围）。"""
     # 全量审计 P1-07 复审：鉴权与 body 上限都先于读体——大 JSON 不再
     # 能在未鉴权时整包进内存，媒体字节只能走专用 stage 端点
-    # 门禁三件套（2026-10-04）：与 HTTP 同一套失败锁定/限速语义
+    # 门禁三件套（2026-10-04；GATE-01/02/05/06 修订）：与 HTTP 同一
+    # 套失败锁定/限速语义——认证失败才计匿名档；成功后读/写档按
+    # method/能力分类扣减；423/429 带 Retry-After 头且非 HTTP 200；
+    # 锁定触发/到期审计走隔离事务
     from .. import gate as _gate
     from ..errors import MariposaError as _ME
+
+    def _audit_gate(event_type: str, payload: dict) -> None:
+        from ..audit import service as _audit
+        _audit.record_isolated(event_type, "system", resource_id=_ip,
+                               payload={**payload, "transport": "mcp"})
+
     _ip = _gate.client_ip(request)
+    _expired = _gate.take_lock_expired_event(_ip)
+    if _expired is not None:
+        try:
+            _audit_gate("auth.lock.expired", _expired)
+        except Exception as audit_err:
+            import sys
+            sys.stderr.write(
+                f"[gate] auth.lock.expired audit write failed: "
+                f"{audit_err!r}\n")
     try:
         _remain = _gate.assert_not_locked(_ip)
         if _remain > 0:
@@ -101,34 +119,33 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                 f"认证失败次数过多，来源已临时锁定（约 {int(_remain)} 秒"
                 "后自动解除）", code="AUTH_LOCKED", http_status=423,
                 retry_after=int(_remain))
-        _wait = _gate.check_rate("anon", _ip)
-        if _wait > 0:
-            raise _ME("匿名请求过于频繁，请稍后重试",
-                      code="RATE_LIMITED", http_status=429,
-                      retry_after=int(_wait) + 1)
         token = _bearer(request)
         principal = identity.authenticate(token)
     except _ME as e:
-        if e.code in ("UNAUTHENTICATED",):
-            def _audit_lock(level: int, seconds: int) -> None:
-                from .. import audit, db as _db
-                with _db.formal() as conn:
-                    audit.record(conn, "auth.locked", "system",
-                                 resource_id=_ip,
-                                 payload={"lock_level": level,
-                                          "seconds": seconds,
-                                          "transport": "mcp"})
-            _gate.note_auth_failure(_ip, record_audit=_audit_lock)
+        if e.code == "UNAUTHENTICATED":
+            # 认证失败才占匿名档（GATE-01：成功请求不占）
+            _wait = _gate.check_rate("anon", _ip)
+            _gate.note_auth_failure(
+                _ip, record_audit=lambda level, seconds: _audit_gate(
+                    "auth.locked", {"lock_level": level,
+                                    "seconds": seconds}))
+            if _wait > 0:
+                return _gate_rpc_error(
+                    None, "RATE_LIMITED",
+                    f"认证失败请求过于频繁，{int(_wait) + 1}s 后重试",
+                    429, int(_wait) + 1)
         return JSONResponse(
             {"jsonrpc": "2.0", "id": None,
-             "error": {"code": -32001, "message": f"{e.code}: {e}"}},
-            status_code=e.http_status)
+             "error": {"code": -32001, "message": f"{e.code}: {e}",
+                       "data": {"code": e.code,
+                                "retry_after": e.detail.get("retry_after"),
+                                "detail": e.detail}}},
+            status_code=e.http_status,
+            headers=({"Retry-After": str(int(
+                e.detail.get("retry_after") or 1))}
+                if e.http_status in (423, 429) else None))
     _gate.note_auth_success(_ip)
-    _wait = _gate.check_rate("read", principal.principal_id)
-    if _wait > 0:
-        return _rpc_error(None, -32001,
-                          f"RATE_LIMITED: 请求过于频繁（读档），"
-                          f"{int(_wait) + 1}s 后重试")
+    # GATE-01：主体限速在读体/分发处按 method 分类扣减，认证段不扣
     clen = request.headers.get("content-length")
     # RA-008（2026-10-02 复审 P2）：坏 Content-Length 是 -32600 不是 500
     try:
@@ -186,6 +203,13 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         return JSONResponse(status_code=202, content=None)
 
     if method == "tools/list":
+        # GATE-01：按 method 分类扣减（读档）
+        _wait = _gate.check_rate("read", principal.principal_id)
+        if _wait > 0:
+            return _gate_rpc_error(
+                msg_id, "RATE_LIMITED",
+                f"请求过于频繁（读档），{int(_wait) + 1}s 后重试",
+                429, int(_wait) + 1)
         return _rpc_result(msg_id, {"tools": _tools_for(principal)})
 
     if method == "tools/call":
@@ -203,15 +227,16 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             return _rpc_error(msg_id, -32600,
                               "invalid params: arguments must be an object")
         canonical = _canonical_name(name)
-        # 写能力单独限速档（与 HTTP /api 通道同一档位语义）
+        # GATE-01：成功调用按能力分类计档（读扣读档、写扣写档，
+        # 与 HTTP /api 通道同一档位语义）
         _cap = registry.REGISTRY.get(canonical)
-        if _cap is not None and _cap.write:
-            _wait = _gate.check_rate("write", principal.principal_id)
-            if _wait > 0:
-                return _rpc_error(
-                    msg_id, -32001,
-                    f"RATE_LIMITED: 写入操作过于频繁，"
-                    f"{int(_wait) + 1}s 后重试")
+        _kind = "write" if (_cap is not None and _cap.write) else "read"
+        _wait = _gate.check_rate(_kind, principal.principal_id)
+        if _wait > 0:
+            return _gate_rpc_error(
+                msg_id, "RATE_LIMITED",
+                f"{'写入操作' if _kind == 'write' else '请求'}过于频繁，"
+                f"{int(_wait) + 1}s 后重试", 429, int(_wait) + 1)
         try:
             out = registry.invoke(principal, canonical, arguments,
                                   params.get("_client_idempotency_key"))
@@ -249,3 +274,16 @@ def _rpc_result(msg_id, result) -> JSONResponse:
 def _rpc_error(msg_id, code, message) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": msg_id,
                          "error": {"code": code, "message": message}})
+
+
+def _gate_rpc_error(msg_id, machine_code: str, message: str,
+                    status: int, retry_after: int) -> JSONResponse:
+    """门禁类错误的 RPC 形态（GATE-02）：结构化 machine code +
+    retry_after 数据 + Retry-After 头，HTTP 状态不再是默认 200。"""
+    return JSONResponse(
+        {"jsonrpc": "2.0", "id": msg_id,
+         "error": {"code": -32001, "message": f"{machine_code}: {message}",
+                   "data": {"code": machine_code,
+                            "retry_after": retry_after}}},
+        status_code=status,
+        headers={"Retry-After": str(max(1, retry_after))})

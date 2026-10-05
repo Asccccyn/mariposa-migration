@@ -232,12 +232,19 @@ def _parse_claude(lines: list[str], filename: str) -> list[dict]:
                 # 围栏内的 ### Thinking / 时间戳样式都是代码内容
                 if _fence_close(stripped, fence):
                     fence = None
+                # ASRC-01（2026-10-04 复审 P2）：代码块是正文——非空
+                # 围栏行结束"块首元数据"状态，否则无初始时间戳的
+                # 消息在代码块后的加粗 ISO 日期会被误当元数据剥离
+                if stripped:
+                    first_content = False
                 text_lines.append(mlines[j])
                 j += 1
                 continue
             tok = _fence_tokens(stripped)
             if tok:
                 fence = tok
+                if stripped:
+                    first_content = False  # 开栏行同样是正文（ASRC-01）
                 text_lines.append(mlines[j])
                 j += 1
                 continue

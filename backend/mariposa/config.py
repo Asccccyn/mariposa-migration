@@ -164,12 +164,20 @@ def ensure_dirs() -> None:
 # 内存态单进程实现（uvicorn 单 worker 部署形态）；进程重启计数清零
 # 是可接受的 fail-soft（重启后攻击者重新累计即重新触发）。
 # 失败锁定按"认证来源 IP"计数，指数退避封顶；限速按 principal 分
-# 读/写两档 + 匿名（未认证）按 IP 一档。
-GATE_AUTH_FAIL_THRESHOLD = _env_int("MARIPOSA_GATE_AUTH_FAIL_THRESHOLD", 5)
-GATE_LOCKOUT_BASE_SECONDS = _env_int("MARIPOSA_GATE_LOCKOUT_BASE_SECONDS",
-                                     900)          # 15 分钟
-GATE_LOCKOUT_MAX_SECONDS = _env_int("MARIPOSA_GATE_LOCKOUT_MAX_SECONDS",
-                                    86400)         # 封顶 24 小时
-GATE_RATE_READ_PER_MIN = _env_int("MARIPOSA_GATE_RATE_READ_PER_MIN", 240)
-GATE_RATE_WRITE_PER_MIN = _env_int("MARIPOSA_GATE_RATE_WRITE_PER_MIN", 30)
-GATE_RATE_ANON_PER_MIN = _env_int("MARIPOSA_GATE_RATE_ANON_PER_MIN", 60)
+# 读/写两档 + 匿名（认证失败）按 IP 一档。
+# GATE-04（2026-10-04 复审 P2）：阈值加载即钳制为正整数、锁定封顶
+# 不低于基准——零/负值会进空 deque 索引（IndexError 500）或让锁定
+# 永不升级，配置错误不允许以静默危险值生效。
+GATE_AUTH_FAIL_THRESHOLD = max(1, _env_int(
+    "MARIPOSA_GATE_AUTH_FAIL_THRESHOLD", 5))
+GATE_LOCKOUT_BASE_SECONDS = max(1, _env_int(
+    "MARIPOSA_GATE_LOCKOUT_BASE_SECONDS", 900))          # 15 分钟
+GATE_LOCKOUT_MAX_SECONDS = max(
+    GATE_LOCKOUT_BASE_SECONDS,
+    _env_int("MARIPOSA_GATE_LOCKOUT_MAX_SECONDS", 86400))  # 封顶 24 小时
+GATE_RATE_READ_PER_MIN = max(1, _env_int(
+    "MARIPOSA_GATE_RATE_READ_PER_MIN", 240))
+GATE_RATE_WRITE_PER_MIN = max(1, _env_int(
+    "MARIPOSA_GATE_RATE_WRITE_PER_MIN", 30))
+GATE_RATE_ANON_PER_MIN = max(1, _env_int(
+    "MARIPOSA_GATE_RATE_ANON_PER_MIN", 60))
