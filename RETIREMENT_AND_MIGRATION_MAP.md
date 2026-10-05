@@ -1,5 +1,14 @@
 # Retirement & Migration Map（v2.0 收口轮）
 
+## 2026-10-05 追加：Web React 版（apps/web）退役
+
+| 项 | 处置 |
+|---|---|
+| apps/web 整目录（React 源码/dist/e2e/playwright/换窗隔离脚本） | 整体删除（她裁定"没用的直接退役"） |
+| 退役理由 | ①认证停留在旧"选身份+粘贴 token"模式，未跟上 2026-10-05 OAuth 密码登录；②招牌功能（遗忘闭环、日历）属已退役业务语义；③从未接线生产，生产 `/` 一直是 backend/mariposa/web/index.html |
+| 现行前端 | backend/mariposa/web/index.html（唯一，配套 OAuth password grant；token 响应增补 principal_id 供登录后显示真实身份） |
+| 无 schema/数据影响 | 无表、无迁移、无合同变更；docs/ 内历史报告按惯例不改写 |
+
 ## 被删旧合同/字段/分支
 
 | 项 | 处置 |
