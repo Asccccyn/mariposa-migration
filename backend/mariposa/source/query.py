@@ -458,7 +458,9 @@ def get_conversation(conversation_id: str, after_seq=None,
         if conv is None:
             raise NotFound("source conversation not found",
                            conversation_id=conversation_id)
-        pub = " AND published=1"
+        # live_superseded（迁移 30）：在线修订换代后旧行退出默认投影，
+        # 按 id 证据读取不受影响
+        pub = " AND published=1 AND live_superseded=0"
         if around_seq is not None:
             # CB-020 + RA-022（2026-10-02 复审 P2）：窗口在复合顺序
             # (sequence, id) 上**连续**且有界——整体按 DESC 复合序取
