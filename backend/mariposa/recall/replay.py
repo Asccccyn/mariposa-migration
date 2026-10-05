@@ -95,14 +95,13 @@ def revalidate_replayed(fn_name: str, saved: dict,
         saved = degraded
     elif (_profile is not None
             and isinstance(saved.get("candidates"), list)):
-        # 原文许可缩权（CR-01-R1/R2 扩展）：每个候选按共享判定
-        # required_excerpt_roles 算出**必要证据角色集合**，当前
-        # profile 缺任一必要角色即剔卡——与 fresh 真正的门控
-        # （_candidate_segments 的段构成）同源：普通事件的必要主体
-        # 恒为 event_excerpt（标题命中不降级 title_cue，title-only
-        # 命中缺事件许可不得重放正文；纯事件许可也不得误杀）。
-        # 撤回许可后旧 operation 与 fresh 同权；抑制正文时
-        # operation/canonical/预算不变
+        # 原文许可缩权（CR-01-R1/R2/R3）：必要证据角色按**通道**单一
+        # 真源判定（required_excerpt_roles，与 fresh 的实测交付矩阵
+        # 一致：event 卡——含 our_words 命中/双命中——恒 event_excerpt；
+        # words 专项 word_excerpt；raw/source source_excerpt）。缺必要
+        # 角色即剔卡——fresh 的行为是"要么带正文交付、要么不交付"，
+        # 没有第三态，重放不得做段级剥除保留（会制造 fresh 没有的
+        # 无正文中间态）。抑制时 operation/canonical/预算不变
         from ..retrieval.judges.typesafe_jev import \
             required_excerpt_roles as _need_roles
         _kept = []
