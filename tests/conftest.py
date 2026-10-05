@@ -161,6 +161,10 @@ FORMAL_TABLES = [
     "source_messages", "source_conversations", "source_import_batches",
     "source_snapshot_members", "source_conversation_snapshots",
     "source_message_versions",
+    # estómago 生命周期（迁移 30/31）：live 谱系/stream 授权/绑定成员
+    # manifest（子表在前）
+    "source_live_revisions", "source_stream_grants",
+    "memory_source_binding_members",
 ]
 WORKSPACE_TABLES = []
 

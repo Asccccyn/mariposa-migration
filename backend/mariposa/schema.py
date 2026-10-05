@@ -1018,6 +1018,81 @@ CREATE INDEX idx_oauth_codes_expiry ON oauth_codes(expires_at);
 -- access token 带过期，authenticate 侧 fail-closed 校验
 ALTER TABLE client_bindings ADD COLUMN expires_at REAL;
 """),
+    (30, """
+-- ===== estómago 生命周期 WP1：在线原文 live ingest（2026-10-05）=====
+-- 契约：docs/specs/MARIPOSA_LIFECYCLE_v1.0（联合装订，estómago 侧
+-- client.ts/archive-sync.ts 为对端实现）。live_delta 是有限追加事务，
+-- 不是整房间快照；每条修订=新的不可变 source_messages 行（不覆盖）。
+
+-- 受限服务凭据：binding 级 capability 白名单（JSON 数组；NULL=不限）。
+-- 在 registry.invoke 分发前强制——tools/list 与 HTTP 同源过滤，不能
+-- 只藏工具列表而 HTTP 仍可调（方案 §8）
+ALTER TABLE client_bindings ADD COLUMN capabilities_allowlist TEXT;
+
+-- 批次区分导出快照与在线增量（既有行回填 export_snapshot）
+ALTER TABLE source_import_batches ADD COLUMN kind TEXT NOT NULL
+  DEFAULT 'export_snapshot' CHECK(kind IN ('export_snapshot','live_delta'));
+
+-- stream 授权：一个受限凭据 ↔ 一条 stream（origin 实例/房间/说话人/
+-- scope 服务端钉死；客户端参数只定位不授权）
+CREATE TABLE source_stream_grants(
+  grant_id TEXT PRIMARY KEY,
+  stream_id TEXT NOT NULL UNIQUE,
+  origin_instance TEXT NOT NULL,
+  origin_conversation_id TEXT NOT NULL,
+  allowed_senders TEXT NOT NULL,   -- JSON 数组 ['user','assistant'] 子集
+  owner_scope TEXT NOT NULL,
+  binding_id TEXT NOT NULL REFERENCES client_bindings(binding_id),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
+-- 在线修订谱系：(stream, origin 消息, revision) 唯一 → 不可变 Source 行
+CREATE TABLE source_live_revisions(
+  stream_id TEXT NOT NULL,
+  origin_message_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision >= 1),
+  source_conversation_id TEXT NOT NULL REFERENCES source_conversations(id),
+  source_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  origin_conversation_id TEXT NOT NULL,
+  conversation_sequence INTEGER NOT NULL,
+  previous_revision INTEGER,
+  predecessor_message_id TEXT,
+  predecessor_revision INTEGER,
+  sender TEXT NOT NULL CHECK(sender IN ('user','assistant')),
+  published_kind TEXT NOT NULL,
+  occurred_at TEXT, received_at TEXT, published_at TEXT,
+  content_hash TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  ingested_at TEXT NOT NULL,
+  PRIMARY KEY(stream_id, origin_message_id, revision)
+);
+CREATE INDEX idx_slr_conv ON source_live_revisions(source_conversation_id);
+CREATE INDEX idx_slr_op ON source_live_revisions(operation_id);
+
+-- 在线修订换代标记：新修订落库时旧行置 1——默认投影（会话分页/检索
+-- 投影）只显最新有效修订；旧行保留供证据读取（按 id 仍可取）
+ALTER TABLE source_messages ADD COLUMN live_superseded INTEGER NOT NULL
+  DEFAULT 0;
+"""),
+    (31, """
+-- ===== estómago 生命周期 WP2：hold 领域回执 + 钉住成员的来源绑定 =====
+-- memory.hold 增量：operation_id（宿主自动化路径必带）+ source_selections
+-- （有序、版本固定的片段）。绑定不再只钉首尾 hash——中间每条消息的
+-- 修订与次序都进 manifest（旧首尾字段保留兼容，值=首/末成员）
+
+CREATE TABLE memory_source_binding_members(
+  binding_id TEXT NOT NULL REFERENCES memory_source_bindings(binding_id),
+  ordinal INTEGER NOT NULL,
+  source_message_id TEXT NOT NULL REFERENCES source_messages(id),
+  content_hash TEXT NOT NULL,
+  start_char_offset INTEGER,
+  end_char_offset INTEGER,
+  PRIMARY KEY(binding_id, ordinal)
+);
+CREATE INDEX idx_msbm_msg ON memory_source_binding_members(source_message_id);
+"""),
 ]
 
 

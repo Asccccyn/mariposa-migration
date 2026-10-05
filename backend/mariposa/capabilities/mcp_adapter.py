@@ -56,6 +56,11 @@ def _tools_for(principal: Principal) -> list[dict]:
     for cap in registry.REGISTRY.values():
         if principal.principal_id not in cap.allowed_principals:
             continue
+        # 受限服务凭据（迁移 30）：工具清单与 HTTP invoke 同源过滤——
+        # 受限 binding 的 tools/list 不得披露/放行白名单外能力
+        if principal.capabilities_allowlist is not None and \
+                cap.name not in principal.capabilities_allowlist:
+            continue
         from . import input_schemas
         schema = input_schemas.schema_for(cap.name) or {
             "type": "object", "properties": {}, "additionalProperties": True}

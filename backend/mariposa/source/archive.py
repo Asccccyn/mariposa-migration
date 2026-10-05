@@ -115,6 +115,50 @@ def load_manifest(provider: str, batch_id: str) -> dict:
                             code="SOURCE_ARCHIVE_CORRUPT") from e
 
 
+def publish_bytes(provider: str, batch_id: str, data: bytes, sha256: str,
+                  manifest_extra: dict) -> Path:
+    """在线 live ingest 的母本落盘（迁移 30 契约 §4.3）。
+
+    与 publish_snapshot 同一规约：原子替换、payload-<sha16> 命名、
+    manifest 临时写+替换、0444 只读。幂等：同 hash 已存在且一致则
+    复用（崩溃重试不重写）。调用方必须在 DB 事务提交**之前**完成
+    本调用——ACK 成功时母本必然已在盘上；DB 失败只留下待核对孤立
+    资产，不出现反向。
+    """
+    dest_dir = batch_dir(provider, batch_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    payload = dest_dir / f"payload-{sha256[:16]}"
+    if payload.exists():
+        actual, _ = sha256_file(payload)
+        if actual != sha256:
+            raise MariposaError(
+                "归档目录存在同名但内容不同的 payload；拒绝覆盖",
+                code="SOURCE_ARCHIVE_MISMATCH")
+    else:
+        tmp = dest_dir / (f"payload-{sha256[:16]}.part-"
+                          f"{os.urandom(4).hex()}")
+        tmp.write_bytes(data)
+        os.replace(tmp, payload)
+    _mark_readonly(payload)
+    manifest = {
+        "batch_id": batch_id,
+        "provider": provider,
+        "payload": payload.name,
+        "sha256": sha256,
+        "bytes": len(data),
+        "written_at": _now(),
+        "immutability": "应用级只读保护（0444）；在线 live 母本与导出"
+                        "快照同一规约",
+        **manifest_extra,
+    }
+    _mf_tmp = dest_dir / "manifest.json.part"
+    _mf_tmp.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    os.replace(_mf_tmp, dest_dir / "manifest.json")
+    return payload
+
+
 def verify_archived(provider: str, batch_id: str, sha256: str) -> dict:
     """完整性校验：按 manifest 记录的精确 payload 路径核对哈希。"""
     try:

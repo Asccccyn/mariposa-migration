@@ -160,6 +160,15 @@ def _register() -> dict[str, Capability]:
     add("source.import", _source_import, _owners(), True, True,
         description="导入 Claude conversations 导出（.json/.zip；流式解析；"
                     "Raw Archive 留只读母本；同 provider+sha256 幂等）")
+    # 在线 live ingest（estómago 生命周期 WP1）：只给受限归档凭据的
+    # 主体 worker——实际授权由 stream grant 钉死（方案 §8：受限 token
+    # 即便映射主体也过不了别的白名单能力）
+    add("source.ingest", _source_ingest, {"worker"}, True,
+        description="在线原文增量入库（live_delta；estómago 归档 worker "
+                    "专用，stream 授权钉 origin/说话人；同 op 幂等）")
+    add("source.ingest.status", _source_ingest_status, {"worker"}, False,
+        description="按 operation_id 查 ingest 完成回执（无记录=尚无提交"
+                    "证据）")
     add("source.import.status", _source_import_status, _owners(), False,
         description="导入批次状态与统计（batch_id；失败含错误信息）")
     add("source.import.batches", _source_import_batches, _owners(), False,
@@ -299,6 +308,13 @@ def invoke(principal: Principal, capability: str, arguments: dict,
     if cap is None:
         raise NotFound("unknown capability", capability=capability)
     identity.require_any(principal, cap.allowed_principals)
+    # 受限服务凭据（迁移 30）：binding 级白名单在分发前强制——HTTP 与
+    # MCP 同一门，tools/list 过滤同源（不能只藏工具列表而 HTTP 仍可调）
+    if principal.capabilities_allowlist is not None and \
+            capability not in principal.capabilities_allowlist:
+        raise Forbidden(
+            "binding 未获此能力授权（受限服务凭据）", code="FORBIDDEN",
+            capability=capability)
     # compact_v1 出站 profile（JSON 瘦身 2026-10-04 五）：传输层参数，
     # 业务执行前剥离——不进 schema 校验/payload 哈希/request_ref 载荷，
     # 同 operation 切换 profile 不重做业务；支持性先验后验（fail fast）
@@ -687,6 +703,18 @@ def _source_import(principal: Principal, a: dict) -> dict:
                         code="SCHEMA_VIOLATION", capability="source.import")
     return source_importer.import_file(
         principal.principal_id, path, a.get("filename"))
+
+
+def _source_ingest(principal: Principal, a: dict) -> dict:
+    # 在线 live ingest（迁移 30；受限 stream binding 专用——授权由
+    # ingest 服务端按 stream grant 校验，本层只做主体门）
+    from ..source import ingest as source_ingest
+    return source_ingest.ingest(principal, a)
+
+
+def _source_ingest_status(principal: Principal, a: dict) -> dict:
+    from ..source import ingest as source_ingest
+    return source_ingest.ingest_status(principal, a)
 
 
 def _source_import_status(principal: Principal, a: dict) -> dict:
@@ -1237,4 +1265,6 @@ def list_capabilities(principal: Principal) -> list[dict]:
         {"name": c.name, "write": c.write, "description": c.description}
         for c in REGISTRY.values()
         if principal.principal_id in c.allowed_principals
+        and (principal.capabilities_allowlist is None
+             or c.name in principal.capabilities_allowlist)
     ]

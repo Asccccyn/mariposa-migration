@@ -31,6 +31,10 @@ class Principal:
     kind: str
     entry_source: str
     binding_id: str
+    # 受限服务凭据（迁移 30）：binding 级 capability 白名单（frozenset）；
+    # None = 不受限（既有 owner/editorial token 全部如此）。estómago 归档
+    # worker 等自动凭据即使 principal 映射同主体，也只放行白名单能力
+    capabilities_allowlist: frozenset | None = None
 
 
 def _hash_token(token: str) -> str:
@@ -85,11 +89,13 @@ def _entry_source(pid: str) -> str:
 def authenticate(token: str | None) -> Principal:
     if not token:
         raise Unauthenticated("missing bearer token")
+    import json as _json
     import time as _time
     row = None
     with db.formal() as conn:
         row = conn.execute(
             "SELECT b.binding_id, b.entry_source, b.revoked, b.expires_at,"
+            " b.capabilities_allowlist,"
             " p.principal_id, p.display_name, p.kind"
             " FROM client_bindings b JOIN principals p USING(principal_id)"
             " WHERE b.token_hash=?",
@@ -101,12 +107,22 @@ def authenticate(token: str | None) -> Principal:
     # token expires_at 为 NULL = 永久，不受影响）
     if row["expires_at"] is not None and row["expires_at"] < _time.time():
         raise Unauthenticated("token expired")
+    allowlist = None
+    if row["capabilities_allowlist"]:
+        try:
+            names = _json.loads(row["capabilities_allowlist"])
+        except (ValueError, TypeError):
+            names = None
+        # 坏白名单 fail-closed：解析失败视同全拒，不带病放行
+        allowlist = frozenset(n for n in names if isinstance(n, str)) \
+            if isinstance(names, list) else frozenset()
     return Principal(
         principal_id=row["principal_id"],
         display_name=row["display_name"],
         kind=row["kind"],
         entry_source=row["entry_source"],
         binding_id=row["binding_id"],
+        capabilities_allowlist=allowlist,
     )
 
 
