@@ -76,13 +76,13 @@
 
 ## 立即可做（依赖满足）
 
-1. ~~Web React/Vite 版~~ ✅ 第 3 轮完成（apps/web，TS 严格模式 + Playwright E2E）
+1. ~~Web React/Vite 版~~ ✅ 第 3 轮完成（apps/web，TS 严格模式 + Playwright E2E）；**2026-10-05 退役整体删除**——认证停留在旧"粘贴 token"模式未跟上 OAuth 密码登录，招牌功能（遗忘闭环/日历）亦属已退役语义；现行唯一前端=backend/mariposa/web/index.html（配套 OAuth 登录）
 2. **Diary/Self/Home 实体**（§10.3-10.5）：schema v4 + diary.write/read/search、self.write/review（隔日规则）、home.get/update；日历 provider 注册 diary。
 3. ~~memory.by_emotion / 标签 whose~~ ✅ 第 2 轮完成
 4. ~~bootstrap SNAPSHOT_STALE~~ ✅ 第 2 轮完成（分页 cursor 仍待做）
 5. **workspace.forgetting.scan 定时器占位**：FORGET_SCHEDULE_ENABLED=false 的调度骨架 + 手动触发已有。
 6. **quotes 语义校对受控管线骨架**（§10.1）：双步判定+修正校验，provider 未配置时只挂起不写——reserved 转可测。
-7. ~~E2E 测试~~ ✅ 第 3 轮完成（apps/web/e2e，2 项：完整遗忘闭环 + 日历）
+7. ~~E2E 测试~~ ✅ 第 3 轮完成（apps/web/e2e，2 项：完整遗忘闭环 + 日历）；**2026-10-05 随 apps/web 退役一并移除**（默认 HTML 暂无自动化 UI 测试，后续如需另行立项）
 
 ## blocked（解锁条件明确）
 

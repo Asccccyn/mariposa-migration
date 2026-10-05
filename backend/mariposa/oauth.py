@@ -135,7 +135,7 @@ def issue_access_token(principal_id: str, ttl_s: int = ACCESS_TTL_S,
             conn.execute("ROLLBACK")
             raise
     return {"access_token": token, "token_type": "bearer",
-            "expires_in": ttl_s}
+            "expires_in": ttl_s, "principal_id": principal_id}
 
 
 def issue_refresh_token(principal_id: str, client_id: str,

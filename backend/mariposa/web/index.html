@@ -85,15 +85,12 @@
 <header>
   <h1>mariposa</h1>
   <div class="who">
-    <select id="who">
-      <option value="qiaosheng">江乔生（qiaosheng）</option>
-      <option value="jiaming">周家明（jiaming）</option>
-      <option value="worker">工具人（worker）</option>
-    </select>
     <input id="token" placeholder="登录密码" size="26" type="password"
            autocomplete="current-password" />
     <button id="saveToken">连接</button>
+    <button id="logoutBtn" style="display:none">退出</button>
   </div>
+  <span id="whoami" style="color:var(--accent);font-size:13px"></span>
   <span id="status"></span>
 </header>
 
@@ -180,15 +177,22 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { token: '',
-                who: localStorage.getItem('mariposa_who') || 'qiaosheng',
+// OAuth 密码登录后，身份由"输的是哪个密码"决定（网页密码→qiaosheng、
+// MCP 密码→jiaming），客户端不再自选身份——顶部仅回显服务端认出的结果。
+const NAMES = { qiaosheng: '江乔生（qiaosheng）', jiaming: '周家明（jiaming）',
+                worker: '工具人（worker）' };
+const state = { token: '', principal: '',
                 calY: null, calM: null, calSel: null };
-$('who').value = state.who;
-$('token').value = state.token;
 
 function setStatus(t, isErr) {
   $('status').textContent = t;
   $('status').style.color = isErr ? 'var(--err)' : 'var(--dim)';
+}
+
+function setIdentity(pid) {
+  state.principal = pid || '';
+  $('whoami').textContent = pid ? '· ' + (NAMES[pid] || pid) : '';
+  $('logoutBtn').style.display = pid ? '' : 'none';
 }
 
 async function api(capability, arguments_, idem) {
@@ -199,6 +203,11 @@ async function api(capability, arguments_, idem) {
     method: 'POST', headers,
     body: JSON.stringify({ arguments: arguments_ || {} }),
   });
+  if (res.status === 401) {
+    setIdentity('');
+    setStatus('登录已过期，请重新输入密码', true);
+    throw new Error('登录已过期');
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body.error && body.error.code) + ': ' +
     ((body.error && (body.error.message || body.error.detail)) || res.status));
@@ -242,13 +251,21 @@ $('saveToken').onclick = async () => {
     }
     state.token = body.access_token;
     state.tokenExpires = Date.now() + (body.expires_in || 0) * 1000;
-    state.who = $('who').value;
-    localStorage.removeItem('mariposa_token');  // 不再存长驻凭据
+    setIdentity(body.principal_id);
+    localStorage.removeItem('mariposa_who');  // 身份不再客户端自选
+    localStorage.removeItem('mariposa_token');  // 不存长驻凭据
     $('token').value = '';
     setStatus('已连接（' + Math.round((body.expires_in || 0) / 3600)
               + ' 小时内免密）');
     refreshAll();
   } catch (e) { setStatus('登录失败：' + e.message, true); }
+};
+$('logoutBtn').onclick = () => {
+  state.token = ''; state.tokenExpires = 0;
+  setIdentity('');
+  ['memResults', 'planList', 'srcBatches', 'srcResults', 'srcConvView',
+   'srcConvList', 'delList'].forEach(id => { if ($(id)) $(id).innerHTML = ''; });
+  setStatus('已退出（token 弃用，重新连接需再输密码）');
 };
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
