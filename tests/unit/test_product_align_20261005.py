@@ -207,3 +207,23 @@ class TestDirectBrowseEntries:
         r3 = registry.invoke(actors["jiaming"], "memory.by_emotion",
                              {"tag": "开心"}, None)
         assert r3["data"]["mood_tag"] == "开心"
+
+
+class TestSemanticProviderErrorDegrades:
+    def test_keyword_path_survives_provider_failure(self, actors, monkeypatch):
+        """裁定 §二.5：模型挂了不 500、不偷偷兜底——关键词照常+如实降级。"""
+        from mariposa import config as _cfg
+        from mariposa.retrieval import search as rsearch, semantic
+        _hold(actors, text="语义降级时的正文蓝风铃", title="降级测试")
+        monkeypatch.setattr(_cfg, "SEMANTIC_PROVIDER", "local_bge_zh")
+
+        def _boom(*a, **k):
+            raise RuntimeError("model load failed (synthetic)")
+
+        monkeypatch.setattr(semantic, "embed", _boom)
+        with db.formal() as conn:
+            out = rsearch.search(conn, "蓝风铃")
+        assert out["hits"], "关键词主路径不受补充路径故障拖死"
+        assert out["degraded"] == "semantic_provider_error"
+        assert out["semantic"] == "error"
+        assert out["mode"] == "keyword", "不得伪装 hybrid"
