@@ -44,6 +44,7 @@ class TestWhyRememberRemoved:
             registry.invoke(actors["jiaming"], "memory.hold", {
                 "text": "正文", "original_title": "标题",
                 "categories": ["daily"],
+                "creation_mode": "contemporaneous",
                 "why_remember": "理由"}, None)
         assert "why_remember" in str(ei.value)
 
@@ -344,7 +345,8 @@ class TestEstomagoBuiltinBinding:
         p = self._binding(_sec.token_urlsafe(16))
         out = registry.invoke(p, "memory.hold", {
             "text": "内置绑定写入的正文", "original_title": "内置绑定",
-            "categories": ["daily"]}, "es-builtin-1")
+            "categories": ["daily"],
+            "creation_mode": "contemporaneous"}, "es-builtin-1")
         assert out["data"]["memory_id"]
         vocab = registry.invoke(p, "memory.mood.vocab", {}, None)
         assert vocab["data"]["categories"][0] == "开心"

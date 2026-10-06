@@ -42,7 +42,8 @@ def actors():
 
 def _mood_args(**over):
     base = {"text": "晚饭与植物", "original_title": "晚饭",
-            "categories": ["daily"]}
+            "categories": ["daily"],
+            "creation_mode": "contemporaneous"}  # F-J-22：公开面显式声明
     base.update(over)
     return base
 
@@ -172,12 +173,21 @@ class TestMcpDefaultCompact:
 
 class TestMoodRequiresExplicitCreationMode:
     def test_mood_without_creation_mode_rejected(self, actors):
-        """R4：mood 给了而 creation_mode 缺省 → 拒（不再默认同期）。"""
+        """R4+F-J-22：mood 给了而 creation_mode 缺省 → 拒。
+        公开面：schema 必填先拦（SCHEMA_VIOLATION——比 R4 的窗口拦截更早更强）；
+        服务层：绕过 schema 的内部调用仍按 R4 拒 MOOD_WINDOW_REQUIRED（不猜）。"""
         with pytest.raises(Forbidden) as ei:
             registry.invoke(actors["jiaming"], "memory.hold",
-                            _mood_args(mood={"tags": ["开心"]}), None)
-        assert ei.value.code == "MOOD_WINDOW_REQUIRED"
-        assert "creation_mode" in str(ei.value)
+                            _mood_args(creation_mode=None,
+                                       mood={"tags": ["开心"]}), None)
+        assert ei.value.code in ("SCHEMA_VIOLATION",)
+        from mariposa.memory import service as _mem
+        with pytest.raises(Forbidden) as ei2:
+            _mem.hold(actors["jiaming"], text="x", original_title="t",
+                      categories=["daily"], mood={"tags": ["开心"]},
+                      raw_pending=False)
+        assert ei2.value.code == "MOOD_WINDOW_REQUIRED"
+        assert "creation_mode" in str(ei2.value)
 
     def test_mood_with_explicit_contemporaneous_ok(self, actors):
         """R4：显式 contemporaneous 照常写入。"""
