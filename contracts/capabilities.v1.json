@@ -870,16 +870,6 @@
       "description": "记忆倒序列表（遗忘桶只给摘要表示）"
     },
     {
-      "canonical_name": "memory.mood.write",
-      "transport_name": "mariposa_memory_mood_write",
-      "allowed_principals": [
-        "jiaming"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "补写/修正当前心情（标签+一段自由文字；非原文、不参与检索；允许后补）"
-    },
-    {
       "canonical_name": "memory.open",
       "transport_name": "mariposa_memory_open",
       "allowed_principals": [
