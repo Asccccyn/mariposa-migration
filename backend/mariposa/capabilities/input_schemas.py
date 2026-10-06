@@ -14,6 +14,12 @@ from .. import config
 _TYPES = {"string": str, "integer": int, "number": (int, float),
           "boolean": bool, "object": dict, "array": list, "null": type(None)}
 
+# 心情词表单一事实源（审计 1005B）：schema 枚举运行时从 MOOD_CATEGORIES
+# 构建——词表调整一处生效，不再维护第二份硬编码副本（7/8 漂移已实际发生）
+from ..memory.service import (MOOD_CATEGORIES as _MOOD_CATEGORIES,
+                              MOOD_TAGS_MAX as _MOOD_TAGS_MAX)
+_MOOD_ENUM = list(_MOOD_CATEGORIES)
+
 _CACHE: dict | None = None
 
 
@@ -257,7 +263,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "memory.by_emotion": {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "tag": {"type": "string", "enum": ["开心", "爱", "生气", "吃醋", "悲伤", "渴望", "不安"]},
+            "tag": {"type": "string", "enum": _MOOD_ENUM},
             "whose": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "next_cursor": {"type": "object"}},
@@ -631,9 +637,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                          "items": {"type": "string", "minLength": 1}},
             "mood": {"type": "object", "additionalProperties": False,
                       "properties": {"text": {"type": "string"},
-                                     "tags": {"type": "array", "maxItems": 3,
+                                     "tags": {"type": "array",
+                                              "maxItems": _MOOD_TAGS_MAX,
                                               "items": {"type": "string",
-                                              "enum": ["开心", "爱", "生气", "吃醋", "悲伤", "渴望", "不安"]}}}},
+                                              "enum": _MOOD_ENUM}}}},
             "our_words": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "required": ["speaker", "text"],
@@ -1006,53 +1013,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                           "items": {"type": "string",
                                                      "minLength": 1}}},
     },
-    # v1.1 包 schema 曾要求 policy_version 必填，与处理器"缺省=按当前策略"
-    # 的行为不符且打断既有调用点；v2 层对齐处理器语义（提供则校验）。
-    "workspace.forgetting.scan": {
-        "type": "object", "additionalProperties": False,
-        "properties": {
-            "policy_version": {"type": "string"},
-            "min_idle_days": {"type": "integer"},
-            "cursor": {"type": "array", "items": {"type": "string"}},
-        },
-    },
-    "workspace.forgetting.generate": {
-        "type": "object", "additionalProperties": False,
-        "properties": {
-            "memory_id": {"type": "string"},
-            "candidate_summary": {"type": "string"},
-            "candidate_tags": {"type": "array", "items": {"type": "string"}},
-        },
-    },
-    "workspace.review.submit": {
-        "type": "object", "required": ["item_id", "decision",
-                                        "expected_revision"],
-        "additionalProperties": False,
-        "properties": {
-            "item_id": {"type": "string", "minLength": 1},
-            "decision": {"type": "string", "enum": ["release", "escalate_retain",
-                                                     "escalate_owner",
-                                                     "escalate_jiaming"]},
-            "expected_revision": {"type": "integer"},
-            "candidate_hash": {"type": "string"},
-        },
-    },
-    "workspace.review.revise": {
-        "type": "object", "required": ["item_id", "changes"],
-        "additionalProperties": False,
-        "properties": {
-            "item_id": {"type": "string", "minLength": 1},
-            "changes": {
-                "type": "object", "minProperties": 1,
-                "additionalProperties": False,
-                "properties": {
-                    "summary_body": {"type": "string", "minLength": 1},
-                    "forget_tags": {"type": "array",
-                                    "items": {"type": "string"}},
-                },
-            },
-        },
-    },
+    # workspace.forgetting.* / workspace.review.*（v1.7 2026-09-28 整体
+    # 退役）的 4 个死 schema 键已删（审计 1005B：schema_for 永远查不到
+    # 它们——REGISTRY 不再注册这些能力）
 }
 
 

@@ -38,7 +38,11 @@ _RECALL_PACKET_DROP = ("query_fingerprint", "token_count", "created")
 _COVERAGE_DROP_KEYS = ("lexical_scorer", "stage_filter", "event_pool",
                        "judge_cache", "dense_pending_vectors")
 _CANDIDATE_DROP = ("scores", "rrf_score")
-_JUDGE_DROP = ("model_id", "prompt_version", "provider_confidence_kind")
+# judge 字段名以 judges/base.py 的 to_dict() 为准（审计 1005B 曾把
+# confidence_kind 误写成不存在的 provider_confidence_kind——删除变
+# 空操作；provider_confidence 未评估时恒 null，一并删除）
+_JUDGE_DROP = ("model_id", "prompt_version", "confidence_kind",
+               "provider_confidence")
 
 _BOOTSTRAP_DROP = ("state_hash", "estimated_tokens", "policy")
 

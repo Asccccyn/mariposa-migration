@@ -254,6 +254,3 @@ def _estimate_budget(result: dict) -> None:
             "message": f"估算 {est} tokens 超过软预算 {BOOT_SOFT_TOKEN_BUDGET}；"
                        "分节分页续取，不静默截断",
         }]
-
-# ---------- 拆分批（2026-10-04）：续页外迁，重导出兼容 ----------
-from .pages import next_page  # noqa: E402,F401

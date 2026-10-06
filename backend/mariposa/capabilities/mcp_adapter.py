@@ -77,7 +77,8 @@ def _tools_for(principal: Principal) -> list[dict]:
             schema["properties"]["output_profile"] = {
                 "type": "string", "enum": ["legacy", "compact_v1"],
                 "description": "出站 JSON 瘦身 profile（传输层参数，"
-                               "业务执行前剥离；默认 legacy）"}
+                               "业务执行前剥离；MCP 面默认 compact_v1，"
+                               "传 legacy 取全量）"}
         tools.append({
             "name": _transport_name(cap.name),
             "description": cap.description,
@@ -290,10 +291,14 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         try:
             # P2-03（2026-10-05 审计）：同 HTTP invoke——同步 handler 让出
             # 事件循环（幂等待/DB busy 不再冻结整个服务）
+            # default_output_profile="compact_v1"（审计 1005B）：MCP 面
+            # 默认瘦身投影——白名单外能力在 invoke 内静默回退 legacy，
+            # 显式 output_profile=legacy 永远可退回全量
             import asyncio as _asyncio
             out = await _asyncio.to_thread(
                 registry.invoke, principal, canonical, arguments,
-                params.get("_client_idempotency_key"))
+                params.get("_client_idempotency_key"),
+                default_output_profile="compact_v1")
         except MariposaError as e:
             # 业务错误走 MCP tool error 路径，不是协议错误
             return _rpc_result(msg_id, {

@@ -2,11 +2,20 @@
 """给 estómago 发长期 hold 服务凭据（"内置绑定"，2026-10-05 她的裁定）。
 
 estómago 的 DS 模型替周家明落笔记记忆——按"记忆由周家明落笔"的
-架构约束，服务身份挂在 jiaming 主体下，**受限白名单**只放行它要用的
-两个能力：
+架构约束，服务身份挂在 jiaming 主体下，**受限白名单**只放行它的
+全部调用面：
 
   - memory.hold（写记忆 + quotes 钉引用，operation_id 幂等）
+  - memory.hold.status（hold 效果不明时的恢复对账——recoverUnknown
+    Effects 依赖它；审计 1005B P1：曾漏此项，一次 5xx 后换窗被
+    WRITES_UNRESOLVED 永久阻断）
   - memory.mood.vocab（词表只读，供工具说明书动态注入）
+
+⚠️ 根因护栏：白名单必须等于 estómago 的**全部** mariposa 调用面
+（apps/host/src/runtime/host-tools.ts + integrations/mariposa/）。
+estómago 新增任何 mariposa 能力调用时必须同步本清单与已发绑定的
+capabilities_allowlist，否则该调用 403——这是白名单机制的故意
+行为，不要用"再发个全权 token"绕过。
 
 其余一切（读检索/删除/维护面）即使 token 泄漏也不可用；撤销走既有
 binding 撤销（revoke / oauth/revoke），无过期（长期服务身份）。
@@ -31,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "backend"))
 
 from mariposa import db, identity, schema  # noqa: E402
 
-ALLOWLIST = ["memory.hold", "memory.mood.vocab"]
+ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab"]
 ENTRY_SOURCE = "estomago_builtin"
 
 

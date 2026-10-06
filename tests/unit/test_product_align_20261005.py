@@ -27,6 +27,10 @@ def actors():
 
 
 def _hold(actors, text="对齐批正文", title="对齐标题", cats=None, **kw):
+    # 2026-10-06（审计 1005B-R4）：带心情的 hold 须显式 creation_mode
+    # （服务端宁拒不猜）；夹具统一补"contemporaneous"，测试意图不变
+    if "mood" in kw and "creation_mode" not in kw:
+        kw["creation_mode"] = "contemporaneous"
     return memory.hold(actors["jiaming"], text=text,
                        original_title=title,
                        memory_date=kw.pop("memory_date", "2026-06-01"),

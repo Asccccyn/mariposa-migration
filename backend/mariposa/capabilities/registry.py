@@ -324,7 +324,8 @@ def _register() -> dict[str, Capability]:
 
 
 def invoke(principal: Principal, capability: str, arguments: dict,
-           idempotency_key: str | None) -> dict:
+           idempotency_key: str | None, *,
+           default_output_profile: str = "legacy") -> dict:
     cap = REGISTRY.get(capability)
     if cap is None:
         raise NotFound("unknown capability", capability=capability)
@@ -339,16 +340,27 @@ def invoke(principal: Principal, capability: str, arguments: dict,
     # compact_v1 出站 profile（JSON 瘦身 2026-10-04 五）：传输层参数，
     # 业务执行前剥离——不进 schema 校验/payload 哈希/request_ref 载荷，
     # 同 operation 切换 profile 不重做业务；支持性先验后验（fail fast）
+    #
+    # default_output_profile 按调用面注入（审计 1005B 根因修复：
+    # compact_v1 纯 opt-in 导致瘦身从未对 MCP 消费者生效）：MCP 面
+    # 传 "compact_v1"，HTTP 面保持 "legacy"（estómago/网页契约不变）。
+    # 显式 output_profile 永远优先；显式请求不支持的能力照旧 fail fast；
+    # 默认提升对不支持 compact 的能力静默回退 legacy（调用方未请求投影，
+    # 不因面的默认值被拒）。
     from . import compact
-    output_profile = arguments.get("output_profile", "legacy")
+    raw_profile = arguments.get("output_profile")
+    explicit = raw_profile is not None
+    output_profile = raw_profile if explicit else default_output_profile
     if output_profile not in ("legacy", "compact_v1"):
         raise Forbidden(
             f"unknown output_profile: {output_profile}"
             "（支持 legacy/compact_v1）", code="INVALID_ARGUMENT")
     if output_profile == "compact_v1" and not compact.supports(capability):
-        raise Forbidden(
-            f"capability {capability} 不支持 compact_v1 输出 profile",
-            code="OUTPUT_PROFILE_UNSUPPORTED", capability=capability)
+        if explicit:
+            raise Forbidden(
+                f"capability {capability} 不支持 compact_v1 输出 profile",
+                code="OUTPUT_PROFILE_UNSUPPORTED", capability=capability)
+        output_profile = "legacy"
     arguments = {k: v for k, v in arguments.items()
                  if k != "output_profile"}
     from . import input_schemas
@@ -1062,18 +1074,24 @@ def _tags_add(principal: Principal, a: dict) -> dict:
 
 def _mood_vocab(principal: Principal, a: dict) -> dict:
     """2026-10-05：词表可能调整（她说"之后可以调整"），调用方一律
-    动态拉取本接口，不各自硬编码。"""
-    from ..memory.service import MOOD_CATEGORIES
+    动态拉取本接口，不各自硬编码。文案从 MOOD_CATEGORIES 动态生成，
+    数量/字段名不再手写（审计 1005B：曾出现词表 7 类、文案写"固定
+    8 个"的自相矛盾；子心情物理字段是 mood.text，不叫 mood_note）。"""
+    from ..memory.service import MOOD_CATEGORIES, MOOD_TAGS_MAX
     return {
         "categories": list(MOOD_CATEGORIES),
+        "version": "mood-vocab-2",
         "rules": {
-            "stored": "标签槽只存大类（固定 8 个，检索唯一锚点）",
+            "stored": (f"标签槽只存大类（固定 {len(MOOD_CATEGORIES)} 个，"
+                       "检索唯一锚点）"),
             "sub_mood": "子心情不预定义——模型有更具体的感受写进"
-                        " mood_note（如'开心想抱抱'），大类能概括时不必"
+                        " mood.text（如'开心想抱抱'），大类能概括时不必"
                         "写，写不写都合法",
-            "max_tags": 3,
-            "write_window": "仅建桶当下（同期、仅周家明）；不能补写",
-            "note": "mood_note 自由文字，永不参与检索；空=合法",
+            "max_tags": MOOD_TAGS_MAX,
+            "write_window": "仅建桶当下（同期、仅周家明，creation_mode 须"
+                            " 显式声明）；不能补写",
+            "note": "mood.text 自由文字（产品名 mood_note），永不参与"
+                    "检索；空=合法",
         },
         "frozen_ruling": "2026-10-05：Mariposa 记录当时留下的证据，"
                          "不替过去的人补写内心。",

@@ -272,7 +272,6 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
             "mapping": {
                 "memory_date": meta.get("date") or name[:10],
                 "hold_text": body.strip(),
-                "why_remember": meta.get("why_remembered"),
                 "importance": meta.get("importance"),
                 "pinned": str(meta.get("pinned", "")).lower() in ("true", "1"),
                 "meaning_layers": meta.get("meaning") if isinstance(meta.get("meaning"), list) else [],

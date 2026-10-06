@@ -108,7 +108,7 @@ def _pool_where(filters: dict) -> tuple[list[str], list]:
         bad = [t for t in tags if t not in MOOD_CATEGORIES]
         if bad:
             raise Forbidden(
-                "mood_tags 只能是大类（固定 8 个）："
+                f"mood_tags 只能是大类（固定 {len(MOOD_CATEGORIES)} 个）："
                 + "、".join(MOOD_CATEGORIES),
                 code="MOOD_CATEGORY_REQUIRED", got=bad)
         tags = list(dict.fromkeys(tags))
