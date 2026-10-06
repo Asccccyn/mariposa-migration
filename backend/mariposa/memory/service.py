@@ -364,6 +364,12 @@ def hold_in_tx(
         raise _F("plan 分类必须绑定 plan 资源：plan_ids 非空且指向"
                  "存在的 plan（全量审计 P1-08）",
                  code="PLAN_BINDING_REQUIRED")
+    # F-J-22（裁定口径 2026-10-06，林石见建议/她转发）：新 hold 显式声明
+    # creation_mode——**公开合同面必填**（input_schemas memory.hold required
+    # + estómago 工具面必填+宿主预拒）。服务层保留缺省兼容仅限内部调用
+    # （迁移工具已显式 retrospective）；公开面缺 creation_mode 在 schema
+    # 层即被拒（SCHEMA_VIOLATION），estómago 侧本地预拒同语义——补记漏传
+    # 模式又漏日期被写成"当天+当天"的洞就此封死。
     mode = creation_mode or ("contemporaneous" if v2 else None)
     if mode is not None and mode not in ("contemporaneous", "retrospective"):
         raise Forbidden("creation_mode must be contemporaneous/retrospective",

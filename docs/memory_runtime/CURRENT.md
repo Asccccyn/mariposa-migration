@@ -220,6 +220,16 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
 
 ### 8.1 memory_date 默认（江乔生裁定 2026-10-06，F-J-03/D1）
 
+- **词表外标签错误码两层口径**（F-J-21，2026-10-06）：公开传输层
+  （schema enum）返回 `SCHEMA_VIOLATION`；`MOOD_CATEGORY_REQUIRED`
+  为领域层码（服务层直调/筛选入口）。两层并存是既定行为，不为统一
+  错误名放松 enum 校验。
+- **creation_mode 必填口径已定、分步实施**（F-J-22，2026-10-06 裁定口径）：
+  ①迁移工具已显式 retrospective（历史导入不再是"当下记录"）；
+  ②公开合同面必填（schema required+estómago 工具面）**待下一批实施**——
+  实施前需先理清 input_schemas 的双源结构（内联 dict 与 load_schemas
+  返回不同 required 集，直接改内联不生效=假防护）。当下/补记由调用方
+  声明，宿主不猜；D1 当天自动日期保留不变。
 - **当天记录自动日期**：`creation_mode="contemporaneous"` 且未显式给
   `memory_date` 的 hold，服务端在同一次正式提交事务内用 held_at 的
   上海业务日填充 `memory_date`（bootstrap 三日窗与 by_date 因此可见
