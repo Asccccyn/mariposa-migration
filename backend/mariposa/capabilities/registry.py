@@ -1063,11 +1063,14 @@ def _tags_add(principal: Principal, a: dict) -> dict:
 def _mood_vocab(principal: Principal, a: dict) -> dict:
     """2026-10-05：词表可能调整（她说"之后可以调整"），调用方一律
     动态拉取本接口，不各自硬编码。"""
-    from ..memory.service import MOOD_TAXONOMY
+    from ..memory.service import MOOD_CATEGORIES
     return {
-        "taxonomy": {k: list(v) for k, v in MOOD_TAXONOMY.items()},
+        "categories": list(MOOD_CATEGORIES),
         "rules": {
-            "stored": "下层词入桶参与筛选；大类仅系统归类（传大类=展开筛）",
+            "stored": "标签槽只存大类（固定 8 个，检索唯一锚点）",
+            "sub_mood": "子心情不预定义——模型有更具体的感受写进"
+                        " mood_note（如'开心想抱抱'），大类能概括时不必"
+                        "写，写不写都合法",
             "max_tags": 3,
             "write_window": "仅建桶当下（同期、仅周家明）；不能补写",
             "note": "mood_note 自由文字，永不参与检索；空=合法",

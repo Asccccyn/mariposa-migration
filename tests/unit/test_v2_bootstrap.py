@@ -47,7 +47,7 @@ class TestBootstrapV2:
         in_range = [
             hold_v2(actors, today.isoformat(), title="今天的标题",
                     text="今天的事件正文不应出现在开窗",
-                    mood={"text": "今天心情文字", "tags": ["开心"]}),
+                    mood={"text": "今天心情文字", "tags": ["愉悦"]}),
             hold_v2(actors, (today - timedelta(days=2)).isoformat(),
                     title="前天的标题"),
         ]
@@ -64,7 +64,7 @@ class TestBootstrapV2:
             it = items[m["memory_id"]]
             assert it["original_title"] in ("今天的标题", "前天的标题")
             assert "text" not in it  # 不默认展开事件
-            assert it["mood_tags"] == (["开心"] if it["original_title"] == "今天的标题" else [])
+            assert it["mood_tags"] == (["愉悦"] if it["original_title"] == "今天的标题" else [])
         assert items[in_range[0]["memory_id"]]["mood_text"] == "今天心情文字"
         assert out_of_range["memory_id"] not in items
 

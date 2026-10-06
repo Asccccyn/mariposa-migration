@@ -347,16 +347,11 @@ async function loadMoodVocab() {
     const d = await api('memory.mood.vocab', {});
     const dl = $('moodVocab');
     dl.innerHTML = '';
-    for (const [cat, words] of Object.entries(d.taxonomy || {})) {
+    for (const cat of (d.categories || [])) {
       const opt = document.createElement('option');
       opt.value = cat;
-      opt.label = '大类·' + words.join('、');
+      opt.label = '大类';
       dl.appendChild(opt);
-      for (const w of words) {
-        const o2 = document.createElement('option');
-        o2.value = w; o2.label = cat;
-        dl.appendChild(o2);
-      }
     }
   } catch (e) { /* 未登录等场景静默，词表在登录后刷新 */ }
 }

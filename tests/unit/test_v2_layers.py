@@ -69,11 +69,11 @@ class TestV2HoldLayered:
 
     def test_contemporaneous_mood_stored_rec03(self, actors):
         out = hold_v2(actors, mood={"text": "河水很凉，风吹得舒服",
-                                    "tags": ["安心", "开心"]})
+                                    "tags": ["愉悦"]})
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])
         assert got["mood"]["text"].startswith("河水")
-        assert set(got["mood"]["tags"]) == {"安心", "开心"}
+        assert set(got["mood"]["tags"]) == {"愉悦"}
         assert got["mood"]["author"] == "jiaming"
         assert got["mood"]["evidence_state"] == "contemporaneous"
 
@@ -95,7 +95,7 @@ class TestV2HoldLayered:
     def test_qiaosheng_cannot_write_mood_rec09(self, actors):
         with pytest.raises(Forbidden) as e:
             hold_v2(actors, principal="qiaosheng",
-                    mood={"text": "她说很开心", "tags": ["开心"]})
+                    mood={"text": "她说很开心", "tags": ["愉悦"]})
         assert e.value.detail.get("code") == "MOOD_AUTHOR_REQUIRED"
 
     def test_our_words_order_and_speaker(self, actors):
