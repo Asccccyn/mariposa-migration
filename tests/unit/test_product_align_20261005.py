@@ -79,11 +79,12 @@ class TestTitleRequired:
 
 class TestBucketIds:
     def test_format_and_series(self, actors):
-        a1 = _hold(actors, cats=["daily"])["memory_id"]
-        c1 = _hold(actors, cats=["sad"])["memory_id"]
-        a2 = _hold(actors, cats=["daily"])["memory_id"]
-        assert (a1, c1, a2) == ("a0001", "c0001", "a0002"), \
-            "字母按分类固定顺序，各分类独立四位序号"
+        """终版裁定：纯五位数全局编号，无分类字母。"""
+        a = _hold(actors, cats=["daily"])["memory_id"]
+        b = _hold(actors, cats=["sad"])["memory_id"]
+        c = _hold(actors, cats=["daily"])["memory_id"]
+        assert (a, b, c) == ("00001", "00002", "00003"), \
+            "全局单一号段递增，与分类无关"
 
     def test_no_reuse_after_delete(self, actors):
         """号段永不复用：删除后的重建拿到下一号，不回卷旧号。"""
@@ -91,14 +92,14 @@ class TestBucketIds:
         mid = _hold(actors, cats=["daily"])["memory_id"]
         ds.direct_delete("jiaming", mid)
         again = _hold(actors, cats=["daily"])["memory_id"]
-        assert mid == "a0001" and again == "a0002", \
-            "此前从存活行取 MAX 会在删除后回卷复用 a0001"
+        assert mid == "00001" and again == "00002", \
+            "此前从存活行取 MAX 会在删除后回卷复用 00001"
 
     def test_exhaustion_structured(self, actors):
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO bucket_id_counters(category, next)"
-                " VALUES('daily', 10000)")
+                " VALUES('_global', 100000)")
         with pytest.raises(Forbidden) as ei:
             _hold(actors, cats=["daily"])
         assert ei.value.code == "BUCKET_ID_EXHAUSTED"
@@ -141,3 +142,68 @@ class TestLegacyWhyMigratesToMood:
                 "SELECT mood_text FROM memory_moods"
                 " ORDER BY captured_at DESC LIMIT 1").fetchone()
         assert row["mood_text"] == "因为想留住那天"
+
+
+class TestDirectBrowseEntries:
+    """2026-10-05 裁定：日期/分类/心情三直达入口，标题优先，不进召回。"""
+
+    def _seed(self, actors):
+        a = _hold(actors, text="约会日的正文", title="海边约会",
+                  cats=["date"], memory_date="2026-07-09",
+                  mood={"text": "很开心", "tags": ["开心"]})
+        b = _hold(actors, text="日常正文", title="阳台晚餐",
+                  cats=["daily"], memory_date="2026-07-09")
+        c = _hold(actors, text="旧日常正文", title="搬家那天",
+                  cats=["daily"], memory_date="2026-06-01")
+        return a, b, c
+
+    def test_by_date_uses_event_date_title_first(self, actors):
+        from mariposa.memory import listing
+        self._seed(actors)
+        out = listing.by_date("2026-07-09")
+        titles = {i["original_title"] for i in out["items"]}
+        assert titles == {"海边约会", "阳台晚餐"}, \
+            "按真实发生日期直达；标题优先返回"
+        for i in out["items"]:
+            assert "text" not in i and "hold_text" not in i, \
+                "卡片不带正文（正文按需 memory.get）"
+
+    def test_by_category_direct_and_paged(self, actors):
+        from mariposa.memory import listing
+        self._seed(actors)
+        out = listing.by_category("daily", limit=1)
+        assert [i["original_title"] for i in out["items"]] == ["阳台晚餐"]
+        assert out["has_more"] is True
+        page2 = listing.by_category(
+            "daily", limit=1,
+            cursor_date=out["next_cursor"]["memory_date"],
+            cursor_id=out["next_cursor"]["memory_id"])
+        assert [i["original_title"] for i in page2["items"]] == ["搬家那天"]
+        assert page2["has_more"] is False
+
+    def test_by_category_rejects_unknown(self, actors):
+        from mariposa.memory import listing
+        with pytest.raises(Forbidden):
+            listing.by_category("not-a-cat")
+
+    def test_by_emotion_optional_tag(self, actors):
+        from mariposa.memory import listing
+        self._seed(actors)
+        allb = listing.by_emotion("")
+        assert len(allb["items"]) == 3, "不选子分类=全量返回"
+        happy = listing.by_emotion("开心")
+        assert [i["original_title"] for i in happy["items"]] == ["海边约会"]
+        assert happy["items"][0]["mood_tags"] == ["开心"]
+
+    def test_registry_paths_for_jiaming(self, actors):
+        """周家明经 MCP 同口径直达（owners 授权 + 传参形状）。"""
+        self._seed(actors)
+        r1 = registry.invoke(actors["jiaming"], "memory.by_date",
+                             {"date": "2026-07-09"}, None)
+        assert r1["data"]["matched_by"] == "date"
+        r2 = registry.invoke(actors["jiaming"], "memory.by_category",
+                             {"category": "date"}, None)
+        assert r2["data"]["items"][0]["original_title"] == "海边约会"
+        r3 = registry.invoke(actors["jiaming"], "memory.by_emotion",
+                             {"tag": "开心"}, None)
+        assert r3["data"]["mood_tag"] == "开心"

@@ -59,13 +59,80 @@ def list_memories(state: str | None = None, limit: int = 50,
             "next_cursor": next_cursor}
 
 
-def by_date(date_str: str) -> dict:
+def by_date(date_str: str, limit: int = 200) -> dict:
+    """按事件发生日期直达（memory_date=真实发生日期，非写入日期）。
+
+    2026-10-05 江乔生裁定：直达入口标题优先——先给标题卡片清单
+    （正文按需经 memory.get 取），单日默认全量、上限 200 条结构化
+    截断（has_more 如实标注，不冒充完整）。
+    """
     with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT memory_id FROM memories WHERE memory_date=? AND"
-            " visibility='active' ORDER BY created_at", (date_str,)).fetchall()
-        items = [memory.get(conn, r["memory_id"]) for r in rows]
-    return {"date": date_str, "items": items, "matched_by": "date"}
+        cards = _title_cards(
+            conn, "m.memory_date=?", [date_str],
+            order=" ORDER BY m.memory_date, m.memory_id", limit=limit)
+    return {"date": date_str, "items": cards["items"],
+            "has_more": cards["has_more"], "matched_by": "date"}
+
+
+#: 直达卡片固定取数列（标题优先：标题 + 日期 + 分类 + 心情标签）
+_CARD_COLS = ("m.memory_id, m.memory_date, m.compression_state,"
+              " v.original_title, v.event_text, v.hold_text")
+
+
+def _title_cards(conn, where: str, params: list, *, order: str,
+                 limit: int) -> dict:
+    """标题卡片清单（共同实现）：缺标题的 v1 旧行以正文前 12 字代替。"""
+    rows = conn.execute(
+        f"SELECT {_CARD_COLS} FROM memories m"
+        " LEFT JOIN memory_versions v ON v.memory_id=m.memory_id"
+        " AND v.version_no=m.current_version_no"
+        f" WHERE m.visibility='active' AND ({where}){order}"
+        " LIMIT ?", (*params, limit + 1)).fetchall()
+    has_more = len(rows) > limit
+    items = []
+    for r in rows[:limit]:
+        cats = [c["category"] for c in conn.execute(
+            "SELECT category FROM memory_categories WHERE memory_id=?"
+            " ORDER BY category", (r["memory_id"],))]
+        moods = [t["tag"] for t in conn.execute(
+            "SELECT tag FROM memory_mood_tags WHERE memory_id=?"
+            " ORDER BY tag", (r["memory_id"],))]
+        title = r["original_title"] or (
+            (r["event_text"] or r["hold_text"] or "")[:12] or "(无标题)")
+        items.append({"memory_id": r["memory_id"],
+                      "original_title": title,
+                      "memory_date": r["memory_date"],
+                      "categories": cats, "mood_tags": moods,
+                      "forgotten": r["compression_state"]
+                      == "forgotten_summary"})
+    return {"items": items, "has_more": has_more}
+
+
+def by_category(category: str, limit: int = 50,
+                cursor_date: str | None = None,
+                cursor_id: str | None = None) -> dict:
+    """按分类直达（2026-10-05 江乔生裁定）：标题优先 + (日期,id)
+    keyset 续页——周家明/网页想看"日常的全部"一条直达，不进召回。"""
+    from . import categories as categories_mod
+    cats = categories_mod.validate([category])
+    where = ("m.memory_id IN (SELECT memory_id FROM memory_categories"
+             " WHERE category=?)")
+    params: list = [cats[0]]
+    order = " ORDER BY m.memory_date DESC, m.memory_id DESC"
+    if cursor_date and cursor_id:
+        # keyset：同 (date,id) 复合游标，同日多桶不丢（CB-049 同口径）
+        where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
+                  " AND m.memory_id < ?))")
+        params += [cursor_date, cursor_date, cursor_id]
+    with db.formal() as conn:
+        cards = _title_cards(conn, where, params, order=order, limit=limit)
+    out = {"category": cats[0], "items": cards["items"],
+           "has_more": cards["has_more"]}
+    if cards["items"]:
+        last = cards["items"][-1]
+        out["next_cursor"] = {"memory_date": last["memory_date"],
+                              "memory_id": last["memory_id"]}
+    return out
 
 
 def by_tag(namespace: str, tag: str, whose: str | None = None) -> dict:
@@ -116,25 +183,39 @@ def tags_add(principal_id: str, memory_id: str, tags: list[str]) -> dict:
     return {"memory_id": memory_id, "added": len(tags)}
 
 
-def by_emotion(tag: str, whose: str | None = None) -> dict:
-    """RA-010：按心情标签查（现行 memory_mood_tags 表）。"""
-    q = ("SELECT t.memory_id, m.compression_state,"
-         " m.current_version_no FROM memory_mood_tags t"
-         " JOIN memories m ON m.memory_id=t.memory_id"
-         " WHERE t.tag=? AND m.visibility='active'")
-    params: list = [tag]
-    if whose:
-        if whose not in ("jiaming", "qiaosheng"):
-            raise Forbidden("whose must be jiaming or qiaosheng")
-        # P2-6（2026-10-02 接续复审）：mood_tags 表无 whose 列——
-        # 按正式 mood 作者（memory_moods.author）join 过滤
-        q += (" AND EXISTS(SELECT 1 FROM memory_moods mm"
-              " WHERE mm.memory_id=t.memory_id AND mm.author=?)")
-        params.append(whose)
+def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
+               cursor_date: str | None = None,
+               cursor_id: str | None = None) -> dict:
+    """按心情子分类直达（2026-10-05 裁定）：tag 为空=全量（不筛
+    心情的全部有效桶）；给了=该子分类下。标题优先 + keyset 续页。
+
+    RA-010 原语义（tag 必填按标签查）保留为给 tag 的路径。"""
+    if whose and whose not in ("jiaming", "qiaosheng"):
+        raise Forbidden("whose must be jiaming or qiaosheng")
+    if tag:
+        where = ("m.memory_id IN (SELECT t.memory_id FROM memory_mood_tags"
+                 " t WHERE t.tag=?"
+                 + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
+                    " mm.memory_id=t.memory_id AND mm.author=?)" if whose
+                    else "") + ")")
+        params: list = [tag] + ([whose] if whose else [])
+    else:
+        where = "1=1"
+        params = []
+    order = " ORDER BY m.memory_date DESC, m.memory_id DESC"
+    if cursor_date and cursor_id:
+        where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
+                  " AND m.memory_id < ?))")
+        params += [cursor_date, cursor_date, cursor_id]
     with db.formal() as conn:
-        rows = conn.execute(q, params).fetchall()
-    return {"tag": tag, "items": [dict(r) for r in rows],
-            "matched_by": "mood_tag"}
+        cards = _title_cards(conn, where, params, order=order, limit=limit)
+    out = {"mood_tag": tag or None, "items": cards["items"],
+           "has_more": cards["has_more"]}
+    if cards["items"]:
+        last = cards["items"][-1]
+        out["next_cursor"] = {"memory_date": last["memory_date"],
+                              "memory_id": last["memory_id"]}
+    return out
 
 
 # ---------------- meaning ----------------

@@ -664,6 +664,17 @@
       "description": "锚定/取消"
     },
     {
+      "canonical_name": "memory.by_category",
+      "transport_name": "mariposa_memory_by_category",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按分类直达（标题优先，不进召回）"
+    },
+    {
       "canonical_name": "memory.by_date",
       "transport_name": "mariposa_memory_by_date",
       "allowed_principals": [
@@ -672,7 +683,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "按事件日期查"
+      "description": "按事件发生日期直达（标题优先）"
     },
     {
       "canonical_name": "memory.by_emotion",

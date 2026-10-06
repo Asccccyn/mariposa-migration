@@ -116,6 +116,14 @@
       </select>
       <button id="newHoldBtn">写记忆</button>
     </div>
+    <div class="row">
+      <span class="empty">直达浏览：</span>
+      <button id="catBrowseBtn">看分类</button>
+      <input id="browseDate" type="date" title="发生日期（真实发生，非写入）" />
+      <button id="dateBrowseBtn">看日期</button>
+      <input id="browseMood" placeholder="心情子分类，如：开心" style="max-width:180px" />
+      <button id="moodBrowseBtn">看心情（空=全部）</button>
+    </div>
     <div id="memResults"></div>
   </section>
 
@@ -331,6 +339,75 @@ async function searchMemories(q) {
     if (d.degraded) setStatus('语义检索未配置：' + d.degraded);
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
+
+// ---------- 直达浏览（2026-10-05 裁定：与周家明同口径） ----------
+// 标题优先：先给标题卡片，点标题再取完整卡片（token 友好）
+async function renderBrowseTitleList(items, label) {
+  const box = $('memResults');
+  if (!items.length) { box.innerHTML = '<div class="empty">' + esc(label) + '：无桶</div>'; return; }
+  box.innerHTML = '<div class="empty">' + esc(label) + '：' + items.length + ' 只（点标题展开）</div>';
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML =
+      `<div class="meta"><span>${esc(it.memory_id)}</span>` +
+      `<span>${esc(it.memory_date || '日期未知')}</span>` +
+      (it.categories || []).map(c => `<span class="tag">${esc(c)}</span>`).join('') +
+      (it.mood_tags || []).map(m => `<span class="tag">♥${esc(m)}</span>`).join('') +
+      (it.forgotten ? '<span class="tag forgotten_summary">旧表示</span>' : '') +
+      `</div>` +
+      `<div class="mem-detail"><strong>${esc(it.original_title)}</strong></div>`;
+    row.style.cursor = 'pointer';
+    row.onclick = () => expandBrowseCard(it.memory_id, row);
+    box.appendChild(row);
+  }
+}
+
+async function expandBrowseCard(mid, row) {
+  try {
+    const mem = await api('memory.get', { memory_id: mid });
+    const words = await api('memory.our_words.list', { memory_id: mid }).catch(() => ({ words: [] }));
+    const detail = document.createElement('div');
+    detail.className = 'mem-detail';
+    detail.style.borderTop = '1px dashed var(--line)';
+    detail.style.marginTop = '6px';
+    detail.style.paddingTop = '6px';
+    detail.innerHTML = `<div>${esc(mem.text)}</div>` +
+      ((mem.mood && mem.mood.tags || []).length
+        ? `<div class="meta">心情标签: ${mem.mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
+      ((words.words || []).length
+        ? `<div><em>我们的话：</em>${words.words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '');
+    if (!row.querySelector('.mem-detail:last-of-type + .mem-detail')) row.appendChild(detail);
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function browseByCategory() {
+  try {
+    const d = await api('memory.by_category',
+      { category: document.getElementById('holdCat').value });
+    await renderBrowseTitleList(d.items, '分类·' + document.getElementById('holdCat').value);
+    if (d.has_more) setStatus('同分类桶超过一页，MCP 侧可用 next_cursor 续页');
+  } catch (e) { setStatus(e.message, true); }
+}
+$('catBrowseBtn').onclick = browseByCategory;
+
+$('dateBrowseBtn').onclick = async () => {
+  const v = $('browseDate').value;
+  if (!v) { setStatus('先选一个发生日期', true); return; }
+  try {
+    const d = await api('memory.by_date', { date: v });
+    await renderBrowseTitleList(d.items, v);
+  } catch (e) { setStatus(e.message, true); }
+};
+
+$('moodBrowseBtn').onclick = async () => {
+  try {
+    const tag = $('browseMood').value.trim();
+    const d = await api('memory.by_emotion', tag ? { tag } : {});
+    await renderBrowseTitleList(d.items, tag ? '心情·' + tag : '全部（未筛心情）');
+    if (d.has_more) setStatus('结果超过一页，MCP 侧可用 next_cursor 续页');
+  } catch (e) { setStatus(e.message, true); }
+};
 
 // 恢复旧正文入口已随 v1.7 遗忘退役删除（按钮与调用一并清理；
 // 旧遗忘摘要仅供查看）

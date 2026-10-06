@@ -126,38 +126,35 @@ def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
     已被显式拒绝，本函数仅为历史内部调用点保留空实现。"""
     return None
 
-#: 2026-10-05 江乔生裁定：桶编号 = 分类字母 + 四位序号（如日常 a0001），
-#: 字母按九分类固定顺序 a..i 分配；每类独立计数到 9999，号段永不复用
-#: （桶删除后号码作废不回填）；既有 mem_ 旧编号不受影响，两类并存。
-BUCKET_ID_LETTERS = {"daily": "a", "milestone": "b", "sad": "c", "sweet": "d",
-                     "date": "e", "plan": "f", "sex": "g", "anniversary": "h",
-                     "reloplay": "i"}
+#: 2026-10-05 江乔生裁定（终版）：桶编号 = 纯五位数字（00001-99999），
+#: 不带分类字母——分类筛直达由 memory.by_category 承担，编号只做
+#: 全局唯一短标识。单一全局号段，永不复用（桶删除后号码作废不回填）；
+#: 既有 mem_ 旧编号不受影响，两类并存。
+_BUCKET_ID_COUNTER_KEY = "_global"
+_BUCKET_ID_MAX = 99999
 
 
 def _next_bucket_id(conn, primary_category: str) -> str:
     """写锁内取下一号（hold_in_tx 恒在 BEGIN IMMEDIATE 内调用，
-    同类并发分配由写锁串行化）。多分类桶按调用方给出的首分类取号。
+    并发分配由写锁串行化）。primary_category 形参保留以兼容调用点，
+    编号不再依赖分类。
 
     号段永不复用：计数持久化在 bucket_id_counters，桶删除后下一号
     继续前进——此前从存活行取 MAX，删除后的重建会回卷复用旧号
     （审计 2026-10-05 自查）。"""
-    letter = BUCKET_ID_LETTERS.get(primary_category)
-    if letter is None:
-        # 未知分类在 categories_mod.validate 已拦；此处防御性回退
-        letter = "z"
     row = conn.execute(
         "SELECT next FROM bucket_id_counters WHERE category=?",
-        (primary_category,)).fetchone()
+        (_BUCKET_ID_COUNTER_KEY,)).fetchone()
     n = row["next"] if row is not None else 1
-    if n > 9999:
+    if n > _BUCKET_ID_MAX:
         raise Forbidden(
-            f"分类 {primary_category} 的编号已达 9999 上限（号段永不复用）",
-            code="BUCKET_ID_EXHAUSTED", category=primary_category)
+            f"桶编号已达 {_BUCKET_ID_MAX} 上限（号段永不复用）",
+            code="BUCKET_ID_EXHAUSTED")
     conn.execute(
         "INSERT INTO bucket_id_counters(category, next) VALUES(?,?)"
         " ON CONFLICT(category) DO UPDATE SET next=excluded.next",
-        (primary_category, n + 1))
-    return f"{letter}{n:04d}"
+        (_BUCKET_ID_COUNTER_KEY, n + 1))
+    return f"{n:05d}"
 
 
 def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,

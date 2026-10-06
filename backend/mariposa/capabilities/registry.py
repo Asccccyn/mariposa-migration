@@ -303,7 +303,10 @@ def _register() -> dict[str, Capability]:
     add("media.get", _media_get_meta, _owners(), False, description="媒体元数据")
     add("memory.list", _memory_list, _owners(), False,
         description="记忆倒序列表（遗忘桶只给摘要表示）")
-    add("memory.by_date", _by_date, _owners(), False, description="按事件日期查")
+    add("memory.by_date", _by_date, _owners(), False,
+        description="按事件发生日期直达（标题优先）")
+    add("memory.by_category", _by_category, _owners(), False,
+        description="按分类直达（标题优先，不进召回）")
     add("memory.by_tag", _by_tag, _owners(), False, description="按标签查（结构化入口）")
     add("maintenance.rebuild_index", _rebuild_index, _maintainers(), True,
         description="按当前版本重建全部派生索引（旧投影+分字段+words+source）")
@@ -1074,8 +1077,13 @@ def _tags_add(principal: Principal, a: dict) -> dict:
 
 
 def _by_emotion(principal: Principal, a: dict) -> dict:
-    return listing.by_emotion(str(a.get("tag", "")),
-                              a.get("whose") or None)
+    cur = a.get("next_cursor") if isinstance(a.get("next_cursor"), dict) \
+        else None
+    return listing.by_emotion(
+        str(a.get("tag", "") or ""), a.get("whose") or None,
+        _int_arg(a, "limit", 50, 1, 200),
+        cursor_date=(cur or {}).get("memory_date"),
+        cursor_id=(cur or {}).get("memory_id"))
 
 
 
@@ -1308,7 +1316,22 @@ def _memory_list(principal: Principal, a: dict) -> dict:
 
 
 def _by_date(principal: Principal, a: dict) -> dict:
-    return listing.by_date(str(a.get("date", "")))
+    return listing.by_date(str(a.get("date", "")),
+                           _int_arg(a, "limit", 200, 1, 200))
+
+
+def _by_category(principal: Principal, a: dict) -> dict:
+    """2026-10-05 江乔生裁定：分类直达（标题优先，keyset 续页）。"""
+    cat = str(a.get("category", "")).strip()
+    if not cat:
+        raise Forbidden("category required", code="SCHEMA_VIOLATION",
+                        capability="memory.by_category")
+    cur = a.get("next_cursor") if isinstance(a.get("next_cursor"), dict) \
+        else None
+    return listing.by_category(
+        cat, _int_arg(a, "limit", 50, 1, 200),
+        cursor_date=(cur or {}).get("memory_date"),
+        cursor_id=(cur or {}).get("memory_id"))
 
 
 def _by_tag(principal: Principal, a: dict) -> dict:
