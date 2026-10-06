@@ -317,19 +317,6 @@ def record_round(conn, session_id: str, burst_no: int,
     return round_no
 
 
-def add_revision_record(session_id: str, revision: int,
-                        query_plan: dict, request_ref: str | None,
-                        change_reason: str, burst_no: int) -> None:
-    with db.recall_runtime() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO recall_query_revisions(session_id,"
-            " revision, request_ref, query_plan, change_reason, burst_no,"
-            " created_at) VALUES(?,?,?,?,?,?,?)",
-            (session_id, revision, request_ref,
-             json.dumps(query_plan, ensure_ascii=False), change_reason,
-             burst_no, _now()))
-
-
 def get_plan(session_id: str, revision: int | None = None) -> dict | None:
     with db.recall_runtime() as conn:
         if revision is None:

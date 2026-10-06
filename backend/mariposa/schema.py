@@ -1116,106 +1116,24 @@ CREATE TABLE IF NOT EXISTS bucket_id_counters(
 
 
 WORKSPACE_MIGRATIONS: list[tuple[int, str]] = [
-    (4, """
+    (8, """
+-- ===== 迁移链压缩（审计 1005B，2026-10-06）：净效果等价收口 =====
+-- 旧链 [4,2,1,6,7] 在 fresh 库上"建了又删"净效果 0 表：迁移 1 的
+-- 70 行 recall_* DDL 与 RUNTIME 迁移 1 逐字重复（recall_sessions 只
+-- 在 runtime 库建，workspace 里全是外键悬空的死表）；迁移 2 的
+-- task_leases 被迁移 6 删；4/6/7 是三批重复退役 DROP。
+-- 本迁移 = 4∪6∪7 的 DROP 并集（全 IF EXISTS）：
+--   fresh 库：全 no-op，终态与旧链一致（零表）；
+--   已应用旧链的库（schema_migrations 含 1/2/4/6/7）：no-op；
+--   半途库（如只应用过 1/2）：一次收敛到同一终态。
+-- 旧编号 1/2/4/6/7 退役不再复用；此后迁移只追加不改写（迁移 1 曾被
+-- 就地追改——已部署库的档案与仓库文件不再一致的教训，1005B 收口）。
 DROP TABLE IF EXISTS v2_review_items;
 DROP TABLE IF EXISTS v2_proposal_versions;
-"""),
-    (2, """
-CREATE TABLE IF NOT EXISTS workspace_task_leases(
-  lease_id TEXT PRIMARY KEY,
-  task_key TEXT NOT NULL,
-  claimed_by TEXT NOT NULL,
-  claimed_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  released INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_task_leases ON workspace_task_leases(task_key, released);
-"""),
-    (1, """
-
-
-
-CREATE TABLE recall_query_revisions(
-  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
-  revision INTEGER NOT NULL,
-  request_ref TEXT,
-  query_plan TEXT NOT NULL,
-  change_reason TEXT,
-  burst_no INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(session_id, revision)
-);
-
-CREATE TABLE recall_candidates(
-  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
-  candidate_ref TEXT NOT NULL,
-  resource_ref TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  representation TEXT NOT NULL,
-  content_version TEXT,
-  representation_version TEXT,
-  state TEXT NOT NULL CHECK(state IN
-    ('seen','rejected','accepted','deferred')),
-  score_ref TEXT,
-  reject_target TEXT,
-  first_seen_revision INTEGER NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(session_id, candidate_ref)
-);
-CREATE INDEX idx_recall_candidates_resource ON recall_candidates(session_id, resource_ref);
-
-CREATE TABLE recall_attempts(
-  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
-  operation_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  burst_no INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN
-    ('reserved','running','completed','failed','cancelled')),
-  budget_snapshot TEXT,
-  provider_versions TEXT,
-  error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(session_id, operation_id)
-);
-
-CREATE TABLE recall_receipts(
-  session_id TEXT NOT NULL REFERENCES recall_sessions(session_id),
-  receipt_id TEXT PRIMARY KEY,
-  resource_ref TEXT NOT NULL,
-  content_version TEXT,
-  representation_version TEXT,
-  permission_version TEXT,
-  valid_at TEXT NOT NULL,
-  expires_at TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX idx_recall_receipts_resource
-  ON recall_receipts(session_id, resource_ref);
-
-CREATE TABLE recall_operation_keys(
-  principal_id TEXT NOT NULL,
-  operation_key TEXT NOT NULL,
-  result_ref TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(principal_id, operation_key)
-);
-"""),
-    (6, """
--- ===== 旧审批/工具人体系退役（2026-10-01，D09/D12）=====
 DROP TABLE IF EXISTS worker_runs;
 DROP TABLE IF EXISTS proposal_versions;
 DROP TABLE IF EXISTS work_items;
 DROP TABLE IF EXISTS workspace_task_leases;
-"""),
-    (7, """
--- ===== P2-07（2026-10-05 审计）：workspace 库死表清理 =====
--- workspace 迁移 1 曾复制了一套 recall_* 表，但 recall_sessions 只在
--- runtime 库（RUNTIME_MIGRATIONS）创建——这批表在 workspace 库里
--- 外键指向不存在的表、代码从不容经 db.workspace() 访问（recall 全链
--- 走 db.recall_runtime()），属未完成迁移的永久死重。旧库补删；fresh
--- 库迁移序列执行后同样收敛到零残留。
 DROP TABLE IF EXISTS recall_query_revisions;
 DROP TABLE IF EXISTS recall_candidates;
 DROP TABLE IF EXISTS recall_attempts;
@@ -1223,6 +1141,7 @@ DROP TABLE IF EXISTS recall_receipts;
 DROP TABLE IF EXISTS recall_operation_keys;
 """),
 ]
+
 
 
 def migrate() -> None:

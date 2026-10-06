@@ -243,150 +243,114 @@ def _words_evidence_insufficient(plan: dict, words_hits: list[dict]) -> bool:
         h.get("evidence") or [], "verbatim_required") for h in words_hits)
 
 
-def _run_round_compute(session: dict, plan: dict,
-                       principal=None) -> tuple[dict, dict]:
-    """一轮检索（纯计算）：两路召回 → RRF → 可选精排 → 代码门控 →
-    证据包组装。不写运行库；持久化材料随 effects 由最终事务提交。
+def _words_dense_fuse(conn, plan, words_hits, coverage):
+    """words 通道 dense 融合（1005B 重构：从 _run_round_compute
+    逐字拆出，行为零变更——各轮裁定注释随行保留。"""
+    # S08/WP05：words 专项 dense（独立向量空间，独立阈值）
+    if not plan.get("semantic_query"):
+        return words_hits  # 无语义查询：稀疏结果原样（原 if 包裹语义）
+    from ..retrieval import words_semantic as wsem
+    if plan.get("semantic_query"):
+        # 三轮复审#4：dense 侧过滤与稀疏/raw 同一 source_scope
+        # （正/负 speaker + 正/负日期一套语义，不再各写一份）
+        from ..retrieval import query_plan as _qp
+        _wwhere, _wparams = _qp.source_scope_sql(
+            _qp.source_scope(plan), "w.speaker", "m.memory_date")
+        wdense_res = wsem.words_semantic_search(
+            conn, plan["semantic_query"],
+            limit=config.RECALL_LEXICAL_K,
+            extra_where=_wwhere, extra_params=_wparams)
+        # 全量审计 P1-04：结构化状态区分"正常搜完零命中"
+        #（complete）/"向量未就绪"（partial）/"未配置"
+        #（unavailable）——零命中不再误报 unavailable
+        wdense = wdense_res["hits"]
+        wpending = wdense_res["pending_vectors"]
+        if not wdense_res["provider_active"]:
+            coverage["words_dense"] = "unavailable"
+        elif wpending:
+            coverage["words_dense"] = "partial_vectors_pending"
+            coverage["words_dense_pending_vectors"] = wpending
+        else:
+            coverage["words_dense"] = "complete_within_scope"
+        if wdense:
+            # 同通道 RRF：BM25 与 dense 各自成序后融合
+            lex_ranked = fusion.family_rank(words_hits)
+            dense_cards = []
+            for h in wdense:
+                # 闭环复审 P1-4：资源身份统一——dense 与
+                # 稀疏 words 同用 our_word:<id>/channel=words
+                #（S01：our_word 是对象，一份证据一个身份）
+                # 复审#5：纯 dense word 补正式证据身份
+                #（当前 memory version + word 分级证据）
+                _mv = conn.execute(
+                    "SELECT current_version_no FROM"
+                    " memories WHERE memory_id=?",
+                    (h["memory_id"],)).fetchone()
+                _mv_s = (str(_mv["current_version_no"])
+                         if _mv else None)
+                # CB-039：dense 与 sparse 共用同一证据
+                # 构造——等级取决于当前 provenance（来源
+                # 当前事实/撤销换代），不取决于命中通道
+                from ..retrieval.words import _word_evidence
+                _wrow = {
+                    "word_id": h["word_id"],
+                    "expression_kind": h.get(
+                        "expression_kind"),
+                    "source_ref": h.get("source_ref"),
+                    "source_binding_version": h.get(
+                        "source_binding_version", 0),
+                    "text": h.get("text"),
+                    "current_version_no": _mv_s,
+                }
+                dense_cards.append({
+                    "resource_ref":
+                        f"our_word:{h['word_id']}",
+                    "candidate_ref":
+                        f"our_word:{h['word_id']}",
+                    "word_id": h["word_id"],
+                    "memory_id": h["memory_id"],
+                    "channel": "words",
+                    "representation": "full",
+                    "content_version": _mv_s,
+                    "representation_version": _mv_s,
+                    "projection_version":
+                        config.PROJECTION_REVISION,
+                    "speaker": h["speaker"],
+                    "expression_kind": h["expression_kind"],
+                    "excerpt": h["text"],
+                    "matched_by": ["semantic"],
+                    "matched_fields": ["our_words"],
+                    "speaker": h.get("speaker"),
+                    "expression_kind":
+                        h.get("expression_kind"),
+                    "excerpt": h.get("text"),
+                    "evidence": _word_evidence(_wrow, conn) or [
+                        evidence_mod.make_evidence(
+                        "word_unverified", "our_words", h.get("text")
+                        or "", f"our_word:{h['word_id']}",
+                        source_version=_mv_s)],
+                })
+            dense_ranked = fusion.family_rank(dense_cards)
+            words_hits = fusion.rrf_fuse({
+                "lexical": lex_ranked,
+                "dense": dense_ranked})
+        # P1-04：零命中（provider 正常）已在上方签
+        # complete_within_scope，不落 unavailable
+    return words_hits
 
-    session 可以是未落库的 draft（start）：session_id 仅作为内部关联
-    ID，检索只依赖排除集（新 session 为空）与 formal 库只读事实。
-    """
+
+def _judge_pass(session, plan, event_fused, words_hits, raw_pre,
+                coverage, degraded):
+    """Jev 精排+基数对账+unjudged 计数（1005B 重构：从
+    _run_round_compute 逐字拆出，行为零变更。返回 (judge_result,
+    judge_candidates, judge_items, unjudged)。"""
     sid = session["session_id"]
-    from . import pipeline as _pl
-    rejected = store.rejected_resource_refs(sid)
-    coverage: dict = {"truncated": False}
-    degraded: list[str] = []
-
-    channels = plan.get("channels") or ["event"]
-    with db.formal() as conn:
-        event_fused: list[dict] = []
-        words_hits: list[dict] = []
-        if "event" in channels:
-            raw_hits = _event_candidates(conn, plan, rejected, coverage,
-                                         degraded)
-            lexical = [h for h in raw_hits if "keyword" in h["matched_by"] or
-                       "summary_keyword" in h["matched_by"]]
-            dense = [h for h in raw_hits if "semantic" in h["matched_by"]]
-            event_fused = fusion.rrf_fuse({
-                "lexical": fusion.family_rank(lexical),
-                "dense": fusion.family_rank(dense),
-            })
-            _attach_event_evidence(conn, event_fused)
-        if "words" in channels:
-            if not config.RECALL_WORDS_ENABLED:
-                coverage["words_lexical"] = "blocked"
-                degraded.append("words_channel_disabled")
-            else:
-                wres = words_mod.words_search(conn, plan,
-                                              config.RECALL_LEXICAL_K)
-                words_hits = wres["hits"]
-                coverage["words_lexical"] = wres["coverage"]
-                if wres.get("forgotten_words_count"):
-                    coverage["words_forgotten"] = (
-                        f"disabled:{config.WORDS_FORGOTTEN_RECALL}")
-                # S08/WP05：words 专项 dense（独立向量空间，独立阈值）
-                from ..retrieval import words_semantic as wsem
-                if plan.get("semantic_query"):
-                    # 三轮复审#4：dense 侧过滤与稀疏/raw 同一 source_scope
-                    # （正/负 speaker + 正/负日期一套语义，不再各写一份）
-                    from ..retrieval import query_plan as _qp
-                    _wwhere, _wparams = _qp.source_scope_sql(
-                        _qp.source_scope(plan), "w.speaker", "m.memory_date")
-                    wdense_res = wsem.words_semantic_search(
-                        conn, plan["semantic_query"],
-                        limit=config.RECALL_LEXICAL_K,
-                        extra_where=_wwhere, extra_params=_wparams)
-                    # 全量审计 P1-04：结构化状态区分"正常搜完零命中"
-                    #（complete）/"向量未就绪"（partial）/"未配置"
-                    #（unavailable）——零命中不再误报 unavailable
-                    wdense = wdense_res["hits"]
-                    wpending = wdense_res["pending_vectors"]
-                    if not wdense_res["provider_active"]:
-                        coverage["words_dense"] = "unavailable"
-                    elif wpending:
-                        coverage["words_dense"] = "partial_vectors_pending"
-                        coverage["words_dense_pending_vectors"] = wpending
-                    else:
-                        coverage["words_dense"] = "complete_within_scope"
-                    if wdense:
-                        # 同通道 RRF：BM25 与 dense 各自成序后融合
-                        lex_ranked = fusion.family_rank(words_hits)
-                        dense_cards = []
-                        for h in wdense:
-                            # 闭环复审 P1-4：资源身份统一——dense 与
-                            # 稀疏 words 同用 our_word:<id>/channel=words
-                            #（S01：our_word 是对象，一份证据一个身份）
-                            # 复审#5：纯 dense word 补正式证据身份
-                            #（当前 memory version + word 分级证据）
-                            _mv = conn.execute(
-                                "SELECT current_version_no FROM"
-                                " memories WHERE memory_id=?",
-                                (h["memory_id"],)).fetchone()
-                            _mv_s = (str(_mv["current_version_no"])
-                                     if _mv else None)
-                            # CB-039：dense 与 sparse 共用同一证据
-                            # 构造——等级取决于当前 provenance（来源
-                            # 当前事实/撤销换代），不取决于命中通道
-                            from ..retrieval.words import _word_evidence
-                            _wrow = {
-                                "word_id": h["word_id"],
-                                "expression_kind": h.get(
-                                    "expression_kind"),
-                                "source_ref": h.get("source_ref"),
-                                "source_binding_version": h.get(
-                                    "source_binding_version", 0),
-                                "text": h.get("text"),
-                                "current_version_no": _mv_s,
-                            }
-                            dense_cards.append({
-                                "resource_ref":
-                                    f"our_word:{h['word_id']}",
-                                "candidate_ref":
-                                    f"our_word:{h['word_id']}",
-                                "word_id": h["word_id"],
-                                "memory_id": h["memory_id"],
-                                "channel": "words",
-                                "representation": "full",
-                                "content_version": _mv_s,
-                                "representation_version": _mv_s,
-                                "projection_version":
-                                    config.PROJECTION_REVISION,
-                                "speaker": h["speaker"],
-                                "expression_kind": h["expression_kind"],
-                                "excerpt": h["text"],
-                                "matched_by": ["semantic"],
-                                "matched_fields": ["our_words"],
-                                "speaker": h.get("speaker"),
-                                "expression_kind":
-                                    h.get("expression_kind"),
-                                "excerpt": h.get("text"),
-                                "evidence": _word_evidence(_wrow, conn) or [
-                                    evidence_mod.make_evidence(
-                                    "word_unverified", "our_words", h.get("text")
-                                    or "", f"our_word:{h['word_id']}",
-                                    source_version=_mv_s)],
-                            })
-                        dense_ranked = fusion.family_rank(dense_cards)
-                        words_hits = fusion.rrf_fuse({
-                            "lexical": lex_ranked,
-                            "dense": dense_ranked})
-                    # P1-04：零命中（provider 正常）已在上方签
-                    # complete_within_scope，不落 unavailable
-
-        # 闭环复审 P1-2：第一轮不查 raw（S12/S13）——原文升级只有
-        # Round2 门禁一条通路；证据不足时提示 continuation 走
-        # memory.recall.round2，不再有 words-fallback 旁路
-        raw_result: dict | None = None
-        if "words" in channels:
-            coverage["raw"] = "round2_only"
-
     # Jev 精排（可关闭/可替换；只评价被交付的候选）。
     # S10/WP01：words 与 raw-fallback 候选同样过一层 Jev——未判断
     # 候选不得出站（完整 mixed 各 20/cap40 与 RRF 合序送判归
     # WP02/WP04/WP05 精化）
     judge_result = None
     judge_items: list = []   # 对账后的可用判断项（P1-02 复审）
-    raw_pre = raw_result["hits"] if raw_result else []
     judge_candidates = (event_fused + words_hits + raw_pre)[
         :config.RECALL_JUDGE_CANDIDATE_CAP]
     provider = judge_base.get_provider()
@@ -434,6 +398,67 @@ def _run_round_compute(session: dict, plan: dict,
     # 即足以让 unjudged_count>0，完整 R1 门禁不得为截断窗口背书）
     if coverage.get("words_lexical") == "partial_topk_window":
         unjudged += 1
+    return judge_result, judge_candidates, judge_items, unjudged
+
+
+def _run_round_compute(session: dict, plan: dict,
+                       principal=None) -> tuple[dict, dict]:
+    """一轮检索（纯计算）：两路召回 → RRF → 可选精排 → 代码门控 →
+    证据包组装。不写运行库；持久化材料随 effects 由最终事务提交。
+
+    session 可以是未落库的 draft（start）：session_id 仅作为内部关联
+    ID，检索只依赖排除集（新 session 为空）与 formal 库只读事实。
+    """
+    sid = session["session_id"]
+    from . import pipeline as _pl
+    rejected = store.rejected_resource_refs(sid)
+    coverage: dict = {"truncated": False}
+    degraded: list[str] = []
+
+    channels = plan.get("channels") or ["event"]
+    with db.formal() as conn:
+        event_fused: list[dict] = []
+        words_hits: list[dict] = []
+        if "event" in channels:
+            raw_hits = _event_candidates(conn, plan, rejected, coverage,
+                                         degraded)
+            lexical = [h for h in raw_hits if "keyword" in h["matched_by"] or
+                       "summary_keyword" in h["matched_by"]]
+            dense = [h for h in raw_hits if "semantic" in h["matched_by"]]
+            event_fused = fusion.rrf_fuse({
+                "lexical": fusion.family_rank(lexical),
+                "dense": fusion.family_rank(dense),
+            })
+            _attach_event_evidence(conn, event_fused)
+        if "words" in channels:
+            if not config.RECALL_WORDS_ENABLED:
+                coverage["words_lexical"] = "blocked"
+                degraded.append("words_channel_disabled")
+            else:
+                wres = words_mod.words_search(conn, plan,
+                                              config.RECALL_LEXICAL_K)
+                words_hits = wres["hits"]
+                coverage["words_lexical"] = wres["coverage"]
+                if wres.get("forgotten_words_count"):
+                    coverage["words_forgotten"] = (
+                        f"disabled:{config.WORDS_FORGOTTEN_RECALL}")
+                # S08/WP05：words 专项 dense——拆出至
+                # _words_dense_fuse（1005B 重构：逐字搬移零变更）
+                words_hits = _words_dense_fuse(conn, plan,
+                                               words_hits, coverage)
+
+        # 闭环复审 P1-2：第一轮不查 raw（S12/S13）——原文升级只有
+        # Round2 门禁一条通路；证据不足时提示 continuation 走
+        # memory.recall.round2，不再有 words-fallback 旁路
+        raw_result: dict | None = None
+        if "words" in channels:
+            coverage["raw"] = "round2_only"
+
+    # Jev 精排（可关闭/可替换）——拆出至 _judge_pass（1005B 重构）
+    raw_pre = raw_result["hits"] if raw_result else []
+    judge_result, judge_candidates, judge_items, unjudged = _judge_pass(
+        session, plan, event_fused, words_hits, raw_pre,
+        coverage, degraded)
 
     # 候选合流：event RRF 序 + words 独立序（通道间不比较未校准原始分数）
     all_candidates = fusion.dedupe_by_resource(event_fused + words_hits +

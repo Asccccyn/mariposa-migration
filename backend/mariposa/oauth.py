@@ -99,14 +99,6 @@ def verify_password(password: str) -> str | None:
     return matched
 
 
-def has_password(principal_id: str) -> bool:
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM principal_credentials WHERE principal_id=?",
-            (principal_id,)).fetchone()
-    return row is not None
-
-
 # ---------------------------------------------------------------- 发币
 
 def _hash_token(token: str) -> str:

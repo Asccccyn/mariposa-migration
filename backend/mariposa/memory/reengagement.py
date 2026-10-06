@@ -47,10 +47,3 @@ def record(principal_id: str, memory_id: str, evidence_kind: str,
             raise
     return {"memory_id": memory_id, "occurred_at": occurred_at}
 
-
-def last_reengaged_at(memory_id: str) -> str | None:
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT MAX(occurred_at) AS m FROM memory_reengagements"
-            " WHERE memory_id=?", (memory_id,)).fetchone()
-    return row["m"] if row and row["m"] else None

@@ -40,6 +40,3 @@ def module_for(provider: str) -> Any:
         raise KeyError(f"no source adapter registered for provider: {provider}")
     return mod
 
-
-def registered_providers() -> list[str]:
-    return list(_ADAPTERS)
