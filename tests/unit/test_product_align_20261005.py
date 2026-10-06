@@ -123,25 +123,23 @@ class TestMoodWindowStillEnforced:
         assert row["evidence_state"] == "contemporaneous"
 
 
-class TestLegacyWhyMigratesToMood:
-    def test_apply_maps_why_to_mood(self, actors, tmp_path):
-        """旧库 why_remembered 不丢弃：迁为心情层记录（解释槽归心情）。"""
+class TestLegacyImportNoAutoMood:
+    def test_apply_creates_no_mood(self, actors, tmp_path):
+        """终裁（不能补写）+ §7.2：旧库导入默认 mood 为空，
+        旧 why 文本不迁为心情（mood.write 通道已删）。"""
         from mariposa import migration
-        (tmp_path / "2026-07-01 10-00-00 对齐样本_aa11bb22cc33.md").write_text(
+        (tmp_path / "2026-07-01 10-00-00 终裁样本_aa11bb22cc33.md").write_text(
             "---\ntype: note\ndate: 2026-07-01\nwhy_remembered: 因为想留住那天\n---\n"
-            "对齐批迁移正文", encoding="utf-8")
+            "终裁迁移正文", encoding="utf-8")
         r = migration.dry_run(str(tmp_path), None)
         assert r["counts"]["total"] == 1
         from tests.unit.test_audit1004_batch2 import _last_report_path
         out = migration.apply_from_report(_last_report_path(tmp_path, r))
-        assert out["ok"] is True, out.get("problems")
-        assert out["applied"] == 1
-        assert out["legacy_why_to_mood"] == 1
+        assert out["ok"] is True and out["applied"] == 1
+        assert "legacy_why_to_mood" not in out
         with db.formal() as conn:
-            row = conn.execute(
-                "SELECT mood_text FROM memory_moods"
-                " ORDER BY captured_at DESC LIMIT 1").fetchone()
-        assert row["mood_text"] == "因为想留住那天"
+            assert conn.execute(
+                "SELECT COUNT(*) FROM memory_moods").fetchone()[0] == 0
 
 
 class TestDirectBrowseEntries:

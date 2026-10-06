@@ -870,15 +870,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     # ---------- v1.3/v1.4 召回运行时（Recall Session + words 通道） ----------
     # query_plan 为自由对象：字段级校验（通道白名单/枚举/冲突检测）由
     # recall.models.validate_query_plan 在服务端执行。
-    "memory.mood.write": {
-        "type": "object", "required": ["memory_id"],
-        "additionalProperties": False,
-        "properties": {
-            "memory_id": {"type": "string", "minLength": 1},
-            "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    },
     "memory.recall.round2": {
         "type": "object", "required": ["session_id", "reason", "operation_id"],
         "additionalProperties": False,

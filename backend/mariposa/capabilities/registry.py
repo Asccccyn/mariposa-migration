@@ -109,9 +109,6 @@ def _register() -> dict[str, Capability]:
         description="桶的留标记列表（含已撤销；阶段用有效标记）")
     add("memory.our_words.append", _our_words_append, _owners(), True,
         description="追加我们的话（speaker/ordinal；参与 WIDE 阶段召回）")
-    add("memory.mood.write", _mood_write, {"jiaming"}, True,
-        description="补写/修正当前心情（标签+一段自由文字；非原文、"
-                    "不参与检索；允许后补）")
     add("memory.our_words.list", _our_words_list, _owners(), False,
         description="列出桶内双方话语（按 ordinal）")
     add("memory.categories.replace", _categories_replace, _owners(), True,
@@ -674,12 +671,6 @@ def _recall_accept(principal: Principal, a: dict) -> dict:
 
 def _recall_navigate(principal: Principal, a: dict) -> dict:
     return _with_operation_id(principal, a, recall_service.navigate)
-
-
-def _mood_write(principal: Principal, a: dict) -> dict:
-    return memory.mood_write(
-        principal.principal_id, str(a.get("memory_id", "")),
-        a.get("note"), a.get("tags"))
 
 
 def _recall_status(principal: Principal, a: dict) -> dict:

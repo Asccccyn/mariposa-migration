@@ -4,7 +4,7 @@
   recall 主链、dense（fake embedder）任何通道都不得因文本匹配召回
 - mood_tags 是结构化筛选（filterable/visible/non-ranking）
 - mood_note 非原文（is_source_text=False）+ mood_written_at 后补语义
-- mood.write 轻量补写/修正；note=null 合法；不为完整性编内容
+- 2026-10-05 终裁：不能补写——mood.write 通道已删，心情仅建桶当下可写
 """
 from __future__ import annotations
 
@@ -124,54 +124,36 @@ class TestMoodProvenanceAndWrite:
         assert got["mood"]["mood_written_at"]
         assert got["mood"]["text"] == "我当时其实有点吃醋"
 
-    def test_mood_write_append_and_revise(self, actors):
-        out = hold(actors["jiaming"], "待补心情的正文")
-        mid = out["memory_id"]
-        r1 = registry.invoke(actors["jiaming"], "memory.mood.write",
-                             {"memory_id": mid, "note": "后来补的当时心情",
-                              "tags": ["想念"]}, None)
-        assert r1["data"]["note_present"] is True
+    def test_mood_write_channel_removed(self, actors):
+        """2026-10-05 终裁：心情不能补写——mood.write 通道整体删除。
+
+        心情只能在建桶当下（同期）经 hold 的 mood 参数写入；之后
+        想表达"后来回看的心情"= 新桶 + relation 连回原桶。
+        """
+        from mariposa.capabilities import registry as reg
+        assert "memory.mood.write" not in reg.REGISTRY
+        assert not hasattr(memory, "mood_write")
+        out = hold(actors["jiaming"], "建桶后想补心情的正文",
+                   mood={"text": "当时就有的心情", "tags": ["安心"]})
         with db.formal() as conn:
-            got = memory.get(conn, mid)["mood"]
-        assert got["text"] == "后来补的当时心情"
-        assert got["tags"] == ["想念"]
-        assert got["is_source_text"] is False
-        first_written = got["mood_written_at"]
-        # 修正：覆盖 + 留审计，note=null 合法
-        r2 = registry.invoke(actors["jiaming"], "memory.mood.write",
-                             {"memory_id": mid, "note": None,
-                              "tags": ["安心"]}, None)
-        assert r2["data"]["note_present"] is False
-        with db.formal() as conn:
-            got2 = memory.get(conn, mid)["mood"]
-        assert got2["text"] is None
-        assert got2["tags"] == ["安心"]
-        assert got2["mood_written_at"] >= first_written, \
-            "后补时间戳推进（event_date+mood_written_at 表达后补）"
-        # F04（2026-10-03 审计 P1）：覆盖≠丢失——旧 note/旧 tags 必须
-        # 能从审计事件读回（覆盖前的值：后来补的当时心情 / 想念）
-        with db.formal() as conn:
-            import json as _json
-            evs = conn.execute(
-                "SELECT payload FROM audit_events WHERE resource_id=?"
-                " AND event_type='memory.mood.written' ORDER BY rowid",
-                (mid,)).fetchall()
-        last = _json.loads(evs[-1]["payload"])
-        assert last["replaced_previous"] is True
-        assert last["previous_note"] == "后来补的当时心情"
-        assert last["previous_tags"] == ["想念"]
+            got = memory.get(conn, out["memory_id"])["mood"]
+        assert got["text"] == "当时就有的心情"
+        assert got["tags"] == ["安心"]
+
 
     def test_mood_write_jiaming_only(self, actors):
-        out = hold(actors["jiaming"], "权限正文")
+        # 2026-10-05 终裁：mood.write 已删——权限门收敛到 hold 期：
+        # qiaosheng 建 mood 直接拒绝（仅周家明）
         from mariposa.errors import Forbidden
-        with pytest.raises(Forbidden):
-            memory.mood_write("qiaosheng", out["memory_id"], note="x")
+        qs = actors.get("qiaosheng")
+        if qs is not None:
+            with pytest.raises(Forbidden):
+                hold(qs, "权限正文",
+                     mood={"text": "x", "tags": []})
 
     def test_written_mood_still_not_searchable(self, actors):
-        out = hold(actors["jiaming"], "补写心情后检索正文")
-        mid = out["memory_id"]
-        registry.invoke(actors["jiaming"], "memory.mood.write",
-                        {"memory_id": mid, "note": "补写里的罕见词梼杌"}, None)
+        out = hold(actors["jiaming"], "心情正文",
+                   mood={"text": "心情里的罕见词梼杌", "tags": []})
         with db.formal() as conn:
             assert not rsearch.search(conn, "梼杌")["hits"], \
-            "十六-8：mood_note 不进 BM25"
+            "十六-8：mood_note 不进 BM25（hold 期写入同样禁检）"

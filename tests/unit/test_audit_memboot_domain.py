@@ -132,10 +132,16 @@ class TestBootstrapPublicContract:
 class TestStateHashCompleteness:
 
     def test_mood_change_invalidates(self, actors):
-        m = _hold(actors, "心情指纹正文")
+        """CB-046：mood 行变更使旧快照失效（mood.write 已删，直改行
+        模拟数据变化——快照指纹语义与写入通道无关）。"""
+        out = _hold(actors, "快照正文",
+                    mood={"text": "初版心情", "tags": ["t"]})
+        mid = out["memory_id"]
         b1 = boot.get("jiaming", "claude_chat", "claude_chat")
-        registry.invoke(actors["jiaming"], "memory.mood.write", {
-            "memory_id": m["memory_id"], "tags": ["平静"]}, None)
+        with db.formal() as conn:
+            conn.execute(
+                "UPDATE memory_moods SET mood_text='变更为新心情'"
+                " WHERE memory_id=?", (mid,))
         # mood 单项变更必须使旧快照失效（薄响应路径抛 SnapshotStale）
         with pytest.raises(Exception) as ei:
             boot.get("jiaming", "claude_chat", "claude_chat",

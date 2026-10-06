@@ -393,7 +393,6 @@ def apply_from_report(report_path: str) -> dict:
         return {"ok": False, "error": "报告超出合成样本规模；真实迁移需获准快照"}
     fdir = Path(report["fixture_dir"])
     applied, problems, skipped_existing = [], [], []
-    why_migrated: list[dict] = []
     from datetime import datetime as _dt
     from .retrieval import projection as _pj
     for e in entries:
@@ -471,19 +470,12 @@ def apply_from_report(report_path: str) -> dict:
                 except Exception:
                     conn.execute("ROLLBACK")
                     raise
-            # 2026-10-05 江乔生裁定：why_remember 字段已删除，解释槽归
-            # 心情层——旧库的"为什么想记住"文本迁为心情记录（不静默丢
-            # 弃）。mood_write 自持连接与事务，必须在外层事务 COMMIT
-            # 之后调用（嵌套写锁会互相等死）
-            legacy_why = meta.get("why_remembered")
-            if isinstance(legacy_why, str) and legacy_why.strip():
-                from .memory import service as _mem_svc
-                _mem_svc.mood_write("jiaming", mid, note=legacy_why.strip(),
-                                    tags=None)
-                why_migrated.append({"legacy_id": e["legacy_id"],
-                                     "new_id": mid})
             applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
                             "target": "memories"})
+            # 2026-10-05 终裁：心情不能补写（mood.write 通道已删）——
+            # 旧库导入默认 mood 为空（§7.2）。将来半手动导入时，实时
+            # 阶段（≥2026-07-09）的旧 why 文本可在 hold 时以同期 mood
+            # 内联迁入；补记阶段一律丢弃
         else:
             # out_of_scope（信件等已拆出 mariposa 的资源）：跳过不落地
             skipped_existing.append({"legacy_id": e["legacy_id"],
@@ -498,7 +490,6 @@ def apply_from_report(report_path: str) -> dict:
         if row is not None:
             verified += 1
     result = {"ok": not problems, "applied": len(applied),
-              "legacy_why_to_mood": len(why_migrated),
               "skipped_already_migrated": len(skipped_existing),
               "verified": verified, "problems": problems,
               "note": "幂等：重复 apply 按 migration_id_map 返回既有映射；"
