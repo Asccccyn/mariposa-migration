@@ -149,7 +149,7 @@ class TestMoodProvenanceAndWrite:
         if qs is not None:
             with pytest.raises(Forbidden):
                 hold(qs, "权限正文",
-                     mood={"text": "x", "tags": []})
+                     mood={"text": "x", "tags": ["讨厌"]})
 
     def test_written_mood_still_not_searchable(self, actors):
         out = hold(actors["jiaming"], "心情正文",

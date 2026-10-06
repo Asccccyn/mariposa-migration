@@ -69,11 +69,11 @@ class TestV2HoldLayered:
 
     def test_contemporaneous_mood_stored_rec03(self, actors):
         out = hold_v2(actors, mood={"text": "河水很凉，风吹得舒服",
-                                    "tags": ["平静", "开心"]})
+                                    "tags": ["安心", "开心"]})
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])
         assert got["mood"]["text"].startswith("河水")
-        assert set(got["mood"]["tags"]) == {"平静", "开心"}
+        assert set(got["mood"]["tags"]) == {"安心", "开心"}
         assert got["mood"]["author"] == "jiaming"
         assert got["mood"]["evidence_state"] == "contemporaneous"
 
@@ -82,7 +82,7 @@ class TestV2HoldLayered:
         擅自放宽已回滚——裁定说的是解释槽归属，不是放开当时心情）。"""
         with pytest.raises(Forbidden) as e:
             hold_v2(actors, mode="retrospective",
-                    mood={"text": "现在的感受", "tags": ["平静"]})
+                    mood={"text": "现在的感受", "tags": ["不安"]})
         assert e.value.detail.get("code") == "MOOD_WINDOW_REQUIRED"
 
     def test_no_mood_no_downgrade_rec06(self, actors):

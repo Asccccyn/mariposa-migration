@@ -1,7 +1,8 @@
-"""记忆列表/结构化检索 + meaning 层（§10.5/§17.3）。
+"""记忆列表/结构化直达检索。
 
-meaning 只允许周家明写；追加层次，替换留底；禁检来源（不进任何检索投影）；
-遗忘桶的 meaning 旧内容不作为默认文本检索依据（§10.5）。
+证据边界（冻结裁定 2026-10-05）：当时层=日期/分类/当下心情标签/
+事件/我们的话/标题/原文；后来层=回忆（带作者与写入时间，不反向
+篡改当时层）。meaning 层已随 v1.7 退役。
 """
 from __future__ import annotations
 
@@ -192,13 +193,35 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
     RA-010 原语义（tag 必填按标签查）保留为给 tag 的路径。"""
     if whose and whose not in ("jiaming", "qiaosheng"):
         raise Forbidden("whose must be jiaming or qiaosheng")
+    from .service import MOOD_TAXONOMY, MOOD_WORDS
+    scope: str | None = None
     if tag:
-        where = ("m.memory_id IN (SELECT t.memory_id FROM memory_mood_tags"
-                 " t WHERE t.tag=?"
-                 + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
-                    " mm.memory_id=t.memory_id AND mm.author=?)" if whose
-                    else "") + ")")
-        params: list = [tag] + ([whose] if whose else [])
+        # 2026-10-05 冻结裁定：词表内两层筛选——传下层词=精确筛；
+        # 传大类=筛该大类全部下层词；词表外结构化拒（带全词表）
+        if tag in MOOD_TAXONOMY:
+            words = MOOD_TAXONOMY[tag]
+            scope = f"大类·{tag}"
+            marks = ",".join("?" * len(words))
+            where = ("m.memory_id IN (SELECT t.memory_id FROM"
+                     f" memory_mood_tags t WHERE t.tag IN ({marks})"
+                     + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
+                        " mm.memory_id=t.memory_id AND mm.author=?)" if whose
+                        else "") + ")")
+            params: list = list(words) + ([whose] if whose else [])
+        elif tag in MOOD_WORDS:
+            scope = "心情"
+            where = ("m.memory_id IN (SELECT t.memory_id FROM memory_mood_tags"
+                     " t WHERE t.tag=?"
+                     + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
+                        " mm.memory_id=t.memory_id AND mm.author=?)" if whose
+                        else "") + ")")
+            params = [tag] + ([whose] if whose else [])
+        else:
+            raise Forbidden(
+                "心情筛选词必须在受控词表内（下层词或大类均可）："
+                + "；".join(f"{k}: {'、'.join(v)}"
+                            for k, v in MOOD_TAXONOMY.items()),
+                code="MOOD_TAG_VOCABULARY", got=tag)
     else:
         where = "1=1"
         params = []
@@ -209,8 +232,8 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
         params += [cursor_date, cursor_date, cursor_id]
     with db.formal() as conn:
         cards = _title_cards(conn, where, params, order=order, limit=limit)
-    out = {"mood_tag": tag or None, "items": cards["items"],
-           "has_more": cards["has_more"]}
+    out = {"mood_tag": tag or None, "scope": scope,
+           "items": cards["items"], "has_more": cards["has_more"]}
     if cards["items"]:
         last = cards["items"][-1]
         out["next_cursor"] = {"memory_date": last["memory_date"],
@@ -218,7 +241,6 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
     return out
 
 
-# ---------------- meaning ----------------
 
 
 

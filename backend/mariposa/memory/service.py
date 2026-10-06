@@ -81,6 +81,25 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
         whitelist_body=projection.normalize_search_text(body))
 
 
+#: 2026-10-05 冻结裁定：心情两层受控词表——下层词才是写进桶、
+#: 参与筛选的实际标签；大类只是系统归类（by_emotion 传大类=筛该大类
+#: 全部下层词）。周家明一次可选 1~3 个，不硬选唯一。禁止自由造词：
+#: 今天"吃醋"明天"酸"后天"占有欲冒出来了"，库会碎成三个标签。
+MOOD_TAXONOMY: dict[str, tuple[str, ...]] = {
+    "愉悦": ("开心", "安心", "满足", "期待", "感动"),
+    "亲密": ("喜欢", "爱意", "想念", "亲近"),
+    "失落": ("难过", "委屈", "失望", "孤独"),
+    "对抗": ("生气", "愤怒", "烦躁"),
+    "不安": ("害怕", "担心", "紧张", "不安"),
+    "占有": ("吃醋", "嫉妒"),
+    "渴望": ("想要", "渴望"),
+    "排斥": ("讨厌", "厌烦"),
+}
+#: 下层词全集（"不安"同名出现在本大类内——既是词也是大类，合法）
+MOOD_WORDS: frozenset[str] = frozenset(
+    w for words in MOOD_TAXONOMY.values() for w in words)
+
+
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     """当时心情资格（R05/§5.1）：仅周家明、仅同期 hold 可写。
 
@@ -109,8 +128,19 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     deduped = []
     for t in tags:
         t = t.strip()
-        if t not in deduped:
+        if t and t not in deduped:
             deduped.append(t)
+    if len(deduped) > 3:
+        raise Forbidden(
+            f"心情标签最多 3 个（给了 {len(deduped)}）——不硬选唯一，"
+            "也不堆砌", code="MOOD_TAGS_LIMIT", tags=deduped)
+    bad = [t for t in deduped if t not in MOOD_WORDS]
+    if bad:
+        raise Forbidden(
+            "心情标签必须在受控词表内（冻结裁定 2026-10-05）："
+            + "；".join(f"{k}: {'、'.join(v)}"
+                        for k, v in MOOD_TAXONOMY.items()),
+            code="MOOD_TAG_VOCABULARY", got=bad)
     return {"text": text, "tags": deduped}
 
 
