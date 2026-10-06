@@ -234,6 +234,31 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                 "enum": ["exact", "inferred",
                                          "unknown"]}},
     },
+    "memory.by_date": {
+        "type": "object", "required": ["date"],
+        "additionalProperties": False,
+        "properties": {
+            "date": {"type": "string", "minLength": 10, "maxLength": 10},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}},
+    },
+    "memory.by_category": {
+        "type": "object", "required": ["category"],
+        "additionalProperties": False,
+        "properties": {
+            "category": {"type": "string", "enum": [
+                "daily", "milestone", "sad", "sweet", "date", "plan",
+                "sex", "anniversary", "reloplay"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "next_cursor": {"type": "object"}},
+    },
+    "memory.by_emotion": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "tag": {"type": "string", "maxLength": 40},
+            "whose": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "next_cursor": {"type": "object"}},
+    },
     "memory.tags.add": {
         "type": "object", "required": ["memory_id", "tags"],
         "additionalProperties": False,
