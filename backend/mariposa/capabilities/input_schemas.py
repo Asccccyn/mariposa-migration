@@ -234,6 +234,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                 "enum": ["exact", "inferred",
                                          "unknown"]}},
     },
+    "memory.mood.vocab": {
+        "type": "object", "additionalProperties": False, "properties": {},
+    },
     "memory.by_date": {
         "type": "object", "required": ["date"],
         "additionalProperties": False,

@@ -122,16 +122,7 @@
       <input id="browseDate" type="date" title="发生日期（真实发生，非写入）" />
       <button id="dateBrowseBtn">看日期</button>
       <input id="browseMood" list="moodVocab" placeholder="心情词或大类，如：开心 / 亲密" style="max-width:200px" />
-      <datalist id="moodVocab">
-        <option value="愉悦">大类·开心、安心、满足、期待、感动</option>
-        <option value="亲密">大类·喜欢、爱意、想念、亲近</option>
-        <option value="失落">大类·难过、委屈、失望、孤独</option>
-        <option value="对抗">大类·生气、愤怒、烦躁</option>
-        <option value="不安">大类·害怕、担心、紧张、不安</option>
-        <option value="占有">大类·吃醋、嫉妒</option>
-        <option value="渴望">大类·想要、渴望</option>
-        <option value="排斥">大类·讨厌、厌烦</option>
-      </datalist>
+      <datalist id="moodVocab"></datalist>
       <button id="moodBrowseBtn">看心情（空=全部）</button>
     </div>
     <div id="memResults"></div>
@@ -350,6 +341,26 @@ async function searchMemories(q) {
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+// ---------- 心情词表动态装载（memory.mood.vocab 单一事实源） ----------
+async function loadMoodVocab() {
+  try {
+    const d = await api('memory.mood.vocab', {});
+    const dl = $('moodVocab');
+    dl.innerHTML = '';
+    for (const [cat, words] of Object.entries(d.taxonomy || {})) {
+      const opt = document.createElement('option');
+      opt.value = cat;
+      opt.label = '大类·' + words.join('、');
+      dl.appendChild(opt);
+      for (const w of words) {
+        const o2 = document.createElement('option');
+        o2.value = w; o2.label = cat;
+        dl.appendChild(o2);
+      }
+    }
+  } catch (e) { /* 未登录等场景静默，词表在登录后刷新 */ }
+}
+
 // ---------- 直达浏览（2026-10-05 裁定：与周家明同口径） ----------
 // 标题优先：先给标题卡片，点标题再取完整卡片（token 友好）
 async function renderBrowseTitleList(items, label) {
@@ -532,7 +543,7 @@ $('delList').addEventListener('click', async (e) => {
   } catch (err) { setStatus(err.message, true); loadDeletions(); }
 });
 
-function refreshAll() { searchMemories(''); }
+function refreshAll() { searchMemories(''); loadMoodVocab(); }
 if (state.token) refreshAll();// ---------- 原文 Source Layer ----------
 const srcState = { conv: null, nextSeq: null, hasMore: false };
 

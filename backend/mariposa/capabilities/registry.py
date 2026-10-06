@@ -244,6 +244,8 @@ def _register() -> dict[str, Capability]:
         description="删除申请列表")
     add("memory.tags.add", _tags_add, _owners(), True,
         description="加标签（情绪标签 whose 必填）")
+    add("memory.mood.vocab", _mood_vocab, _owners(), False,
+        description="心情词表开放接口（大类/下层词+写入规则，单一事实源）")
     add("memory.by_emotion", _by_emotion, _owners(), False,
         description="按情绪查（结构化入口，遗忘桶仍可查）")
     add("memory.update", _memory_update, _owners(), True,
@@ -1056,6 +1058,23 @@ def _tags_add(principal: Principal, a: dict) -> dict:
         raise Forbidden("tags must be a list")
     return listing.tags_add(principal.principal_id,
                             str(a.get("memory_id", "")), tags)
+
+
+def _mood_vocab(principal: Principal, a: dict) -> dict:
+    """2026-10-05：词表可能调整（她说"之后可以调整"），调用方一律
+    动态拉取本接口，不各自硬编码。"""
+    from ..memory.service import MOOD_TAXONOMY
+    return {
+        "taxonomy": {k: list(v) for k, v in MOOD_TAXONOMY.items()},
+        "rules": {
+            "stored": "下层词入桶参与筛选；大类仅系统归类（传大类=展开筛）",
+            "max_tags": 3,
+            "write_window": "仅建桶当下（同期、仅周家明）；不能补写",
+            "note": "mood_note 自由文字，永不参与检索；空=合法",
+        },
+        "frozen_ruling": "2026-10-05：Mariposa 记录当时留下的证据，"
+                         "不替过去的人补写内心。",
+    }
 
 
 def _by_emotion(principal: Principal, a: dict) -> dict:

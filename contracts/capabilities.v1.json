@@ -870,6 +870,17 @@
       "description": "记忆倒序列表（遗忘桶只给摘要表示）"
     },
     {
+      "canonical_name": "memory.mood.vocab",
+      "transport_name": "mariposa_memory_mood_vocab",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "心情词表开放接口（大类/下层词+写入规则，单一事实源）"
+    },
+    {
       "canonical_name": "memory.open",
       "transport_name": "mariposa_memory_open",
       "allowed_principals": [
