@@ -210,6 +210,20 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _frontmatter_categories(meta: dict) -> list | None:
+    raw = meta.get("categories")
+    if isinstance(raw, list):
+        cats = [str(x).strip() for x in raw if str(x).strip()]
+        return cats or None
+    if isinstance(raw, str) and raw.strip():
+        # frontmatter 极简解析器不展开列表："[a, b]" 以整串到达——剥括号后分拆
+        inner = raw.strip()
+        if inner.startswith("[") and inner.endswith("]"):
+            inner = inner[1:-1]
+        return [c.strip() for c in inner.split(",") if c.strip()] or None
+    return None
+
+
 def dry_run(fixtures: str, out: str | None = None) -> dict:
     """对合成 fixture 做结构映射演练；产出 ID/字段映射与 payload hash。
     真实数据 dry-run 需获准快照后另跑；本命令拒绝处理含真实数据特征的大目录。"""
@@ -275,6 +289,10 @@ def dry_run(fixtures: str, out: str | None = None) -> dict:
                 "importance": meta.get("importance"),
                 "pinned": str(meta.get("pinned", "")).lower() in ("true", "1"),
                 "meaning_layers": meta.get("meaning") if isinstance(meta.get("meaning"), list) else [],
+                # F-J-23（联合审计返修 2026-10-06）：frontmatter 的 categories 进映射
+                # （列表或逗号分隔串）；缺省=None——apply 侧按"没有未分类默认值"
+                # 列 problems 拒迁，不再静默补 daily
+                "categories": _frontmatter_categories(meta),
             },
             "payload_hash": payload_hash,
             "content_bytes": len(body.encode("utf-8")),
