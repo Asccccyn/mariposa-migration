@@ -90,3 +90,46 @@
    - workspace 迁移 7 在"生产 workspace 库死表**非空**"场景的行为（DROP 直接成功，无数据保留——死表按定义无代码写入，但值得确认）；
    - pipeline `facts_for_many` 对 2 万桶 IN 子句的 SQLite 参数上限（3.12 自带 sqlite ≥3.45，上限 32766——已核，留档）。
 3. 勘误表 E1（S19 语义冲突）是本批唯一的中途方向修正，请独立判断取舍。
+
+
+---
+
+# 追加：b4b3a06 之后的批次清单（Codex 全量审计范围更新，2026-10-05 深夜）
+
+**当前审计基线：`4dc6c04`（main）**。⚠️ 本仓 git 历史已于 909d535 改写（清除 91MB 模型缓存路径）——**旧克隆必须重新 clone，不能 pull**；全量备份在 `~/Data/mariposa-pre-rewrite-backup-20261005.bundle`。测试约束见 AGENTS.md（前台/分批/资源有界）。
+
+## 后续批次清单（全部含"她的裁定→落地"因果，审我们=审裁定执行是否走样）
+
+| 提交 | 内容 | 审计重点 |
+|---|---|---|
+| f81d083 | 回滚心情窗口擅自放宽 | V2-REC-04 原样恢复；该放宽本身是越权产物（已向她认错）——验证无残留 |
+| 443524f | why_remember 全链删除+标题必填30+心情窗口放宽（后撤）+编号初版 | why 在 schema/服务/transport/迁移列/离线脚本零残留；标题双门 |
+| 2d66282 | 三直达入口（by_category 新增/by_date/by_emotion 重写，标题优先）+编号纯五位数 | keyset 分页正确性；标题卡片不带正文 |
+| a596395 | memory.versions.read/list 删除 | 内部版本行保留但无对外可见面；i.versions.read 不受影响 |
+| fe73747 | semantic provider 故障降级 | 关键词主路径存活+degraded 如实；不伪装 hybrid |
+| f42d6bb | mood.write 整体删除（终裁：不能补写） | 全库无事后写心情路径（含导入侧） |
+| d14a24e→b810ba1→75378ab | 心情词表三轮演进→终版 | 见下方冻结语义 |
+| aa624c9 | estómago 内置绑定脚本 | 白名单边界（泄漏面=hold+vocab）；发币顺序约束写进脚本头（旧代码运行中发币=migrate 提前致坏）|
+| 4dc6c04 | 修复两个恒真空转的 dense 禁检测试 | 探针真实存在（mood_note/title/words 三源） |
+
+## 冻结语义（审计判据，偏离即发现）
+
+1. **证据边界**（她的冻结句）："Mariposa 记录当时留下的证据，不替过去的人补写内心。对过去的解释只能作为后来发生的新记忆保存。"当时层=日期/分类/当下心情/事件/我们的话/标题/原文；后来层=回忆（带作者+写入时间，不反向篡改当时层）。
+2. **心情**：标签槽只存 7 大类（开心/爱/生气/吃醋/悲伤/渴望/不安），仅建桶当下、仅周家明、≤3 个、词表外 MOOD_CATEGORY_REQUIRED 拒；子心情=mood_note 自由文字可写可不写、永不参与任何检索（BM25/dense/RRF/直达筛）；不能补写（mood.write 已删）；延后写桶心情留空；词表正本=memory.mood.vocab。
+3. **编号**：纯五位 00001-99999 全局号段，bucket_id_counters 持久计数永不复用（删除不回卷——曾有缺陷已修，见回归 test_no_reuse_after_delete）；旧 mem_ 并存。
+4. **直达检索**：by_date 按 memory_date（真实发生日期）；by_category/by_emotion 标题优先+keyset；by_emotion 空标签=全量；召回 mood_tags 过滤=大类直筛同语义。
+5. **dense**：向量=whitelist_body（仅正文）；投影哈希绑定旧向量排除；生产已按五步验收启用。
+
+## 已申报勘误（勿当新发现，欢迎复核修复质量）
+
+- E1-E12（第一版勘误表）全部仍有效；
+- 恒真测试事件（4dc6c04 修复）：删 why 连带删探针致两个 dense 禁检测试空转——她的"不能假设旧问题已消失"指正抓出；欢迎扫其余测试是否同类；
+- "why 进全文索引"系早期误报（build_full 零调用死代码）。
+
+## 建议挑战点（我们自己最想被攻的位置）
+
+- _next_bucket_id 在 BEGIN IMMEDIATE 内的并发正确性与 99999 上限语义；
+- estómago builtin binding 的 allowlist 与 registry.invoke 检查顺序（allowlist 在 require_any 之后——jiaming 主体+白名单的交集行为）；
+- 标题更新与投影哈希：title 不在向量内，但 retrieval_documents.search_text_hash 是否覆盖 title 变更——字段投影与向量哈希口径是否自洽；
+- git 历史改写后仓库完整性（fsck / 备份 bundle 可恢复性抽查）；
+- 全套件 1095 绿的真实性（按 AGENTS.md 分批跑）。
