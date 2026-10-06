@@ -168,19 +168,16 @@ class TestStaleReceipt:
 
 class TestLockInChecks:
 
-    def test_mood_write_after_delete_structured(self, actors, monkeypatch):
-        """锁外检查窗口遇删除 → 结构化 NotFound（非 FK 500）。"""
+    def test_tags_add_after_delete_structured(self, actors, monkeypatch):
+        """锁外检查窗口遇删除 → 结构化 NotFound（非 FK 500）。
+        （mood.write 已按 2026-10-05 终裁删除——心情不能补写。）"""
         m = _hold(actors, "心情锁内检查")
-        # 目标已被直连删除（模拟窗口内删除）——锁内检查应结构化拒绝
         with db.formal() as c2:
             c2.execute("PRAGMA foreign_keys=OFF")
             c2.execute("DELETE FROM memory_our_words WHERE memory_id=?",
                        (m["memory_id"],))
             c2.execute("DELETE FROM memories WHERE memory_id=?",
                        (m["memory_id"],))
-        with pytest.raises(NotFound):
-            memory.mood_write("jiaming", m["memory_id"],
-                              tags=["平静"])
         with pytest.raises(NotFound):
             listing.tags_add("jiaming", m["memory_id"], ["t"])
 
@@ -215,9 +212,8 @@ class TestMaintenanceWorkerAccess:
 class TestByEmotionWhose:
 
     def test_whose_param_no_sql_error(self, actors):
-        m = _hold(actors, "心情查询正文")
-        registry.invoke(actors["jiaming"], "memory.mood.write", {
-            "memory_id": m["memory_id"], "tags": ["平静"]}, None)
+        _hold(actors, "心情查询正文",
+              mood={"text": "平静", "tags": ["平静"]})
         out = listing.by_emotion("平静", whose="jiaming")
         assert isinstance(out["items"], list), \
             "whose 参数不得触发 no such column（NP6）"
