@@ -133,3 +133,43 @@
 - 标题更新与投影哈希：title 不在向量内，但 retrieval_documents.search_text_hash 是否覆盖 title 变更——字段投影与向量哈希口径是否自洽；
 - git 历史改写后仓库完整性（fsck / 备份 bundle 可恢复性抽查）；
 - 全套件 1095 绿的真实性（按 AGENTS.md 分批跑）。
+
+---
+
+# 追加：审计 1005B 根因修复批交接（2026-10-06，基线推进至 479a16d）
+
+**当前审计基线：`479a16d`（main，已 push）**。上表基线 4dc6c04 之后的批次（审我们=审修复是否忠实于根因）：
+
+| 提交 | 内容 | 审计重点 |
+|---|---|---|
+| 91aead4 | 第一批：心情窗口宁拒不猜/MCP 面默认 compact_v1/词表单一事实源/compact 字段名 bug/白名单补 hold.status/清扫化石 | 见下"修复声明"R1-R5 |
+| estómago 36fd6df | 接口根因适配：classifyError 按httpStatus 优先/mood 前置拦截/词表动态拉取 | estómago 仓（本地无远端）；记录见其 docs/specs/IMPLEMENTATION_MAP.md 2026-10-06 段 |
+| 479a16d | 第二批：MCP 信封协商/WORKSPACE 迁移链压缩→单迁移 8/死符号 27 项/recall 四函数拆分/tools/list 隐占位 | 见下 R6-R9 |
+
+## 修复声明（根因视角，每项含回归锚点）
+
+- **R1 词表单一事实源**：MOOD_CATEGORIES 之外的全部副本（5 处文案、input_schemas 两处枚举、上限 3）改为动态生成/常量同源（MOOD_TAGS_MAX）；vocab 加 `version` 字段。曾发生"词表 7 类、文案写固定 8 个"。锚点：test_root_cause_20261006.py::TestMoodVocabCopyConsistency
+- **R2 compact 字段名**：_JUDGE_DROP 的 confidence_kind 曾误写 provider_confidence_kind（删除是空操作）；恒 null 的 provider_confidence 一并删。锚点：TestCompactJudgeDrop
+- **R3 MCP 面默认 compact_v1**：invoke 增 default_output_profile（仅 mcp_adapter 注入 compact_v1；HTTP 面 legacy 不变）；显式 profile 语义不变；默认提升对不支持能力静默回退。此前 compact 纯 opt-in 且无消费者传参=瘦身从未生效。锚点：TestMcpDefaultCompact（5 条）
+- **R4 心情窗口宁拒不猜**：mood 给了而 creation_mode 缺省→MOOD_WINDOW_REQUIRED（不再默认 contemporaneous——防补记心情绕过 V2-REC-04）；不做 memory_date 交叉校验（按日期猜会误伤"晚上记当天早上"）。锚点：TestMoodRequiresExplicitCreationMode（4 条）
+- **R5 estómago 白名单**：脚本+护栏注释+生产库 bdg_2c478128e36c8ea01d36 事务内更新（白名单=[hold, hold.status, vocab]，每请求读库即时生效）。锚点：TestEstomagoAllowlistRecovery
+- **R6 MCP 信封协商**：params._meta.content_envelope="single" 省略 content 完整 JSON 副本（留指针行）；默认双份保兼容（不赌客户端读取面）；出站统一紧凑分隔符。锚点：test_envelope_and_toolslist_20261006.py::TestEnvelopeNegotiation
+- **R7 WORKSPACE 迁移链压缩**：[4,2,1,6,7]（fresh 库建了又删净 0 表+70 行 DDL 与 RUNTIME 迁移 1 重复）→单迁移 8=DROP 并集。三形态验证等价：fresh（applied=[8] 零死表）/生产（[1,2,4,6,7]+8 落库档案延续）/半途模拟（[1,2]+死表→一次收敛）。旧编号退役不复用（迁移 1 曾被就地追改的教训）。锚点：TestWorkspaceMigration8（子进程）
+- **R8 死符号 27 项**：全仓词边界 grep+AST 双验证零调用后删（9 月两次 refactor 拆尾）。**ProviderUnavailable 删后恢复**——T-EXT-02 验收锚定的合同预留类不是死代码（教训已写入类注释）。content_role_banner 未删：contracts/recall_runtime.v1.schema.json 引用（契约引用≠零引用）
+- **R9 recall 拆分**：_run_round_compute→_words_dense_fuse/_judge_pass；_round2_body→_round2_resolve_offset/_round2_judge_cards。逐字搬移零语义变更，裁定注释随行；提交事务段内聚不拆。**拆分过程曾引入 3 个边界 bug（漏 return/变量漏传）均被测试当场抓住**——等价性由 1116 全量背书，欢迎对照 91aead4 前原文逐块攻
+
+## 已申报勘误（勿当新发现）
+
+- **有意保留**：memory.list/by_tag 全文内嵌、source.search 全文不截断、capabilities.list 17KB、memory.get 微字段——瘦身机会但**需契约裁定**（改 handler 返回体同时影响 HTTP 消费面：网页/estómago/CC），未经她批准不动
+- **信封 single 模式当前收益=0**：无客户端传 _meta.content_envelope（协商机制就绪，等客户端升级）——不删默认双份是防周家明客户端只读 content 的兼容风险，属"不赌"决策
+- estómago AUTH_LOCKED 判 retry_later：锁定期（指数退避）可能长于其有界重试窗口——语义上"可等"优于"判死"，如认为应 dead 请提裁定
+- 生产 mariposa 已重启载 479a16d（pid 35588）；estómago 无常驻服务，下次启动自动生效
+
+## 建议挑战点（我们自己最想被攻的位置）
+
+1. **迁移 8 等价性**：用更多库形态攻（如 applied=[4] 单独、applied 含 3/5 等未存在编号、schema_migrations 有 8 但表残留）
+2. **MCP 默认 compact 的影响面**：compact 白名单（recall 家族+source.search+bootstrap）删的字段清单 vs 周家明实际消费——compact.py 只删诊断/可推导字段，欢迎逐字段挑战"这个真没用吗"
+3. **_meta 协商不污染业务**：content_envelope 只在 mcp_adapter 层消费（不进 arguments/schema 校验/payload 哈希）——验证它与 output_profile 的剥离路径等价
+4. **recall 拆分等价性**：git diff 91aead4..479a16d -- recall/ 逐块对照搬移（我们声明零语义变更）
+5. **estómago classifyError 优先序**：httpStatus 在前 code 在后——找"状态码可重试但结构化码语义是永久冲突"的组合（如有，优先序应反转）
+6. 全量 1116 通过+1 跳过真实性（按 AGENTS.md 分批前台跑）
