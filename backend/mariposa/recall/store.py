@@ -747,7 +747,12 @@ def purge_expired(limit: int = 200) -> int:
             for sid in stale_ids:
                 for child in ("recall_round1_receipts", "recall_rounds",
                               "recall_query_revisions", "recall_attempts",
-                              "recall_receipts", "recall_candidates"):
+                              "recall_receipts", "recall_candidates",
+                              # F-J-04（联合审计 2026-10-06）：三张无 FK 子表
+                              # 此前漏清——超期 session 留孤儿行无界增长
+                              "recall_continue_refs",
+                              "recall_raw_continuations",
+                              "recall_raw_leases"):
                     conn.execute(
                         f"DELETE FROM {child} WHERE session_id=?",
                         (sid,))
@@ -767,7 +772,10 @@ def reset_for_tests() -> None:
               "recall_operation_keys", "recall_rounds",
               "recall_round1_receipts", "recall_receipts",
               "recall_attempts", "recall_candidates",
-              "recall_query_revisions", "recall_sessions")
+              "recall_query_revisions", "recall_sessions",
+              # F-J-04：与 purge_expired 同步（漏清=跨测试残留）
+              "recall_continue_refs", "recall_raw_continuations",
+              "recall_raw_leases")
     with db.recall_runtime() as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         for t in tables:

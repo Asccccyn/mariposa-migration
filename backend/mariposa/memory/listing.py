@@ -109,11 +109,23 @@ def by_category(category: str, limit: int = 50,
              " WHERE category=?)")
     params: list = [cats[0]]
     order = " ORDER BY m.memory_date DESC, m.memory_id DESC"
-    if cursor_date and cursor_id:
-        # keyset：同 (date,id) 复合游标，同日多桶不丢（CB-049 同口径）
-        where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
-                  " AND m.memory_id < ?))")
-        params += [cursor_date, cursor_date, cursor_id]
+    # F-J-19（联合审计 2026-10-06）：NULL 日期三态游标——SQLite DESC 排序
+    # NULL 区在最后；旧谓词在 NULL 区游标处恒假（NULL < date 为 NULL），
+    # 翻页会漏掉全部无日期桶、且页尾为 NULL 时退回首页死循环。
+    # 三态：无 cursor_id=首页；cursor_date 有值=日期区游标（并入 NULL 区）；
+    # cursor_date 为 None 而 cursor_id 有值=已翻到 NULL 区的游标。
+    if cursor_date is not None and cursor_id is None:
+        raise Forbidden("游标不完整：有 memory_date 无 memory_id",
+                        code="INVALID_ARGUMENT")
+    if cursor_id is not None:
+        if cursor_date is None:
+            where += (" AND (m.memory_date IS NULL AND m.memory_id < ?)")
+            params += [cursor_id]
+        else:
+            # keyset：同 (date,id) 复合游标，同日多桶不丢（CB-049 同口径）
+            where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
+                      " AND m.memory_id < ?) OR m.memory_date IS NULL)")
+            params += [cursor_date, cursor_date, cursor_id]
     with db.formal() as conn:
         cards = _title_cards(conn, where, params, order=order, limit=limit)
     out = {"category": cats[0], "items": cards["items"],
@@ -204,10 +216,23 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
         where = "1=1"
         params = []
     order = " ORDER BY m.memory_date DESC, m.memory_id DESC"
-    if cursor_date and cursor_id:
-        where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
-                  " AND m.memory_id < ?))")
-        params += [cursor_date, cursor_date, cursor_id]
+    # F-J-19（联合审计 2026-10-06）：NULL 日期三态游标——SQLite DESC 排序
+    # NULL 区在最后；旧谓词在 NULL 区游标处恒假（NULL < date 为 NULL），
+    # 翻页会漏掉全部无日期桶、且页尾为 NULL 时退回首页死循环。
+    # 三态：无 cursor_id=首页；cursor_date 有值=日期区游标（并入 NULL 区）；
+    # cursor_date 为 None 而 cursor_id 有值=已翻到 NULL 区的游标。
+    if cursor_date is not None and cursor_id is None:
+        raise Forbidden("游标不完整：有 memory_date 无 memory_id",
+                        code="INVALID_ARGUMENT")
+    if cursor_id is not None:
+        if cursor_date is None:
+            where += (" AND (m.memory_date IS NULL AND m.memory_id < ?)")
+            params += [cursor_id]
+        else:
+            # keyset：同 (date,id) 复合游标，同日多桶不丢（CB-049 同口径）
+            where += (" AND (m.memory_date < ? OR (m.memory_date = ?"
+                      " AND m.memory_id < ?) OR m.memory_date IS NULL)")
+            params += [cursor_date, cursor_date, cursor_id]
     with db.formal() as conn:
         cards = _title_cards(conn, where, params, order=order, limit=limit)
     out = {"mood_tag": tag or None, "scope": scope,
