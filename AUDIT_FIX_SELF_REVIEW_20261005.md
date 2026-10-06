@@ -184,3 +184,18 @@
 | 提交 | 内容 | 审计重点 |
 |---|---|---|
 | cd66e52 | B3 七项：purge/reset 三子表（F-J-04）/raw_msg 读侧 invalid（F-J-05）/直达 NULL 三态游标（F-J-19）/placeholder 大类（F-J-20）/迁移工具拒无分类（F-J-23）/删除幂等落穿结构化（F-J-26）/continuation 合并提示（F-J-27） | 回归 tests/unit/test_joint_audit_b3.py 15 条；test_product_align 冻结断言按 F-J-23 新语义更新（applied=0+categories_missing，非自动 daily） |
+
+
+---
+
+# 追加：联合审计返修复核行（2026-10-06，GLM；当前基线 `167086d`）
+
+B3 批之后的 maripoga 侧返修提交（既有合同→本次实现修正，非新裁定落地）：
+
+| 提交 | 内容 |
+|---|---|
+| e308412 | B6 小批：requirements-dense.lock（F-J-57，mlx/mlx-lm 等实测锁定）+ recall 契约文件显式历史化（F-J-28） |
+| 6bc3f15 | B4：内置绑定夹具与发币脚本 ALLOWLIST 同源（F-J-55，含 hold.status 允许面断言） |
+| 167086d | B3 补：迁移工具 categories 全链打通（F-J-23 完整版——dry_run 从 frontmatter 携带分类；全量回归曾抓出 dry_run 不产出 categories 致 apply 全拒的缺口） |
+
+返修后全量：unit 1014+1skip / integration 41+新增 / acceptance 67（分批前台复跑）。estómago 侧批次见其 README 索引（B1–B5）。跨仓真实双端验证=审计包 probes/b1（R01 正例经真实 HostToolExecutor→真实 mariposa 全链；R02 旧错误形状仍拒）。
