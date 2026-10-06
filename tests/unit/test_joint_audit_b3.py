@@ -167,8 +167,10 @@ class TestFJ19NullCursor:
                        original_title=f"有日期{d}")
             ids.append(out["memory_id"])
         for i in range(nulls):
+            # D1 裁定后 NULL 日期只存在于"补写未给日期"（当天记录自动填当天）
             out = hold(actors, 100 + i, text=f"无日期事件{i}",
                        memory_date=None, date_confidence="unknown",
+                       creation_mode="retrospective",
                        original_title=f"无日期{i}")
             ids.append(out["memory_id"])
         return ids
