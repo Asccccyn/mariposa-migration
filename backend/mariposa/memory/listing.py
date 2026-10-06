@@ -201,7 +201,7 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
         # 永不进检索），不做筛选键
         if tag not in MOOD_CATEGORIES:
             raise Forbidden(
-                "心情筛选只能按大类（固定 8 个）："
+                f"心情筛选只能按大类（固定 {len(MOOD_CATEGORIES)} 个）："
                 + "、".join(MOOD_CATEGORIES),
                 code="MOOD_CATEGORY_REQUIRED", got=tag)
         scope = f"大类·{tag}"

@@ -25,6 +25,10 @@ def rpc(c, method, pid, params=None, msg_id=1):
 
 
 def tool(c, pid, name, arguments, msg_id=1):
+    # 1005B-R3：MCP 面默认 compact_v1（瘦身投影）。本文件断言的是
+    # "HTTP 与 MCP 同一 handler 同语义"——显式 legacy 对齐出站口径，
+    # 投影默认行为由 test_root_cause_20261006 专门锁定
+    arguments = {**arguments, "output_profile": "legacy"}
     r = rpc(c, "tools/call", pid, {"name": name, "arguments": arguments},
             msg_id)
     result = r.json()["result"]
