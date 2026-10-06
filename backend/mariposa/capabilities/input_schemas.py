@@ -23,11 +23,12 @@ _MOOD_ENUM = list(_MOOD_CATEGORIES)
 _CACHE: dict | None = None
 
 
-def load_schemas() -> dict:
-    """历史 schema 读取器（execution_pack v1.1 考古/迁移核对/文档用途）。
+def load_legacy_execution_pack_schemas() -> dict:
+    """【纯历史资料读取器】execution_pack v1.1 的 9 月合同（考古/文档用）。
 
-    ⚠️ 裁定（2026-10-06）：**不得参与 runtime validation**——公开校验唯一
-    正本=V2_INPUT_SCHEMAS（schema_for 只认它）。本函数仅服务考古比对。
+    ⚠️ 裁定（她 2026-10-06，"删门不删档案"）：**禁止参与 runtime
+    validation**——公开校验唯一门卫=V2_INPUT_SCHEMAS，schema_for 不调用
+    本函数、也不得有任何运行时路径调用它。文件保留作历史证据。
     """
     global _CACHE
     if _CACHE is None:
@@ -117,6 +118,148 @@ def _matches(spec: dict, value, root: dict) -> bool:
 
 #: v2 能力输入 schema（spec_v2 §12；与包内 v1.1 契约分层，schema_for 优先取此层）
 V2_INPUT_SCHEMAS: dict[str, dict] = {
+
+    # —— 裁定（她 2026-10-06"删门不删档案"终版）：以下注册能力此前无
+    #    schema（走零校验），按现行 handler 合同补齐——注册即可调用 ⇒
+    #    必须有现行 schema，测试锁死（test_schema_single_source 无 backlog）
+    "emotion.context.get": {"type": "object", "additionalProperties": False,
+                             "properties": {}},
+    "handoff.latest": {"type": "object", "additionalProperties": False,
+                        "properties": {}},
+    "listening.status": {"type": "object", "additionalProperties": False,
+                          "properties": {}},
+    "maintenance.activity.list": {
+        "type": "object", "additionalProperties": False,
+        "properties": {"event_type": {"type": "string"},
+                       "limit": {}}},
+    "maintenance.jobs.status": {"type": "object",
+                                 "additionalProperties": False,
+                                 "properties": {}},
+    "maintenance.outbox.status": {"type": "object",
+                                   "additionalProperties": False,
+                                   "properties": {}},
+    "maintenance.settings.get": {"type": "object",
+                                  "additionalProperties": False,
+                                  "properties": {}},
+    "media.get": {"type": "object", "required": ["content_hash"],
+                   "additionalProperties": False,
+                   "properties": {"content_hash": {"type": "string",
+                                                    "minLength": 64,
+                                                    "maxLength": 64}}},
+    "media.list": {"type": "object", "additionalProperties": False,
+                    "properties": {"limit": {}}},
+    "memory.by_tag": {"type": "object", "required": ["namespace", "tag"],
+                       "additionalProperties": False,
+                       "properties": {"namespace": {"type": "string",
+                                                     "minLength": 1},
+                                      "tag": {"type": "string",
+                                               "minLength": 1},
+                                      "whose": {"type": "string",
+                                                 "enum": ["jiaming",
+                                                          "qiaosheng"]}}},
+    "memory.keeps.list": {"type": "object", "additionalProperties": False,
+                           "properties": {"memory_id": {"type": "string",
+                                                         "minLength": 1}}},
+    "memory.list": {"type": "object", "additionalProperties": False,
+                     "properties": {"limit": {},
+                                    "cursor": {"type": "object"},
+                                    "cursor_date": {"anyOf": [
+                                        {"type": "string"},
+                                        {"type": "null"}]},
+                                    "state": {"type": "string"}}},
+    "memory.relations.list": {"type": "object",
+                               "required": ["memory_id"],
+                               "additionalProperties": False,
+                               "properties": {"memory_id": {"type": "string",
+                                                             "minLength": 1},
+                                               "direction": {"type": "string",
+                                                              "enum": ["out",
+                                                                        "in"]}}},
+    "memory.relations.trace": {"type": "object",
+                                "required": ["memory_id"],
+                                "additionalProperties": False,
+                                "properties": {"memory_id": {"type": "string",
+                                                              "minLength": 1},
+                                                "max_depth": {}}},
+    "plan.list": {"type": "object", "additionalProperties": False,
+                   "properties": {"states": {"type": "array",
+                                              "items": {"type": "string"}}}},
+    "presence.status": {"type": "object", "additionalProperties": False,
+                         "properties": {}},
+    "source.binding.list": {"type": "object", "additionalProperties": False,
+                             "properties": {"memory_id": {"type": "string",
+                                                           "minLength": 1}}},
+    "source.conversation.get": {"type": "object",
+                                 "required": ["conversation_id"],
+                                 "additionalProperties": False,
+                                 "properties": {"conversation_id": {"type": "string",
+                                                                     "minLength": 1},
+                                                 "limit": {},
+                                                 "after_seq": {"type": "integer"},
+                                                 "before_seq": {"type": "integer"},
+                                                 "around_seq": {"type": "integer"},
+                                                 "after_cursor": {"type": "string"},
+                                                 "before_cursor": {"type": "string"}}},
+    "source.conversations.list": {"type": "object",
+                                   "additionalProperties": False,
+                                   "properties": {"limit": {},
+                                                    "offset": {},
+                                                    "provider": {"type": "string"}}},
+    "source.import.batches": {"type": "object",
+                               "additionalProperties": False,
+                               "properties": {"limit": {}}},
+    "source.import.status": {"type": "object", "required": ["batch_id"],
+                              "additionalProperties": False,
+                              "properties": {"batch_id": {"type": "string",
+                                                           "minLength": 1}}},
+    "source.memory.open": {"type": "object", "required": ["memory_id"],
+                            "additionalProperties": False,
+                            "properties": {"memory_id": {"type": "string",
+                                                          "minLength": 1},
+                                            "include_content": {"type": "boolean"}}},
+    "source.message.get": {"type": "object",
+                            "additionalProperties": False,
+                            "properties": {"message_id": {"type": "string",
+                                                           "minLength": 1},
+                                            "provider": {"type": "string"},
+                                            "provider_message_id": {"type": "string"},
+                                            "context": {},
+                                            "include_content": {"type": "boolean"}}},
+    "source.range.open": {"type": "object",
+                           "required": ["conversation_id",
+                                         "start_message_id",
+                                         "end_message_id"],
+                           "additionalProperties": False,
+                           "properties": {"conversation_id": {"type": "string",
+                                                               "minLength": 1},
+                                           "start_message_id": {"type": "string",
+                                                                 "minLength": 1},
+                                           "end_message_id": {"type": "string",
+                                                               "minLength": 1},
+                                           "start_char_offset": {"type": "integer",
+                                                                   "minimum": 0},
+                                           "end_char_offset": {"type": "integer",
+                                                                "minimum": 0},
+                                           "include_content": {"type": "boolean"}}},
+    "source.search": {"type": "object", "required": ["query"],
+                       "additionalProperties": False,
+                       "properties": {"query": {"type": "string",
+                                                 "minLength": 1,
+                                                 "maxLength": 2000},
+                                       "limit": {},
+                                       "offset": {},
+                                       "provider": {"type": "string"},
+                                       "conversation_id": {"type": "string"},
+                                       "senders": {"type": "array",
+                                                     "items": {"type": "string"}},
+                                       "date_from": {"type": "string"},
+                                       "date_to": {"type": "string"}}},
+    "time.context": {"type": "object", "additionalProperties": False,
+                      "properties": {}},
+    "time.now": {"type": "object", "additionalProperties": False,
+                  "properties": {}},
+    "time.since": {"type": "object", "additionalProperties": False,
+                    "properties": {}},
     "memory.deletion.request": {
         "type": "object",
         "required": ["memory_id", "reason", "operation_id"],
@@ -253,7 +396,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {
             "date": {"type": "string", "minLength": 10, "maxLength": 10},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 200}},
+            "limit": {}},
     },
     "memory.by_category": {
         "type": "object", "required": ["category"],
@@ -262,7 +405,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "category": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan",
                 "sex", "anniversary", "reloplay"]},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "limit": {},
             "next_cursor": {"type": "object"}},
     },
     "memory.by_emotion": {
@@ -270,7 +413,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "tag": {"type": "string", "enum": _MOOD_ENUM},
             "whose": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "limit": {},
             "next_cursor": {"type": "object"}},
     },
     "memory.tags.add": {
@@ -400,8 +543,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "maintenance.outbox.drain": {
         "type": "object", "additionalProperties": False,
-        "properties": {"limit": {"type": "integer", "minimum": 1,
-                                 "maximum": 1000}},
+        "properties": {"limit": {}},
     },
     "maintenance.source.cleanup": {
         "type": "object", "additionalProperties": False,
@@ -635,8 +777,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {"query": {"type": "string", "minLength": 1,
                                   "maxLength": 2000},
-                       "limit": {"type": "integer", "minimum": 1,
-                                  "maximum": 200}},
+                       "limit": {}},
     },
     "memory.hold": {
         # F-J-22（她批准 2026-10-06）：creation_mode 公开面显式必填——
