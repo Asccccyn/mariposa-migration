@@ -24,7 +24,9 @@ class FixedDate extends Date {
 }
 const requests = [];
 const prompts = [];
-const promptAnswers = ['CB-053 合成正文', ''];  // 正文非空、日期留空
+// 2026-10-05 标题必填：prompt 顺序=标题、正文、日期（标题非空、
+// 正文非空、日期留空）
+const promptAnswers = ['CB-053 标题', 'CB-053 合成正文', ''];
 const ctx = vm.createContext({
     console, Date: FixedDate,
     document: {

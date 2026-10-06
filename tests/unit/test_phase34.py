@@ -61,7 +61,7 @@ class TestHandoff:
 class TestPlansAndCalendar:
     def test_plan_lifecycle_and_links(self, actors):
         hold = memory.hold(actors["jiaming"], text="讨论了周年旅行计划",
-                           memory_date="2026-09-10", categories=["daily"])
+                           memory_date="2026-09-10", categories=["daily"], original_title="测试标题")
         p = plans.create("jiaming", title="周年旅行", state="active",
                          date_start="2026-09-25", date_end="2026-09-27",
                          link_memory_ids=[hold["memory_id"]])
@@ -102,11 +102,11 @@ class TestBootstrap:
         # 判定窗口成员（三天=今天及前两天，四天前不进窗）
         from zoneinfo import ZoneInfo
         today = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date()
-        h1 = memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat(), categories=["daily"])
+        h1 = memory.hold(actors["jiaming"], text="今天的记忆", memory_date=today.isoformat(), categories=["daily"], original_title="测试标题")
         h2 = memory.hold(actors["jiaming"], text="前天的记忆",
-                         memory_date=(today - timedelta(days=2)).isoformat(), categories=["daily"])
+                         memory_date=(today - timedelta(days=2)).isoformat(), categories=["daily"], original_title="测试标题")
         memory.hold(actors["jiaming"], text="四天前旧桶",
-                    memory_date=(today - timedelta(days=4)).isoformat(), categories=["daily"])
+                    memory_date=(today - timedelta(days=4)).isoformat(), categories=["daily"], original_title="测试标题")
         out = bootstrap.get("jiaming", "cc", "cc")
         ids = {m["memory_id"] for m in out["memory_days"]["items"]}
         assert h1["memory_id"] in ids and h2["memory_id"] in ids
