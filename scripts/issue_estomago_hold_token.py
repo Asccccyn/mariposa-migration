@@ -40,7 +40,15 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "backend"))
 
 from mariposa import db, identity, schema  # noqa: E402
 
-ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab"]
+# D2+G-J-01（她 2026-10-06 批准"能收口的都收了"）：estómago 的 mariposa
+# 全部调用面 = hold 面 + 开窗只读（bootstrap）+ 召回按需（recall 家族）。
+# estómago 新增任何 mariposa 能力调用时必须同步本清单与已发绑定的
+# capabilities_allowlist，否则该调用 403——白名单机制的故意行为。
+ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab",
+             "bootstrap.get", "bootstrap.next",
+             "memory.recall.start", "memory.recall.refine",
+             "memory.recall.status", "memory.recall.accept",
+             "memory.recall.reject"]
 ENTRY_SOURCE = "estomago_builtin"
 
 
