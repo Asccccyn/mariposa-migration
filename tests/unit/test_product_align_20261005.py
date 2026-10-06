@@ -299,3 +299,53 @@ class TestMoodVocabInterface:
             with db.formal() as conn:
                 rsearch.recall(conn, filters={"mood_tags": ["占有"]})
         assert ei.value.code == "MOOD_CATEGORY_REQUIRED"
+
+
+class TestEstomagoBuiltinBinding:
+    """内置绑定（她的"内置感觉"裁定）：jiaming 名下受限白名单，
+    只放行 hold 面两个能力，泄漏面最小化。"""
+
+    def _binding(self, token: str):
+        import hashlib
+        with db.formal() as conn:
+            conn.execute(
+                "INSERT INTO client_bindings(binding_id, token_hash,"
+                " principal_id, entry_source, capabilities_allowlist,"
+                " created_at) VALUES(?,?,?,?,?,datetime('now'))",
+                ("bdg_est_test", hashlib.sha256(token.encode()).hexdigest(),
+                 "jiaming", "estomago_builtin",
+                 '["memory.hold", "memory.mood.vocab"]'))
+        return identity.authenticate(token)
+
+    def test_hold_and_vocab_allowed(self, actors):
+        import secrets as _sec
+        p = self._binding(_sec.token_urlsafe(16))
+        out = registry.invoke(p, "memory.hold", {
+            "text": "内置绑定写入的正文", "original_title": "内置绑定",
+            "categories": ["daily"]}, "es-builtin-1")
+        assert out["data"]["memory_id"]
+        vocab = registry.invoke(p, "memory.mood.vocab", {}, None)
+        assert vocab["data"]["categories"][0] == "开心"
+
+    def test_everything_else_denied(self, actors):
+        import secrets as _sec
+        p = self._binding(_sec.token_urlsafe(16))
+        from mariposa.errors import Forbidden as _F
+        # 读检索/直达/删除/维护面：白名单外一律拒（token 泄漏也只伤 hold）
+        for cap, args in [("memory.search", {"query": "x"}),
+                          ("memory.by_date", {"date": "2026-01-01"}),
+                          ("memory.delete", {"memory_id": "x",
+                                             "operation_id": "y"}),
+                          ("maintenance.activity.list", {})]:
+            with pytest.raises(_F) as ei:
+                registry.invoke(p, cap, args, None)
+            assert ei.value.code == "FORBIDDEN", cap
+
+    def test_revocation_kills_binding(self, actors):
+        import secrets as _sec
+        token = _sec.token_urlsafe(16)
+        self._binding(token)
+        identity.revoke_binding("qiaosheng", "bdg_est_test")
+        from mariposa.errors import Unauthenticated
+        with pytest.raises(Unauthenticated):
+            identity.authenticate(token)
