@@ -86,8 +86,9 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
 #: 感受就在 mood_note 自由写（如"开心想抱抱"），就一个大类能概括时
 #: 不必写（"开心"不必写子心情），写不写都合法。禁止把子心情塞进
 #: 标签槽：自由词进标签会把筛库打碎（今天"吃醋"明天"酸"）。
+#: 2026-10-05 终版表（她当晚指 定）：开心/爱/生气/吃醋/悲伤/渴望/不安
 MOOD_CATEGORIES: tuple[str, ...] = (
-    "愉悦", "亲密", "失落", "对抗", "不安", "占有", "渴望", "排斥")
+    "开心", "爱", "生气", "吃醋", "悲伤", "渴望", "不安")
 
 
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:

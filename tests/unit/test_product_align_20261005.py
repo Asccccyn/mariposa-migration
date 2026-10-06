@@ -148,7 +148,7 @@ class TestDirectBrowseEntries:
     def _seed(self, actors):
         a = _hold(actors, text="约会日的正文", title="海边约会",
                   cats=["date"], memory_date="2026-07-09",
-                  mood={"text": "很开心想抱抱", "tags": ["愉悦"]})
+                  mood={"text": "很开心想抱抱", "tags": ["开心"]})
         b = _hold(actors, text="日常正文", title="阳台晚餐",
                   cats=["daily"], memory_date="2026-07-09")
         c = _hold(actors, text="旧日常正文", title="搬家那天",
@@ -189,9 +189,9 @@ class TestDirectBrowseEntries:
         self._seed(actors)
         allb = listing.by_emotion("")
         assert len(allb["items"]) == 3, "不选大类=全量返回"
-        happy = listing.by_emotion("愉悦")
+        happy = listing.by_emotion("开心")
         assert [i["original_title"] for i in happy["items"]] == ["海边约会"]
-        assert happy["items"][0]["mood_tags"] == ["愉悦"]
+        assert happy["items"][0]["mood_tags"] == ["开心"]
 
     def test_registry_paths_for_jiaming(self, actors):
         """周家明经 MCP 同口径直达（owners 授权 + 传参形状）。"""
@@ -203,8 +203,8 @@ class TestDirectBrowseEntries:
                              {"category": "date"}, None)
         assert r2["data"]["items"][0]["original_title"] == "海边约会"
         r3 = registry.invoke(actors["jiaming"], "memory.by_emotion",
-                             {"tag": "愉悦"}, None)
-        assert r3["data"]["mood_tag"] == "愉悦"
+                             {"tag": "开心"}, None)
+        assert r3["data"]["mood_tag"] == "开心"
 
 
 class TestSemanticProviderErrorDegrades:
@@ -234,20 +234,20 @@ class TestMoodMajorCategoriesOnly:
     def test_only_categories_accepted_at_hold(self, actors):
         from mariposa.errors import Forbidden as _F
         with pytest.raises(_F) as ei:
-            _hold(actors, mood={"text": None, "tags": ["开心"]})
+            _hold(actors, mood={"text": None, "tags": ["酸"]})
         assert ei.value.code == "MOOD_CATEGORY_REQUIRED"
         # 大类合法；子心情自由句落 note
-        out = _hold(actors, mood={"text": "开心想抱抱", "tags": ["愉悦"]})
+        out = _hold(actors, mood={"text": "开心想抱抱", "tags": ["开心"]})
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])["mood"]
-        assert got["tags"] == ["愉悦"]
+        assert got["tags"] == ["开心"]
         assert got["text"] == "开心想抱抱"
 
     def test_max_three_categories(self, actors):
         from mariposa.errors import Forbidden as _F
         with pytest.raises(_F) as ei:
             _hold(actors, mood={"text": None,
-                                "tags": ["愉悦", "亲密", "占有", "排斥"]})
+                                "tags": ["开心", "爱", "吃醋", "生气"]})
         assert ei.value.code == "MOOD_TAGS_LIMIT"
 
     def test_empty_mood_still_legal(self, actors):
@@ -260,22 +260,22 @@ class TestMoodMajorCategoriesOnly:
         from mariposa.memory import listing
         from mariposa.errors import Forbidden as _F
         _hold(actors, text="占有桶", title="占有",
-              mood={"text": None, "tags": ["占有"]})
+              mood={"text": None, "tags": ["吃醋"]})
         _hold(actors, text="亲密桶", title="亲密",
-              mood={"text": None, "tags": ["亲密"]})
-        out = listing.by_emotion("占有")
+              mood={"text": None, "tags": ["爱"]})
+        out = listing.by_emotion("吃醋")
         assert {i["original_title"] for i in out["items"]} == {"占有"}
-        assert out["scope"] == "大类·占有"
-        with pytest.raises(_F) as ei:  # 子词不再是筛选键
-            listing.by_emotion("吃醋")
+        assert out["scope"] == "大类·吃醋"
+        with pytest.raises(_F) as ei:  # 旧词不再是筛选键（吃醋已升为大类）
+            listing.by_emotion("占有")
         assert ei.value.code == "MOOD_CATEGORY_REQUIRED"
 
 class TestMoodVocabInterface:
     def test_open_interface_returns_taxonomy(self, actors):
         out = registry.invoke(actors["jiaming"], "memory.mood.vocab",
                               {}, None)["data"]
-        assert out["categories"] == ["愉悦", "亲密", "失落", "对抗",
-                                     "不安", "占有", "渴望", "排斥"]
+        assert out["categories"] == ["开心", "爱", "生气", "吃醋",
+                                     "悲伤", "渴望", "不安"]
         assert out["rules"]["max_tags"] == 3
         assert "不能补写" in out["rules"]["write_window"]
         assert "不必" in out["rules"]["sub_mood"]
@@ -284,11 +284,11 @@ class TestMoodVocabInterface:
         """召回过滤与 by_emotion 同语义：按大类直筛。"""
         from mariposa.retrieval import search as rsearch
         a = _hold(actors, text="占有正文", title="占有",
-                  mood={"text": None, "tags": ["占有"]})
+                  mood={"text": None, "tags": ["吃醋"]})
         _hold(actors, text="无关正文", title="无关",
-              mood={"text": None, "tags": ["愉悦"]})
+              mood={"text": None, "tags": ["开心"]})
         with db.formal() as conn:
-            out = rsearch.recall(conn, filters={"mood_tags": ["占有"]})
+            out = rsearch.recall(conn, filters={"mood_tags": ["吃醋"]})
         ids = {h["memory_id"] for h in out["hits"]}
         assert ids == {a["memory_id"]}, "大类·占有 只命中占有桶"
 
@@ -297,5 +297,5 @@ class TestMoodVocabInterface:
         from mariposa.errors import Forbidden as _F
         with pytest.raises(_F) as ei:
             with db.formal() as conn:
-                rsearch.recall(conn, filters={"mood_tags": ["吃醋"]})
+                rsearch.recall(conn, filters={"mood_tags": ["占有"]})
         assert ei.value.code == "MOOD_CATEGORY_REQUIRED"

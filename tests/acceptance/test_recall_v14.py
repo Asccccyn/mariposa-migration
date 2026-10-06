@@ -103,7 +103,7 @@ class TestHybrid:
         try:
             hold(actors, "搬家事件", "2026-08-10",
                  original_title="标题探针ZZ",
-                 mood={"text": "心情探针ZZ", "tags": ["排斥"]})
+                 mood={"text": "心情探针ZZ", "tags": ["生气"]})
             start(actors)
             assert "标题探针ZZ" not in probe.blob
             assert "心情探针ZZ" not in probe.blob

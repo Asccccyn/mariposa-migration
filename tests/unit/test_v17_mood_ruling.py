@@ -45,7 +45,7 @@ class TestForbiddenSourcesNeverRecall:
         # 检索通道不可见
         out = hold(actors["jiaming"], "一段平静的日常叙述",
                    mood={"text": "惘湎心情词其实有点吃醋；因为紫藤花架值得记",
-                         "tags": ["亲密"]})
+                         "tags": ["爱"]})
         mid = out["memory_id"]
         from mariposa.memory import listing as mlisting
         for probe in ("惘湎", "吃醋", "紫藤花架", "雾隐"):
@@ -102,11 +102,11 @@ class TestForbiddenSourcesNeverRecall:
         """mood_tags 走结构化筛选（memory.recall filters），
         不作为文本相关性字段参与命中。"""
         a = hold(actors["jiaming"], "甲桶正文海边",
-                 mood={"text": None, "tags": ["占有"]})
+                 mood={"text": None, "tags": ["吃醋"]})
         hold(actors["jiaming"], "乙桶正文山间")
         with db.formal() as conn:
             out = rsearch.recall(conn, "", filters={
-                "mood_tags": ["占有"], "mood_match": "any"})
+                "mood_tags": ["吃醋"], "mood_match": "any"})
             ids = {h["memory_id"] for h in out["hits"]}
         assert a["memory_id"] in ids, "mood_tags 结构化筛选生效"
         # 标签词不作为自由文本命中
@@ -117,7 +117,7 @@ class TestForbiddenSourcesNeverRecall:
 class TestMoodProvenanceAndWrite:
     def test_get_mood_marks_non_source_and_written_at(self, actors):
         out = hold(actors["jiaming"], "带心情的正文",
-                   mood={"text": "我当时其实有点吃醋", "tags": ["占有"]})
+                   mood={"text": "我当时其实有点吃醋", "tags": ["吃醋"]})
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])
         assert got["mood"]["is_source_text"] is False
@@ -134,11 +134,11 @@ class TestMoodProvenanceAndWrite:
         assert "memory.mood.write" not in reg.REGISTRY
         assert not hasattr(memory, "mood_write")
         out = hold(actors["jiaming"], "建桶后想补心情的正文",
-                   mood={"text": "当时就有的心情", "tags": ["愉悦"]})
+                   mood={"text": "当时就有的心情", "tags": ["开心"]})
         with db.formal() as conn:
             got = memory.get(conn, out["memory_id"])["mood"]
         assert got["text"] == "当时就有的心情"
-        assert got["tags"] == ["愉悦"]
+        assert got["tags"] == ["开心"]
 
 
     def test_mood_write_jiaming_only(self, actors):
@@ -149,7 +149,7 @@ class TestMoodProvenanceAndWrite:
         if qs is not None:
             with pytest.raises(Forbidden):
                 hold(qs, "权限正文",
-                     mood={"text": "x", "tags": ["排斥"]})
+                     mood={"text": "x", "tags": ["生气"]})
 
     def test_written_mood_still_not_searchable(self, actors):
         out = hold(actors["jiaming"], "心情正文",

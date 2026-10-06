@@ -58,9 +58,9 @@ class TestBrowseFilters:
         assert out["mode"] == "browse"
 
     def test_mood_tag_only_browse_search02(self, actors):
-        a = hold_v2(actors, text="开心事", mood={"text": "开心文字", "tags": ["愉悦"]})
+        a = hold_v2(actors, text="开心事", mood={"text": "开心文字", "tags": ["开心"]})
         b = hold_v2(actors, text="无心情事")
-        out = recall(actors, filters={"mood_tags": ["愉悦"]})
+        out = recall(actors, filters={"mood_tags": ["开心"]})
         assert a["memory_id"] in hit_ids(out)
         assert b["memory_id"] not in hit_ids(out)
         # 心情文字本身不被文本搜索命中（SEARCH-07）
@@ -121,7 +121,7 @@ class TestForbiddenProbes:
 
     def test_mood_text_only_probe_search07(self, actors):
         m = hold_v2(actors, text="普通正文", mood={"text": "惘湎心情词",
-                                                    "tags": ["愉悦"]})
+                                                    "tags": ["开心"]})
         assert m["memory_id"] not in hit_ids(recall(actors, "惘湎"))
 
     def test_our_words_only_probe_search08(self, actors):
