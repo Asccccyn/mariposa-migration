@@ -98,8 +98,3 @@ def embed_query(query: str):
     q = f"Instruct: {INSTRUCT}\nQuery: {query}"
     return [np.asarray(v, dtype=np.float32) for v in _encode([q])][0]
 
-
-def unload() -> None:
-    """测试/内存回收用：卸载常驻权重。"""
-    _state["model"] = None
-    _state["tokenizer"] = None

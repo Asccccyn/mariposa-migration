@@ -28,9 +28,3 @@ def local_date(ts: datetime | str, tzname: str | None = None) -> date:
 def business_today(tzname: str | None = None) -> date:
     return local_date(datetime.now(timezone.utc), tzname)
 
-
-def start_of_local_day_utc(day: date, tzname: str | None = None) -> str:
-    """业务时区某自然日 00:00 对应的 UTC ISO 时间。"""
-    tz = ZoneInfo(tzname or config.RELATIONSHIP_TIMEZONE)
-    return datetime(day.year, day.month, day.day, tzinfo=tz).astimezone(
-        timezone.utc).isoformat()

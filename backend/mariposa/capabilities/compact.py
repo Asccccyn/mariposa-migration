@@ -94,6 +94,11 @@ def _project_recall(out: dict) -> None:
     for k in _RECALL_PACKET_DROP:
         target.pop(k, None)
         out.pop(k, None)
+    # budget.output_limits 是配置常量回显（~200B/包，消费者无需）；
+    # 动态标志（budget_truncated 等）保留
+    budget = target.get("budget")
+    if isinstance(budget, dict):
+        budget.pop("output_limits", None)
     cov = target.get("coverage")
     if isinstance(cov, dict):
         for k in _COVERAGE_DROP_KEYS:

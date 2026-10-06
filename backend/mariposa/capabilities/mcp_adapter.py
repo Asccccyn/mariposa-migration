@@ -61,6 +61,12 @@ def _tools_for(principal: Principal) -> list[dict]:
         if principal.capabilities_allowlist is not None and \
                 cap.name not in principal.capabilities_allowlist:
             continue
+        # 瘦身（审计 1005B）：blocked/reserved 占位（v1 兼容面的诚实
+        # 声明）对 MCP 消费者是纯发现噪声——调了也只会拿到 blocked
+        # 状态。仅从 tools/list 隐藏；HTTP capabilities.list 与 invoke
+        # 照旧（能力仍注册，负测/审计可验证）
+        if cap.description.startswith(("[blocked]", "[reserved]")):
+            continue
         from . import input_schemas
         schema = input_schemas.schema_for(cap.name) or {
             "type": "object", "properties": {}, "additionalProperties": True}
@@ -247,7 +253,13 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": SERVER_INFO,
-            "instructions": "mariposa MCP；工具与 HTTP API 共用同一业务注册表。",
+            "instructions": (
+                "mariposa MCP；工具与 HTTP API 共用同一业务注册表。"
+                "出站信封协商（1005B）：tools/call 请求 params._meta."
+                'content_envelope="single" 时响应省略 content 里的完整'
+                "JSON 副本（structuredContent 为唯一负载，content 仅留"
+                "一行指针文本）；缺省保持 content+structuredContent 双份"
+                "（MCP 规范的向后兼容通道，不赌客户端读取面）"),
         }
         return _rpc_result(msg_id, result)
 
@@ -306,12 +318,23 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                              "text": json.dumps(
                                  {"ok": False, "error": {"code": e.code,
                                                          "message": str(e)}},
-                                 ensure_ascii=False, default=str)}],
+                                 ensure_ascii=False, default=str,
+                                 separators=(",", ":"))}],
                 "isError": True,
             })
+        # 出站信封协商（1005B）：content 的完整 JSON 副本默认保留
+        # （MCP 规范向后兼容通道——不赌客户端只读 structuredContent）；
+        # 客户端显式 params._meta.content_envelope="single"（见
+        # initialize instructions）时省略副本，content 仅留指针行。
+        # 序列化统一紧凑分隔符（默认 ", "/": " 每键值对白送 2 字符）。
+        _meta = params.get("_meta")
+        _single = (isinstance(_meta, dict)
+                   and _meta.get("content_envelope") == "single")
+        _content_text = ("see structuredContent" if _single else
+                         json.dumps(out, ensure_ascii=False,
+                                    separators=(",", ":")))
         return _rpc_result(msg_id, {
-            "content": [{"type": "text",
-                         "text": json.dumps(out, ensure_ascii=False)}],
+            "content": [{"type": "text", "text": _content_text}],
             "structuredContent": out,
             "isError": False,
         })

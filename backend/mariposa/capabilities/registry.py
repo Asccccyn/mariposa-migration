@@ -1409,14 +1409,6 @@ def _settings_get(principal: Principal, a: dict) -> dict:
 
 
 
-def _st_tok(text: str) -> str:
-    from ..retrieval import projection as _pj
-    return _pj.normalize_search_text(text)
-
-
-
-
-
 def _emotion_reserved(principal: Principal, a: dict) -> dict:
     return {"enabled": False, "status": "reserved",
             "note": "EMOTION_RETRIEVAL_ENABLED 默认 false；启用也只调整补充召回，"

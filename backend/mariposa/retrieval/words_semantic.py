@@ -209,29 +209,3 @@ def words_semantic_search(conn, query: str, limit: int = 20,
     return {"hits": scored[:limit], "pending_vectors": pending,
             "provider_active": True}
 
-
-def warmup_words(conn) -> dict:
-    """全量预热 word 向量（冷启动/重建后维护入口）。"""
-    ensure_schema(conn)
-    rows = conn.execute(
-        "SELECT w.word_id, w.text, w.speaker, w.expression_kind,"
-        " w.source_ref, m.current_version_no FROM memory_our_words w"
-        " JOIN memories m ON m.memory_id = w.memory_id"
-        " WHERE m.visibility='active' AND m.compression_state='full'"
-    ).fetchall()
-    done = skipped = 0
-    for r in rows:
-        fp = _word_fingerprint(r["text"], r["speaker"],
-                               r["expression_kind"], r["source_ref"],
-                               r["current_version_no"])
-        valid = conn.execute(
-            "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
-            " AND word_fingerprint=?",
-            (r["word_id"], _active_model_key(), fp)).fetchone()
-        if valid:
-            skipped += 1
-        elif reindex_word(conn, r["word_id"], r["text"], r["speaker"],
-                          r["expression_kind"], r["source_ref"],
-                          r["current_version_no"]):
-            done += 1
-    return {"warmed": done, "already_ok": skipped, "total": len(rows)}

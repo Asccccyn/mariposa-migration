@@ -139,13 +139,6 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     return {"text": text, "tags": deduped}
 
 
-def _raw_ref_hash(ref: dict) -> str:
-    import hashlib as _hl
-    return _hl.sha256(
-        f"{ref.get('conversation_id')}:{ref.get('message_from')}"
-        f":{ref.get('message_to')}".encode()).hexdigest()
-
-
 def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
     """CB-051：legacy raw 表已退役——恒无重复。raw_refs 在 hold 入口
     已被显式拒绝，本函数仅为历史内部调用点保留空实现。"""

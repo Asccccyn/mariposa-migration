@@ -286,25 +286,15 @@ def round2(principal, a: dict, op_ctx: dict | None = None) -> dict:
     return _round2_body(principal, a, op_ctx)
 
 
-def _round2_body(principal, a: dict, op_ctx: dict | None = None,
-                 lease_token: str | None = None) -> dict:
-    """round2 主体（首轮由 round2 的租约互斥包装调用，携带 fencing
-    token——TTL 被接管后原持有者不得外发/提交，RA-002）。"""
+def _round2_resolve_offset(a: dict, session: dict) -> int:
+    """翻页/门禁解析（1005B 重构：从 _round2_body 逐字拆出，
+    行为零变更）。返回本页 raw offset——continuation_token 存在
+    则走服务端游标（不重走六条件门禁，三轮复审#2）；无 token 是
+    raw round 的开始，须过完整门禁。"""
     from .. import db as _db
-    from . import pipeline as _pl
-    from ..errors import Forbidden as _F, StaleOperation
-    _require_enabled()
-    sid = str(a.get("session_id", ""))
-    session = store.require_session(sid)
-    session = store.expire_if_due(session)
-    state_machine.require_action(session, "refine")  # 活跃族状态
-    require_owned_session(principal, session, a)
+    from ..errors import Forbidden as _F
+    sid = session["session_id"]
     reason = str(a.get("reason", ""))
-    if op_ctx:
-        store.check_operation_conflict(op_ctx["principal_id"],
-                                       op_ctx["operation_key"],
-                                       op_ctx["payload_hash"])
-    # 三轮复审#2：带 continuation_token 的调用是同一 raw round 的翻页
     # ——offset 由服务端游标给出，不重走六条件门禁、不记新轮；无
     # token 才是 raw round 的开始，须过完整门禁（no_prior_raw_round
     # 只约束"新开 raw round"，不约束同一轮的翻页）
@@ -346,43 +336,17 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
             if not allowed:
                 raise _F("Round 2 gate 未满足（S13）",
                          code="ROUND2_GATE_DENIED", gate=gate)
+    return offset
 
-    # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
-    plan = store.get_plan(sid) or {}
-    # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
-    raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
-    raw_out = _pl.raw_deep_search(
-        principal, plan, limit=raw_limit, offset=offset)
-    # RA-002：昂贵调用后、Jev 外发前校验租约归属——TTL 过期被接管的
-    # 原持有者在此中止（接管者已获得新租约）
-    if lease_token is not None and not _raw_lease_owned(
-            sid, session["current_revision"],
-            session["current_burst"], lease_token):
-        raise _F("Raw 租约已被接管（TTL 过期）；本执行者放弃外发与提交",
-                 code="RAW_LEASE_LOST", session_id=sid)
-    raw_cards = []
-    for h in raw_out.get("hits", []):
-        raw_cards.append({
-            "resource_ref": h["resource_ref"],
-            "candidate_ref": h["resource_ref"],
-            "channel": "raw",
-            "representation": "raw_source",
-            "content_version": None,
-            "representation_version": None,
-            "projection_version": config.PROJECTION_REVISION,
-            "memory_date": h.get("occurred_at", "")[:10] or None,
-            "matched_by": ["raw_deep"],
-            "matched_fields": ["raw_messages"],
-            "excerpt": h.get("excerpt"),
-            "speaker": h.get("speaker"),
-            "evidence": [evidence_mod.make_evidence(
-                "raw_verbatim", "raw_messages", h.get("excerpt") or "",
-                h["resource_ref"])],
-        })
-    # Jev 一层出站（fake/真实 provider 由此过 S10 硬门）
+
+def _round2_judge_cards(sid: str, session: dict, plan: dict,
+                        raw_cards: list, raw_has_more: bool,
+                        ) -> tuple[list, dict, list]:
+    """Round2 的 Jev 出站+基数对账（1005B 重构：从 _round2_body
+    逐字拆出，行为零变更）。返回 (judge_candidates, coverage,
+    degraded)——raw_has_more 由调用方从 raw_out 取。"""
     from ..retrieval.judges import base as judge_base
     provider = judge_base.get_provider()
-    raw_has_more = bool(raw_out.get("has_more"))
     coverage = {"raw": ("partial_has_more" if raw_has_more
                         else "complete_within_scope"),
                 "judge": "evaluated"}
@@ -421,6 +385,68 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                              else judge_result.provider_status)
         if judge_result.degraded_reason:
             degraded.append(f"judge_{judge_result.degraded_reason}")
+    return judge_candidates, coverage, degraded
+
+
+def _round2_body(principal, a: dict, op_ctx: dict | None = None,
+                 lease_token: str | None = None) -> dict:
+    """round2 主体（首轮由 round2 的租约互斥包装调用，携带 fencing
+    token——TTL 被接管后原持有者不得外发/提交，RA-002）。"""
+    from .. import db as _db
+    from . import pipeline as _pl
+    from ..errors import Forbidden as _F, StaleOperation
+    _require_enabled()
+    sid = str(a.get("session_id", ""))
+    session = store.require_session(sid)
+    session = store.expire_if_due(session)
+    state_machine.require_action(session, "refine")  # 活跃族状态
+    require_owned_session(principal, session, a)
+    reason = str(a.get("reason", ""))
+    if op_ctx:
+        store.check_operation_conflict(op_ctx["principal_id"],
+                                       op_ctx["operation_key"],
+                                       op_ctx["payload_hash"])
+    # 翻页/门禁解析——拆出至 _round2_resolve_offset（1005B 重构）；
+    # cont_token 主函数留存（提交事务/预算判断多处使用）
+    cont_token = str(a.get("continuation_token") or "")
+    offset = _round2_resolve_offset(a, session)
+
+    # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
+    plan = store.get_plan(sid) or {}
+    # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
+    raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
+    raw_out = _pl.raw_deep_search(
+        principal, plan, limit=raw_limit, offset=offset)
+    # RA-002：昂贵调用后、Jev 外发前校验租约归属——TTL 过期被接管的
+    # 原持有者在此中止（接管者已获得新租约）
+    if lease_token is not None and not _raw_lease_owned(
+            sid, session["current_revision"],
+            session["current_burst"], lease_token):
+        raise _F("Raw 租约已被接管（TTL 过期）；本执行者放弃外发与提交",
+                 code="RAW_LEASE_LOST", session_id=sid)
+    raw_cards = []
+    for h in raw_out.get("hits", []):
+        raw_cards.append({
+            "resource_ref": h["resource_ref"],
+            "candidate_ref": h["resource_ref"],
+            "channel": "raw",
+            "representation": "raw_source",
+            "content_version": None,
+            "representation_version": None,
+            "projection_version": config.PROJECTION_REVISION,
+            "memory_date": h.get("occurred_at", "")[:10] or None,
+            "matched_by": ["raw_deep"],
+            "matched_fields": ["raw_messages"],
+            "excerpt": h.get("excerpt"),
+            "speaker": h.get("speaker"),
+            "evidence": [evidence_mod.make_evidence(
+                "raw_verbatim", "raw_messages", h.get("excerpt") or "",
+                h["resource_ref"])],
+        })
+    # Jev 一层出站+对账——拆出至 _round2_judge_cards（1005B 重构）
+    raw_has_more = bool(raw_out.get("has_more"))
+    judge_candidates, coverage, degraded = _round2_judge_cards(
+        sid, session, plan, raw_cards, raw_has_more)
     sel = selection.select(judge_candidates, plan,
                            store.rejected_resource_refs(sid))
     cards = _finalize_cards(sel["delivered"])

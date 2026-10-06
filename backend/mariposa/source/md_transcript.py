@@ -422,9 +422,3 @@ def parse(staged: Path, filename: str) -> tuple[str, list[dict]]:
             f"md 转写内容非法（{type(e).__name__}: {e}）",
             code="SOURCE_MD_FORMAT") from e
 
-
-def provider_module_for(provider: str):
-    """md 两种方言产出与 claude 契约同形的元素——统一走 claude
-    适配器的 normalize 链（sender/时间/synthetic 兜底一致）。"""
-    from .adapters import claude
-    return claude

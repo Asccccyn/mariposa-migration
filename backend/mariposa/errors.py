@@ -63,11 +63,6 @@ class NotFound(MariposaError):
     http_status = 404
 
 
-class LockedResource(MariposaError):
-    code = "LOCKED_RESOURCE"
-    http_status = 403
-
-
 class Busy(MariposaError):
     """同幂等键的执行仍在进行（并发的另一方尚未回填终态）。"""
 
@@ -76,11 +71,6 @@ class Busy(MariposaError):
 
     def __init__(self):
         super().__init__("idempotent execution still in progress; retry")
-
-
-class ProviderUnavailable(MariposaError):
-    code = "PROVIDER_UNAVAILABLE"
-    http_status = 503
 
 
 class SnapshotStale(MariposaError):
@@ -94,28 +84,19 @@ class OutcomeUnknown(MariposaError):
     http_status = 409
 
 
-class ViewRequired(MariposaError):
-    """需要先明确打开并确认查看（例如写回忆）。"""
-    code = "VIEW_REQUIRED"
-    http_status = 403
+class ProviderUnavailable(MariposaError):
+    """外部 provider（写入/判断）不可用——T-EXT-02 合同预留
+    （acceptance test_gate_cases2 锚定其存在；外部写入面接入时启用）。
+    1005B 清扫误删后恢复：有验收锚定的预留类不是死代码。"""
+
+    code = "PROVIDER_UNAVAILABLE"
+    http_status = 503
 
 
 class ViewReceiptInvalid(MariposaError):
     """查看回执无效：跨桶/跨身份/跨版本/过期/不存在。"""
     code = "VIEW_RECEIPT_INVALID"
     http_status = 403
-
-
-class BindingStale(MariposaError):
-    """原文绑定所依赖的源版本/hash已变化。"""
-    code = "BINDING_STALE"
-    http_status = 409
-
-
-class RawContextConfirmationRequired(MariposaError):
-    """展开隐藏原文需要先确认范围与预计token。"""
-    code = "RAW_CONTEXT_CONFIRMATION_REQUIRED"
-    http_status = 428
 
 
 class StaleOperation(MariposaError):

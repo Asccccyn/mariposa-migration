@@ -28,13 +28,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def shanghai_date(now: datetime | None = None) -> str:
-    """配额用的上海自然日（P-D03）。"""
-    d = (now or datetime.now(timezone.utc)).astimezone(
-        ZoneInfo("Asia/Shanghai"))
-    return d.date().isoformat()
-
-
 def record_correction(conn, *, domain: str, original_instance_id: str,
                       endpoint_a: str, endpoint_b: str | None,
                       original_meta: dict | None,

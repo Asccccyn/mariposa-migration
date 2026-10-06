@@ -155,30 +155,6 @@ def list_for(memory_id: str) -> list[dict]:
     return out
 
 
-def has_shared_expression(rows: list[dict]) -> list[dict]:
-    """共同话语线索（R14/D06）：同一句双方都说（规范化后相同）。
-
-    只标疑似（needs_jiaming_decision），终局由周家明决定。
-    "一方说、另一方明确接住/回应"的语义判定需要真实语义匹配评测，
-    当前只做字面同一句检测（见 DECISIONS：暂不做接应推断）。
-    """
-    import re
-
-    def norm(t: str) -> str:
-        return re.sub(r"[\s，。！？.!?,~～]", "", t).lower()
-
-    by_norm: dict[str, set[str]] = {}
-    for r in rows:
-        by_norm.setdefault(norm(r["text"]), set()).add(r["speaker"])
-    hints = []
-    for text, speakers in by_norm.items():
-        if len(speakers) > 1 and text:
-            hints.append({"kind": "shared_expression",
-                          "normalized": text[:40],
-                          "speakers": sorted(speakers)})
-    return hints
-
-
 def source_of(word_id: str) -> str | None:
     """话语当前来源引用（routing 反查用）。"""
     from .. import db

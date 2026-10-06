@@ -45,17 +45,6 @@ def _anniv_rows(conn, horizon, today, days: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _i_section() -> dict:
-    from ..identity_i import service as i_svc
-    doc = i_svc.get()
-    return {"content": doc["content"], "version": doc["version"],
-            "items": doc.get("items", []),
-            "history_policy": "旧 revision 默认不注入；has_history=true 时可按需调用 i.item.history",
-            "source": "i_documents" if doc["content"] is not None else None,
-            "note": None if doc["content"] is not None else
-                    "I 尚未落笔（无旧Self自动映射，V2-I-03）"}
-
-
 def _memory_section(conn, three_days: list[str]) -> dict:
     """三天桶段：标题+心情标签+心情文字+分类；不默认展开事件正文。"""
     mem_rows = conn.execute(
