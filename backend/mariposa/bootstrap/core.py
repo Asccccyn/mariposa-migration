@@ -29,6 +29,9 @@ BOOT_PLAN_SECTION_CHARS = BOOT_I_SECTION_CHARS
 _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
     "cc": {"cc"},
+    # D2 裁定（她 2026-10-06 批准口径 A）：estómago 独立 entry/profile——
+    # 不冒充 cc/claude_chat；默认不自动送 mood_text（字段矩阵见 service.get）
+    "estomago": {"estomago"},
 }
 
 
@@ -102,9 +105,13 @@ def _three_day_window(tz) -> tuple:
                    for i in range(BOOT_MEMORY_DAYS)]
 
 
-def _memory_slim(conn, memory_id: str) -> dict:
+def _memory_slim(conn, memory_id: str,
+                  profile: str = "claude_chat") -> dict:
     from ..memory import categories as cats_mod
-    """三天桶条目：标题+心情标签+心情文字+分类；不默认展开事件正文。"""
+    """三天桶条目：标题+心情标签+心情文字+分类；不默认展开事件正文。
+
+    D2 裁定（2026-10-06）：estomago profile 默认**不带**心情自由文字
+    （mood_text）——标签/标题/分类照给；cc/claude_chat 行为不变。"""
     m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
                      (memory_id,)).fetchone()
     v = conn.execute(
@@ -127,10 +134,12 @@ def _memory_slim(conn, memory_id: str) -> dict:
     }
     if mood is not None:
         item["mood_tags"] = [t["tag"] for t in tags]
-        item["mood_text"] = mood["mood_text"]
+        if profile != "estomago":
+            item["mood_text"] = mood["mood_text"]
     else:
         item["mood_tags"] = []
-        item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）
+        if profile != "estomago":
+            item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）
     # 补录标记（D03）：hold 日期晚于事件日期 → 新收录，不冒充刚发生
     if m["held_at"]:
         held_day = ret_mod.local_date(m["held_at"],

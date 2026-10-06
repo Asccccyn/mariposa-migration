@@ -45,13 +45,15 @@ def _anniv_rows(conn, horizon, today, days: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _memory_section(conn, three_days: list[str]) -> dict:
+def _memory_section(conn, three_days: list[str],
+                    profile: str = "claude_chat") -> dict:
     """三天桶段：标题+心情标签+心情文字+分类；不默认展开事件正文。"""
     mem_rows = conn.execute(
         "SELECT memory_id, memory_date FROM memories WHERE visibility='active'"
         " AND memory_date IN (?,?,?) ORDER BY memory_date DESC, memory_id"
         " LIMIT ?", tuple(three_days) + (BOOT_SECTION_LIMIT,)).fetchall()
-    items = [_memory_slim(conn, r["memory_id"]) for r in mem_rows]
+    items = [_memory_slim(conn, r["memory_id"], profile=profile)
+             for r in mem_rows]
     total = conn.execute(
         "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
         " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
@@ -112,7 +114,7 @@ def get(principal_id: str, entry_source: str, profile: str,
 
             tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
             today, three_days = _three_day_window(tz)
-            md = _memory_section(conn, three_days)
+            md = _memory_section(conn, three_days, profile=profile)
             # RA-006（2026-10-02 复审 P2）：I/Plan/纪念日与 state hash
             # 同一读事务装配——此前 COMMIT 在这些读取之前，包内容与其
             # 指纹可来自不同快照（审计反例 bootstrap_mixed_snapshot）

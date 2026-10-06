@@ -516,7 +516,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "required": ["profile"],
         "additionalProperties": False,
         "properties": {"profile": {"type": "string",
-                                   "enum": ["claude_chat", "cc"]},
+                                   "enum": ["claude_chat", "cc", "estomago"]},
                        "known_snapshot_id": {"type": "string"},
                        "loaded_snapshot_id": {"type": "string"},
                        "cursor": {"type": "object"}},
