@@ -317,7 +317,18 @@ class TestEstomagoBuiltinBinding:
     只放行 hold 面两个能力，泄漏面最小化。"""
 
     def _binding(self, token: str):
+        # F-J-55（联合审计返修 2026-10-06）：白名单与发币脚本同源（脚本有
+        # __main__ 守卫，导入无副作用）——此前硬编码 2 项，R5 补的
+        # hold.status 不在夹具里，未来加能力时夹具先行腐化
         import hashlib
+        import json as _json
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "issue_estomago_hold_token",
+            __file__.rsplit("tests", 1)[0]
+            + "scripts/issue_estomago_hold_token.py")
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO client_bindings(binding_id, token_hash,"
@@ -325,7 +336,7 @@ class TestEstomagoBuiltinBinding:
                 " created_at) VALUES(?,?,?,?,?,datetime('now'))",
                 ("bdg_est_test", hashlib.sha256(token.encode()).hexdigest(),
                  "jiaming", "estomago_builtin",
-                 '["memory.hold", "memory.mood.vocab"]'))
+                 _json.dumps(_mod.ALLOWLIST)))
         return identity.authenticate(token)
 
     def test_hold_and_vocab_allowed(self, actors):
@@ -337,6 +348,10 @@ class TestEstomagoBuiltinBinding:
         assert out["data"]["memory_id"]
         vocab = registry.invoke(p, "memory.mood.vocab", {}, None)
         assert vocab["data"]["categories"][0] == "开心"
+        # R5/F-J-55：hold.status 在脚本白名单内（5xx 后换窗恢复对账依赖）
+        st = registry.invoke(p, "memory.hold.status",
+                             {"operation_id": "es-builtin-1"}, None)
+        assert st["data"]["completed"] is False
 
     def test_everything_else_denied(self, actors):
         import secrets as _sec
