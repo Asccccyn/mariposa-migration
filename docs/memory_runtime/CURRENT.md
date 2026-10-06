@@ -218,6 +218,16 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   `i.item.history` / `relations.list` 显式读取。非必要信息不返回
   给模型侧。
 
+### 8.1 memory_date 默认（江乔生裁定 2026-10-06，F-J-03/D1）
+
+- **当天记录自动日期**：`creation_mode="contemporaneous"` 且未显式给
+  `memory_date` 的 hold，服务端在同一次正式提交事务内用 held_at 的
+  上海业务日填充 `memory_date`（bootstrap 三日窗与 by_date 因此可见
+  当天随手记）。显式日期不被覆盖；**手填日期属于补写**
+  （retrospective）——补写未给日期的保持 NULL，不猜；date_confidence
+  不因此改写（调用方主张什么就是什么）。同 op 幂等重放返回原事务的
+  原日期（不跨午夜重算——原子写回执不变）。
+
 ## 9. 删除与破坏性幂等（2026-10-04 裁定）
 
 - Relation/Deletion 语义按 **v2.0 封板**（见 §10 清单）执行；删除链
@@ -279,6 +289,7 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
   层 + profile 协商（业务前剥离、同 operation 切换不重做）；md 对话
   转写导入（§6）双方言落地；I 开窗最小化；深耦合拆分三批
   （registry 传输幂等层/recall replay+round2/bootstrap pages）。
+- 2026-10-06：裁定落档 §8.1——contemporaneous hold 服务端自动填 held_at 上海日（F-J-03/D1 选项 A；当天记录自动日期，手填日期属于补写）。
 - 2026-10-04（二）：按周家明对 Codex 22 条审计的复核修正合同措辞
   ——request_ref 幂等=同一 operation/result identity 而非原样重放
   旧正文（出站仍按当前权限/开关/Judge 重校验，与 RECALL-03 不再

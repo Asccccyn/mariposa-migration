@@ -11,8 +11,9 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from .. import audit, db
+from .. import audit, config, db
 from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
 from ..retrieval import projection
 from . import categories as categories_mod
@@ -385,6 +386,13 @@ def hold_in_tx(
 
     memory_id = memory_id or _next_bucket_id(conn, cats[0])
     now = now or _now()
+    # 裁定（江乔生 2026-10-06，F-J-03/D1 选项 A）：当天记录自动日期——
+    # contemporaneous 且未给日期的 hold，memory_date 用同一次 held_at 的
+    # 上海业务日（同事务派生；显式日期不被覆盖——手填日期属于补写
+    # retrospective；补写/未知不猜日期，保持 NULL 走各自合同）
+    if mode == "contemporaneous" and not memory_date:
+        memory_date = datetime.fromisoformat(now).astimezone(
+            ZoneInfo(config.RELATIONSHIP_TIMEZONE)).date().isoformat()
     # F39：去重在写锁内——并发同源 hold 只落一个 memory
     dup = _duplicated_by_raw_ref(conn, raw_refs)
     if dup:
