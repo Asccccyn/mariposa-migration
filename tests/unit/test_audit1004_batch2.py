@@ -385,7 +385,7 @@ class TestReview3Fixes:
         sub = tmp / "nested"
         sub.mkdir()
         (sub / "2026-07-01 10-00-00 子目录样本_ab12cd34ef56.md").write_text(
-            "---\ntype: note\ndate: 2026-07-01\n---\n子目录迁移正文内容",
+            "---\ncategories: [sweet]\ntype: note\ndate: 2026-07-01\n---\n子目录迁移正文内容",
             encoding="utf-8")
         r = migration.dry_run(str(tmp), None)
         assert r["counts"]["total"] == 1
