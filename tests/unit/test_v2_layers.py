@@ -78,15 +78,12 @@ class TestV2HoldLayered:
         assert got["mood"]["evidence_state"] == "contemporaneous"
 
     def test_retrospective_mood_rejected_rec04(self, actors):
-        """2026-10-05 裁定放宽：跨窗口补记心情不再整单拒绝，改为
-        evidence_state=retrospective 如实标注（解释槽归心情层）。"""
-        out = hold_v2(actors, mode="retrospective",
-                      mood={"text": "现在的感受", "tags": ["平静"]})
-        with db.formal() as conn:
-            row = conn.execute(
-                "SELECT evidence_state FROM memory_moods WHERE memory_id=?",
-                (out["memory_id"],)).fetchone()
-        assert row["evidence_state"] == "retrospective"
+        """V2-REC-04 原样：跨窗口补记不能补造当时心情（2026-10-05
+        擅自放宽已回滚——裁定说的是解释槽归属，不是放开当时心情）。"""
+        with pytest.raises(Forbidden) as e:
+            hold_v2(actors, mode="retrospective",
+                    mood={"text": "现在的感受", "tags": ["平静"]})
+        assert e.value.detail.get("code") == "MOOD_WINDOW_REQUIRED"
 
     def test_no_mood_no_downgrade_rec06(self, actors):
         out = hold_v2(actors, mood=None)

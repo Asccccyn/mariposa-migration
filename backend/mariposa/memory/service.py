@@ -82,16 +82,22 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
 
 
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
-    """心情/解释槽资格（R05/§5.1，2026-10-05 江乔生裁定放宽）：
-    仅周家明可写；跨窗口补记不再整单拒绝——解释槽归心情层由周家明
-    随便写（why_remember 字段已删除），补写以 evidence_state 如实
-    标注 retrospective，不冒充当时心境。"""
+    """当时心情资格（R05/§5.1）：仅周家明、仅同期 hold 可写。
+
+    2026-10-05 勘误回滚：此前擅自把"心情字段的延展随便写"扩大解释
+    成"心情随时可附"——裁定指的是 why_remember 删除后的解释槽归
+    属，当时心情的窗口规矩（V2-REC-04）不变。"""
     if not isinstance(mood, dict):
         raise Forbidden("mood must be an object", code="INVALID_ARGUMENT")
     if principal.principal_id != "jiaming":
         raise Forbidden(
-            "当时心情只能由周家明写下；乔生/worker 不可代写（V2-REC-09）",
+            "当时心情只能由周家明（jiaming）在原事件窗口内写下；"
+            "乔生/worker 不可代写（V2-REC-09）",
             code="MOOD_AUTHOR_REQUIRED")
+    if creation_mode != "contemporaneous":
+        raise Forbidden(
+            "跨窗口补记不能补造当时心情（V2-REC-04）；仍可保存事件本身",
+            code="MOOD_WINDOW_REQUIRED")
     text = mood.get("text")
     tags = mood.get("tags") or []
     if not isinstance(tags, list) or any(not isinstance(t, str) or not t.strip()
@@ -105,10 +111,7 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
         t = t.strip()
         if t not in deduped:
             deduped.append(t)
-    return {"text": text, "tags": deduped,
-            "evidence_state": ("contemporaneous"
-                               if creation_mode == "contemporaneous"
-                               else "retrospective")}
+    return {"text": text, "tags": deduped}
 
 
 def _raw_ref_hash(ref: dict) -> str:
@@ -223,9 +226,8 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
         conn.execute(
             "INSERT INTO memory_moods(memory_id, mood_text, author,"
             " captured_session, captured_at, evidence_state)"
-            " VALUES(?,?,?,?,?,?)",
-            (memory_id, mood_data["text"], "jiaming", entry_source, now,
-             mood_data.get("evidence_state", "contemporaneous")))
+            " VALUES(?,?,?,?,?, 'contemporaneous')",
+            (memory_id, mood_data["text"], "jiaming", entry_source, now))
         for tag in mood_data["tags"]:
             conn.execute(
                 "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"

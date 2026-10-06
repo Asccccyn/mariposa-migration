@@ -336,7 +336,7 @@ CREATE TABLE memory_moods(
   captured_session TEXT,
   captured_at TEXT NOT NULL,
   evidence_state TEXT NOT NULL CHECK(evidence_state IN
-    ('contemporaneous','window_verified','absent','retrospective'))
+    ('contemporaneous','window_verified','absent'))
 );
 
 CREATE TABLE memory_mood_tags(
@@ -1100,24 +1100,10 @@ CREATE TABLE memory_source_binding_members(
 CREATE INDEX idx_msbm_msg ON memory_source_binding_members(source_message_id);
 """),
 (32, """
--- ===== 2026-10-05 江乔生裁定：why_remember 字段删除 + 心情窗口放宽 =====
--- 1) 心情层 CHECK 补 retrospective：跨窗口补记不再整单拒绝，解释槽
---    （原 why_remember）归心情层由周家明随写，补记如实标注不冒充当时。
---    SQLite 无法就地改 CHECK——重建表拷数据。
-CREATE TABLE memory_moods_v2(
-  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
-  mood_text TEXT,
-  author TEXT NOT NULL,
-  captured_session TEXT,
-  captured_at TEXT NOT NULL,
-  evidence_state TEXT NOT NULL CHECK(evidence_state IN
-    ('contemporaneous','window_verified','absent','retrospective'))
-);
-INSERT INTO memory_moods_v2 SELECT memory_id, mood_text, author,
-  captured_session, captured_at, evidence_state FROM memory_moods;
-DROP TABLE memory_moods;
-ALTER TABLE memory_moods_v2 RENAME TO memory_moods;
--- 3) 桶编号持久计数表（fresh 基线已含；此处旧库补建）
+-- ===== 2026-10-05 江乔生裁定：why_remember 字段删除 =====
+-- 1) 桶编号持久计数表（fresh 基线已含；此处旧库补建）。心情层
+--    CHECK 保持原样——曾误加 retrospective 值，随窗口回滚一并
+--    撤销（见 service._validate_mood 勘误注释）
 CREATE TABLE IF NOT EXISTS bucket_id_counters(
   category TEXT PRIMARY KEY,
   next INTEGER NOT NULL CHECK(next > 0)
