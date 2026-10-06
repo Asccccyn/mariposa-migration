@@ -104,19 +104,15 @@ class TestBucketIds:
         assert ei.value.code == "BUCKET_ID_EXHAUSTED"
 
 
-class TestMoodWindowRelaxed:
-    def test_retrospective_mood_allowed_and_labeled(self, actors):
-        out = _hold(actors, creation_mode="retrospective",
-                    mood={"text": "后来补的解释", "tags": []})
-        with db.formal() as conn:
-            row = conn.execute(
-                "SELECT mood_text, evidence_state FROM memory_moods"
-                " WHERE memory_id=?", (out["memory_id"],)).fetchone()
-        assert row["mood_text"] == "后来补的解释"
-        assert row["evidence_state"] == "retrospective", \
-            "补记如实标注，不冒充当时心境"
+class TestMoodWindowStillEnforced:
+    def test_retrospective_mood_still_rejected(self, actors):
+        """回滚守护：当时心情的窗口规矩不被"解释槽"裁定连带放开。"""
+        with pytest.raises(Forbidden) as ei:
+            _hold(actors, creation_mode="retrospective",
+                  mood={"text": "后来补的", "tags": []})
+        assert ei.value.code == "MOOD_WINDOW_REQUIRED"
 
-    def test_contemporaneous_still_labeled_so(self, actors):
+    def test_contemporaneous_mood_labeled_so(self, actors):
         out = _hold(actors, creation_mode="contemporaneous",
                     mood={"text": "当时的心情", "tags": []})
         with db.formal() as conn:
