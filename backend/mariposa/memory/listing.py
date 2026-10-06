@@ -193,35 +193,24 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
     RA-010 原语义（tag 必填按标签查）保留为给 tag 的路径。"""
     if whose and whose not in ("jiaming", "qiaosheng"):
         raise Forbidden("whose must be jiaming or qiaosheng")
-    from .service import MOOD_TAXONOMY, MOOD_WORDS
+    from .service import MOOD_CATEGORIES
     scope: str | None = None
     if tag:
-        # 2026-10-05 冻结裁定：词表内两层筛选——传下层词=精确筛；
-        # 传大类=筛该大类全部下层词；词表外结构化拒（带全词表）
-        if tag in MOOD_TAXONOMY:
-            words = MOOD_TAXONOMY[tag]
-            scope = f"大类·{tag}"
-            marks = ",".join("?" * len(words))
-            where = ("m.memory_id IN (SELECT t.memory_id FROM"
-                     f" memory_mood_tags t WHERE t.tag IN ({marks})"
-                     + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
-                        " mm.memory_id=t.memory_id AND mm.author=?)" if whose
-                        else "") + ")")
-            params: list = list(words) + ([whose] if whose else [])
-        elif tag in MOOD_WORDS:
-            scope = "心情"
-            where = ("m.memory_id IN (SELECT t.memory_id FROM memory_mood_tags"
-                     " t WHERE t.tag=?"
-                     + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
-                        " mm.memory_id=t.memory_id AND mm.author=?)" if whose
-                        else "") + ")")
-            params = [tag] + ([whose] if whose else [])
-        else:
+        # 2026-10-05 冻结裁定（当晚修订）：标签槽只存大类——筛选
+        # 也只按大类；子心情在 mood_note（自由文字，可写可不写，
+        # 永不进检索），不做筛选键
+        if tag not in MOOD_CATEGORIES:
             raise Forbidden(
-                "心情筛选词必须在受控词表内（下层词或大类均可）："
-                + "；".join(f"{k}: {'、'.join(v)}"
-                            for k, v in MOOD_TAXONOMY.items()),
-                code="MOOD_TAG_VOCABULARY", got=tag)
+                "心情筛选只能按大类（固定 8 个）："
+                + "、".join(MOOD_CATEGORIES),
+                code="MOOD_CATEGORY_REQUIRED", got=tag)
+        scope = f"大类·{tag}"
+        where = ("m.memory_id IN (SELECT t.memory_id FROM memory_mood_tags"
+                 " t WHERE t.tag=?"
+                 + (" AND EXISTS(SELECT 1 FROM memory_moods mm WHERE"
+                    " mm.memory_id=t.memory_id AND mm.author=?)" if whose
+                    else "") + ")")
+        params: list = [tag] + ([whose] if whose else [])
     else:
         where = "1=1"
         params = []

@@ -43,7 +43,7 @@ class TestFieldProjection:
     def test_mood_text_never_indexed(self, actors):
         out = memory.hold(
             actors["jiaming"], text="正文乙", categories=["sweet"],
-            mood={"text": "没说出口的心事秘密词", "tags": ["开心"]},
+            mood={"text": "没说出口的心事秘密词", "tags": ["愉悦"]},
             memory_date="2026-08-01", original_title="测试标题")
         with db.formal() as c:
             norm = " ".join(r["text_norm"] for r in c.execute(

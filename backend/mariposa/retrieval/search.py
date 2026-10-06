@@ -102,24 +102,16 @@ def _pool_where(filters: dict) -> tuple[list[str], list]:
 
     tags = [t for t in (filters.get("mood_tags") or []) if t]
     if tags:
-        # 2026-10-05 冻结裁定：mood_tags 过滤与 by_emotion 同语义——
-        # 传大类=展开为该类全部下层词（all 匹配按**词表下层词**计数，
-        # 不按大类计数）；词表外结构化拒（带全词表）
-        from ..memory.service import MOOD_TAXONOMY, MOOD_WORDS
-        expanded: list[str] = []
-        for t in tags:
-            if t in MOOD_TAXONOMY:
-                expanded.extend(MOOD_TAXONOMY[t])
-            elif t in MOOD_WORDS:
-                expanded.append(t)
-            else:
-                raise Forbidden(
-                    "mood_tags 必须是词表内的下层词或大类："
-                    + "；".join(f"{k}: {'、'.join(v)}"
-                                for k, v in MOOD_TAXONOMY.items()),
-                    code="MOOD_TAG_VOCABULARY", got=t)
-        # 去重保序；all 匹配的计数基准=去重后的下层词
-        tags = list(dict.fromkeys(expanded))
+        # 2026-10-05 冻结裁定（当晚修订）：mood_tags 只按大类过滤
+        # （与 by_emotion 同语义）；子心情在 mood_note，不做筛选键
+        from ..memory.service import MOOD_CATEGORIES
+        bad = [t for t in tags if t not in MOOD_CATEGORIES]
+        if bad:
+            raise Forbidden(
+                "mood_tags 只能是大类（固定 8 个）："
+                + "、".join(MOOD_CATEGORIES),
+                code="MOOD_CATEGORY_REQUIRED", got=bad)
+        tags = list(dict.fromkeys(tags))
         marks = ",".join("?" * len(tags))
         if filters.get("mood_match", "any") == "all":
             where.append(

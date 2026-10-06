@@ -257,7 +257,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "memory.by_emotion": {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "tag": {"type": "string", "maxLength": 40},
+            "tag": {"type": "string", "enum": ["愉悦", "亲密", "失落", "对抗", "不安", "占有", "渴望", "排斥"]},
             "whose": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "next_cursor": {"type": "object"}},
@@ -633,7 +633,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                       "properties": {"text": {"type": "string"},
                                      "tags": {"type": "array", "maxItems": 3,
                                               "items": {"type": "string",
-                                                        "enum": ["开心", "安心", "满足", "期待", "感动", "喜欢", "爱意", "想念", "亲近", "难过", "委屈", "失望", "孤独", "生气", "愤怒", "烦躁", "害怕", "担心", "紧张", "不安", "吃醋", "嫉妒", "想要", "渴望", "讨厌", "厌烦"]}}}},
+                                              "enum": ["愉悦", "亲密", "失落", "对抗", "不安", "占有", "渴望", "排斥"]}}}},
             "our_words": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "required": ["speaker", "text"],

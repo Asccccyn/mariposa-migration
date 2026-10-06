@@ -102,7 +102,7 @@ class TestDeadHandlersRewired:
             "tags": ["registry测试"]}, None)
         assert out["ok"] is True
         found = registry.invoke(actors["jiaming"], "memory.by_emotion", {
-            "tag": "开心"}, None)  # by_emotion 走 mood 标签（词表内）
+            "tag": "愉悦"}, None)  # by_emotion 按大类筛
         assert found["ok"] is True, "by_emotion 不再 NameError（RA-010）"
 
     def test_settings_get_no_attribute_error(self, actors):
