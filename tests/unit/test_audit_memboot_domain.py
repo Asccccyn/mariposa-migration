@@ -135,7 +135,7 @@ class TestStateHashCompleteness:
         """CB-046：mood 行变更使旧快照失效（mood.write 已删，直改行
         模拟数据变化——快照指纹语义与写入通道无关）。"""
         out = _hold(actors, "快照正文",
-                    mood={"text": "初版心情", "tags": ["安心"]})
+                    mood={"text": "初版心情", "tags": ["愉悦"]})
         mid = out["memory_id"]
         b1 = boot.get("jiaming", "claude_chat", "claude_chat")
         with db.formal() as conn:

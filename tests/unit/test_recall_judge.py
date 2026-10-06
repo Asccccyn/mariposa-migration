@@ -144,7 +144,7 @@ class TestJudgeContract:
     def test_hybrid05_judge_payload_whitelist(self, actors):
         """HYBRID-05：event 精排输入不含标题/心情文字/our_words/raw。"""
         hold(actors, "搬家事件甲", "2026-08-10", title="独有标题探针",
-             mood={"text": "独有心情文字探针", "tags": ["开心"]},
+             mood={"text": "独有心情文字探针", "tags": ["愉悦"]},
              our_words=[{"speaker": "qiaosheng",
                          "text": "独有话语探针"}])
         judge = RecordingJudge()
