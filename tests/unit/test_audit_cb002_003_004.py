@@ -120,7 +120,7 @@ class TestMigrationApplyAtomic:
         bucket.mkdir()
         note = bucket / "2026-01-15-note.md"
         note.write_text(
-            "---\ndate: 2026-01-15\nwhy_remembered: keep\n---\n\n"
+            "---\ncategories: [sweet]\ndate: 2026-01-15\nwhy_remembered: keep\n---\n\n"
             "CB-003 合成迁移正文",
             encoding="utf-8")
         out = tmp_path / "report.json"
@@ -173,7 +173,7 @@ class TestMigrationApplyAtomic:
         bucket.mkdir()
         note = bucket / "2026-02-02-note.md"
         note.write_text(
-            "---\ndate: 2026-02-02\npinned: true\n---\n\nCB-003 置顶合成正文",
+            "---\ncategories: [sweet]\ndate: 2026-02-02\npinned: true\n---\n\nCB-003 置顶合成正文",
             encoding="utf-8")
         out = tmp_path / "report2.json"
         migration.dry_run(str(bucket), out=str(out))
