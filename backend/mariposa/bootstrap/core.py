@@ -30,8 +30,10 @@ _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
     "cc": {"cc"},
     # D2 裁定（她 2026-10-06 批准口径 A）：estómago 独立 entry/profile——
-    # 不冒充 cc/claude_chat；默认不自动送 mood_text（字段矩阵见 service.get）
-    "estomago": {"estomago"},
+    # 不冒充 cc/claude_chat；默认不自动送 mood_text（字段矩阵见 service.get）。
+    # estomago_builtin=内置绑定（发币脚本签发的 hold/bootstrap/recall 服务
+    # 身份）也是合法 entry——宿主装配层（B 点）与模型工具共用该绑定
+    "estomago": {"estomago", "estomago_builtin"},
 }
 
 
