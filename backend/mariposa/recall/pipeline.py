@@ -457,22 +457,3 @@ def _locate_word_text(conn, memory_id: str, term_groups,
     return {"word_id": scored[0]["owner"],
             "text": by_id.get(scored[0]["owner"])}
 
-
-def round2_server_facts(session: dict) -> dict:
-    """A05/F3：Round 2 gate 的服务端事实（不从客户端参数取）。"""
-    from .. import db as _db
-    with _db.recall_runtime() as rc:
-        judge_row = rc.execute(
-            "SELECT status FROM recall_attempts WHERE session_id=?"
-            " ORDER BY created_at DESC LIMIT 1",
-            (session["session_id"],)).fetchone()
-    judge_status = judge_row["status"] if judge_row else "unknown"
-    raw_authorized = (config.RECALL_RUNTIME_ENABLED
-                      and config.RECALL_RAW_FALLBACK_ENABLED
-                      and session.get("principal_id") in ("qiaosheng",
-                                                          "jiaming"))
-    bursts_used = session.get("bursts_used", 1)
-    budget_left = bursts_used < config.RECALL_SESSION_BURSTS_MAX
-    return {"judge_status": judge_status,
-            "raw_search_authorized": raw_authorized,
-            "budget_available": budget_left}

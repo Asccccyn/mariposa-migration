@@ -165,10 +165,3 @@ def list_for(memory_id: str, include_history: bool = False) -> list[dict]:
         ).fetchall()
     return [dict(r) for r in rows]
 
-
-def current_retention_hint(memory_id: str) -> bool:
-    """桶是否已有回忆内容（保留线索）。"""
-    with db.formal() as conn:
-        return bool(conn.execute(
-            "SELECT 1 FROM memory_recollections WHERE memory_id=? LIMIT 1",
-            (memory_id,)).fetchone())

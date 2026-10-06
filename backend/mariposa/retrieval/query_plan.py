@@ -11,10 +11,6 @@ from ..errors import Forbidden
 from . import projection
 
 
-def _quote_token(tok: str) -> str:
-    return '"' + tok.replace('"', "") + '"'
-
-
 def compile_terms(terms: list[str]) -> str:
     """多词 terms → OR 组合的安全 FTS5 表达式（任一词命中即可）。"""
     exprs = []
@@ -204,8 +200,3 @@ def plan_token_groups(plan: dict) -> tuple[list[list[str]], list[list[str]]]:
             phrases = [toks]
     return terms, phrases
 
-
-def validate_fts_inert(user_input: str) -> str:
-    """防御性检查：编译结果不含未消毒的语法字符（测试探针用）。"""
-    compiled = compile_terms([user_input])
-    return compiled

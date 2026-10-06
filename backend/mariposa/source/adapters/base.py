@@ -44,19 +44,3 @@ class ConversationDraft:
     updated_at: str | None
     messages: list[Any] = field(default_factory=list)
 
-
-class SourceAdapter(Protocol):
-    provider: str
-
-    def detect(self, element: Any) -> bool:
-        """顶层元素形状是否属于本 provider。"""
-        ...
-
-    def normalize_conversation(self, element: Any) -> ConversationDraft:
-        """原始 conversation dict -> ConversationDraft（messages 保持原始形态，
-        由 normalize_message 逐条标准化）。"""
-        ...
-
-    def normalize_messages(self, draft: ConversationDraft,
-                           ) -> Iterator[NormalizedMessage]:
-        ...

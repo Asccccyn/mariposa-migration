@@ -18,17 +18,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _rep(conn, memory_id: str) -> dict:
-    m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
-                     (memory_id,)).fetchone()
-    if m is None:
-        raise NotFound("memory not found", memory_id=memory_id)
-    v = conn.execute(
-        "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
-        (memory_id, m["current_version_no"])).fetchone()
-    return m, v
-
-
 def list_memories(state: str | None = None, limit: int = 50,
                   cursor_date: str | None = None,
                   cursor_id: str | None = None) -> dict:
@@ -234,7 +223,3 @@ def by_emotion(tag: str, whose: str | None = None, limit: int = 50,
 
 
 
-
-def _rebuild_full_projection(conn, memory_id: str) -> None:
-    """full 投影重建统一入口的薄委托（审计 F04：正文来源不再由本层决定）。"""
-    memory.rebuild_full_projection(conn, memory_id)
