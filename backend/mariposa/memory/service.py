@@ -474,29 +474,6 @@ def get(conn, memory_id: str) -> dict:
     return out
 
 
-def versions_read(conn, memory_id: str) -> list[dict]:
-    """明确的按权限展开历史版本；不自动 restore，不刷新 reengagement。
-
-    审计 F14：每个 revision 的正文经 version_body 统一解析后以 `text`
-    返回；event_text/hold_text 原始列一并给出供审计对照。v2 版本行
-    hold_text 为 NULL 不再表现为"该版本无正文"。
-    """
-    rows = conn.execute(
-        "SELECT version_no, representation, hold_text, event_text,"
-        " compressed_summary, authored_by, origin_kind,"
-        " payload_hash, created_at, original_title, schema_version"
-        " FROM memory_versions WHERE memory_id=? ORDER BY version_no",
-        (memory_id,),
-    ).fetchall()
-    if not rows:
-        raise NotFound("memory not found", memory_id=memory_id)
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["text"] = version_body(r)
-        out.append(d)
-    return out
-
 
 def mood_write(principal_id: str, memory_id: str,
                note: str | None = None,
