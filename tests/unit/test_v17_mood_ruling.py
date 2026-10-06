@@ -40,9 +40,12 @@ def hold(principal, text, **kw):
 
 class TestForbiddenSourcesNeverRecall:
     def test_mood_note_why_meaning_invisible_to_all_channels(self, actors):
+        # why_remember 已删除（2026-10-05 裁定）：解释槽统一走心情层，
+        # 两段解释文字并入同一条 mood note，断言不变——解释文字对全
+        # 检索通道不可见
         out = hold(actors["jiaming"], "一段平静的日常叙述",
-                   mood={"text": "惘湎心情词其实有点吃醋", "tags": ["想念"]},
-                   why_remember="因为紫藤花架值得记")
+                   mood={"text": "惘湎心情词其实有点吃醋；因为紫藤花架值得记",
+                         "tags": ["想念"]})
         mid = out["memory_id"]
         from mariposa.memory import listing as mlisting
         for probe in ("惘湎", "吃醋", "紫藤花架", "雾隐"):

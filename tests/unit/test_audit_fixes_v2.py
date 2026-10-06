@@ -57,10 +57,10 @@ class TestSearchDedupAndLabels:
         from mariposa.memory import relations as rel
         a = memory.hold(actors["jiaming"], text="烧烤探针事件甲",
                         memory_date="2026-09-01", date_confidence="exact",
-                        raw_pending=False, categories=["daily"])["memory_id"]
+                        raw_pending=False, categories=["daily"], original_title="测试标题")["memory_id"]
         b = memory.hold(actors["jiaming"], text="无关正文乙",
                         memory_date="2026-09-02", date_confidence="exact",
-                        raw_pending=False, categories=["daily"])["memory_id"]
+                        raw_pending=False, categories=["daily"], original_title="测试标题")["memory_id"]
         rel.link("jiaming", a, b, "related_to")
         with db.formal() as conn:
             out = rsearch.search(conn, "烧烤", related_of=b)
@@ -73,7 +73,7 @@ class TestSearchDedupAndLabels:
                           memory_date="2026-09-10",
                           date_confidence="exact", raw_pending=False,
                           occurred_start="2026-09-09T22:00:00+08:00",
-                          occurred_end="2026-09-10T01:30:00+08:00", categories=["daily"])
+                          occurred_end="2026-09-10T01:30:00+08:00", categories=["daily"], original_title="测试标题")
         mid = out["memory_id"]
         with db.formal() as conn:
             got = memory.get(conn, mid)

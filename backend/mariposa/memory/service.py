@@ -58,8 +58,8 @@ def version_body(v) -> str | None:
 def rebuild_full_projection(conn, memory_id: str) -> None:
     """当前 revision 的 full 投影重建单一入口（审计 F04）。
 
-    full 投影 = 当前正文（version_body，含 v1 fallback）+ why_remember
-    + 当前有效 meaning 各层；whitelist_body 只含事件正文。
+    full 投影 = 当前正文（version_body，含 v1 fallback）；whitelist_body
+    只含事件正文（S03 禁检裁定：解释类文字不参与检索）。
     update / meaning 追加与替换 / 全库 rebuild 一律走本入口，
     保证同一 revision 的投影内容来源一致。
     """
@@ -82,18 +82,16 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
 
 
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
-    """当时心情资格（R05/§5.1）：仅周家明、仅同期 hold 可写。"""
+    """心情/解释槽资格（R05/§5.1，2026-10-05 江乔生裁定放宽）：
+    仅周家明可写；跨窗口补记不再整单拒绝——解释槽归心情层由周家明
+    随便写（why_remember 字段已删除），补写以 evidence_state 如实
+    标注 retrospective，不冒充当时心境。"""
     if not isinstance(mood, dict):
         raise Forbidden("mood must be an object", code="INVALID_ARGUMENT")
     if principal.principal_id != "jiaming":
         raise Forbidden(
-            "当时心情只能由周家明（jiaming）在原事件窗口内写下；"
-            "乔生/worker 不可代写（V2-REC-09）",
+            "当时心情只能由周家明写下；乔生/worker 不可代写（V2-REC-09）",
             code="MOOD_AUTHOR_REQUIRED")
-    if creation_mode != "contemporaneous":
-        raise Forbidden(
-            "跨窗口补记不能补造当时心情（V2-REC-04）；仍可保存事件本身",
-            code="MOOD_WINDOW_REQUIRED")
     text = mood.get("text")
     tags = mood.get("tags") or []
     if not isinstance(tags, list) or any(not isinstance(t, str) or not t.strip()
@@ -107,7 +105,10 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
         t = t.strip()
         if t not in deduped:
             deduped.append(t)
-    return {"text": text, "tags": deduped}
+    return {"text": text, "tags": deduped,
+            "evidence_state": ("contemporaneous"
+                               if creation_mode == "contemporaneous"
+                               else "retrospective")}
 
 
 def _raw_ref_hash(ref: dict) -> str:
@@ -122,8 +123,42 @@ def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
     已被显式拒绝，本函数仅为历史内部调用点保留空实现。"""
     return None
 
+#: 2026-10-05 江乔生裁定：桶编号 = 分类字母 + 四位序号（如日常 a0001），
+#: 字母按九分类固定顺序 a..i 分配；每类独立计数到 9999，号段永不复用
+#: （桶删除后号码作废不回填）；既有 mem_ 旧编号不受影响，两类并存。
+BUCKET_ID_LETTERS = {"daily": "a", "milestone": "b", "sad": "c", "sweet": "d",
+                     "date": "e", "plan": "f", "sex": "g", "anniversary": "h",
+                     "reloplay": "i"}
+
+
+def _next_bucket_id(conn, primary_category: str) -> str:
+    """写锁内取下一号（hold_in_tx 恒在 BEGIN IMMEDIATE 内调用，
+    同类并发分配由写锁串行化）。多分类桶按调用方给出的首分类取号。
+
+    号段永不复用：计数持久化在 bucket_id_counters，桶删除后下一号
+    继续前进——此前从存活行取 MAX，删除后的重建会回卷复用旧号
+    （审计 2026-10-05 自查）。"""
+    letter = BUCKET_ID_LETTERS.get(primary_category)
+    if letter is None:
+        # 未知分类在 categories_mod.validate 已拦；此处防御性回退
+        letter = "z"
+    row = conn.execute(
+        "SELECT next FROM bucket_id_counters WHERE category=?",
+        (primary_category,)).fetchone()
+    n = row["next"] if row is not None else 1
+    if n > 9999:
+        raise Forbidden(
+            f"分类 {primary_category} 的编号已达 9999 上限（号段永不复用）",
+            code="BUCKET_ID_EXHAUSTED", category=primary_category)
+    conn.execute(
+        "INSERT INTO bucket_id_counters(category, next) VALUES(?,?)"
+        " ON CONFLICT(category) DO UPDATE SET next=excluded.next",
+        (primary_category, n + 1))
+    return f"{letter}{n:04d}"
+
+
 def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
-                      why_remember, memory_date, date_confidence, mode,
+                      memory_date, date_confidence, mode,
                       original_title, v2: bool, now: str,
                       occurred_start: str | None = None,
                       occurred_end: str | None = None) -> None:
@@ -142,17 +177,17 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
          now if v2 else None, "exact" if v2 else "unknown",
          mode or "legacy_unknown", occurred_start, occurred_end))
     payload = {"representation": "full", "hold_text": text,
-               "why_remember": why_remember, "authored_by": principal_id}
+               "authored_by": principal_id}
     if v2:
         conn.execute(
             "INSERT INTO memory_versions(memory_id, version_no,"
             " representation, hold_text, compressed_summary,"
-            " why_remember, authored_by, confirmed_by, origin_kind,"
+            " authored_by, confirmed_by, origin_kind,"
             " payload_hash, created_at, original_title, event_text,"
             " schema_version)"
-            " VALUES(?,1,'full',NULL,NULL,?,?,NULL,'initial_hold',?,?,"
+            " VALUES(?,1,'full',NULL,NULL,?,NULL,'initial_hold',?,?,"
             "?,?,2)",
-            (memory_id, why_remember, principal_id, canonical_hash(payload),
+            (memory_id, principal_id, canonical_hash(payload),
              now, original_title, text))
         # v2 投影：走统一 full 投影入口（P2-01——hold/update/meaning/
         # rebuild 一致：正文 + why + 当前 meaning 层；whitelist 只含
@@ -162,10 +197,10 @@ def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
     else:
         conn.execute(
             "INSERT INTO memory_versions(memory_id, version_no, representation,"
-            " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
+            " hold_text, compressed_summary, authored_by, confirmed_by,"
             " origin_kind, payload_hash, created_at)"
-            " VALUES(?,1,'full',?,NULL,?,?,NULL,'initial_hold',?,?)",
-            (memory_id, text, why_remember, principal_id,
+            " VALUES(?,1,'full',?,NULL,?,NULL,'initial_hold',?,?)",
+            (memory_id, text, principal_id,
              canonical_hash(payload), now))
         # 与 v2 同一投影语义（2026-09-30 裁定）：只索引事件正文；
         # 同时构建分字段投影（v1 新写入与 v2 对齐，memory.search/recall
@@ -188,8 +223,9 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
         conn.execute(
             "INSERT INTO memory_moods(memory_id, mood_text, author,"
             " captured_session, captured_at, evidence_state)"
-            " VALUES(?,?,?,?,?, 'contemporaneous')",
-            (memory_id, mood_data["text"], "jiaming", entry_source, now))
+            " VALUES(?,?,?,?,?,?)",
+            (memory_id, mood_data["text"], "jiaming", entry_source, now,
+             mood_data.get("evidence_state", "contemporaneous")))
         for tag in mood_data["tags"]:
             conn.execute(
                 "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
@@ -214,7 +250,6 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
 def hold(
     principal,
     text: str,
-    why_remember: str | None = None,
     memory_date: str | None = None,
     date_confidence: str = "unknown",
     entry_source: str | None = None,
@@ -237,7 +272,7 @@ def hold(
         conn.execute("BEGIN IMMEDIATE")
         try:
             out = hold_in_tx(
-                conn, principal, text, why_remember=why_remember,
+                conn, principal, text,
                 memory_date=memory_date, date_confidence=date_confidence,
                 entry_source=entry_source, raw_refs=raw_refs,
                 original_title=original_title, categories=categories,
@@ -255,7 +290,6 @@ def hold_in_tx(
     conn,
     principal,
     text: str,
-    why_remember: str | None = None,
     memory_date: str | None = None,
     date_confidence: str = "unknown",
     entry_source: str | None = None,
@@ -295,6 +329,16 @@ def hold_in_tx(
                  allowed=sorted(("daily", "milestone", "sad", "sweet", "date",
                                  "plan", "sex", "anniversary", "reloplay")))
     cats = categories_mod.validate(categories)
+    # 2026-10-05 江乔生裁定：原始标题必填——全量浏览先扫标题，标题即
+    # 提要；精简上限 30 字符，超限结构化拒绝
+    title = (original_title or "").strip()
+    if not title:
+        raise _F("ORIGINAL_TITLE_REQUIRED：标题必填（≤30 字符的精简提要）",
+                 code="ORIGINAL_TITLE_REQUIRED")
+    if len(title) > 30:
+        raise _F(f"标题超长（{len(title)} > 30 字符）：标题是提要不是正文",
+                 code="ORIGINAL_TITLE_TOO_LONG", length=len(title))
+    original_title = title
     # 全量审计 P1-08：plan 分类必须显式绑定 plan 资源——无绑定的
     # plan 桶在召回时会静默退出普通检索（PLAN_MAPPING_GAP），把
     # 静默失效前移为写入时结构化拒绝
@@ -310,7 +354,7 @@ def hold_in_tx(
     if mood is not None:
         mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
 
-    memory_id = memory_id or f"mem_{uuid.uuid4().hex[:12]}"
+    memory_id = memory_id or _next_bucket_id(conn, cats[0])
     now = now or _now()
     # F39：去重在写锁内——并发同源 hold 只落一个 memory
     dup = _duplicated_by_raw_ref(conn, raw_refs)
@@ -318,7 +362,7 @@ def hold_in_tx(
         return {"memory_id": dup, "deduplicated": True}
     _insert_core_rows(
         conn, memory_id=memory_id, principal_id=principal.principal_id,
-        text=text, why_remember=why_remember, memory_date=memory_date,
+        text=text, memory_date=memory_date,
         date_confidence=date_confidence, mode=mode,
         original_title=original_title, v2=v2, now=now,
         occurred_start=occurred_start, occurred_end=occurred_end)
@@ -393,7 +437,6 @@ def get(conn, memory_id: str) -> dict:
                 "reason": "empty_body",
                 "note": "当前 revision 无可读正文（v1 旧数据）"}}
            if not (body or "").strip() else {}),
-        "why_remember": v["why_remember"] if not is_summary else None,
         "pinned": bool(m["pinned"]),
         "protected": bool(m["protected"]),
         "creation_mode": m["creation_mode"],
@@ -441,7 +484,7 @@ def versions_read(conn, memory_id: str) -> list[dict]:
     """
     rows = conn.execute(
         "SELECT version_no, representation, hold_text, event_text,"
-        " compressed_summary, why_remember, authored_by, origin_kind,"
+        " compressed_summary, authored_by, origin_kind,"
         " payload_hash, created_at, original_title, schema_version"
         " FROM memory_versions WHERE memory_id=? ORDER BY version_no",
         (memory_id,),

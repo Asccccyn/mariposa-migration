@@ -81,7 +81,8 @@ class TestB06TestRootFuse:
 class TestB02CrashWindow:
     """V2-OPS-05：running 残留不盲重放，显式对账后才能重试。"""
 
-    ARGS = {"text": "崩溃后重试", "memory_date": "2026-01-01",
+    ARGS = {"text": "崩溃后重试", "original_title": "崩溃重试",
+            "memory_date": "2026-01-01",
             "date_confidence": "exact", "raw_pending": False,
             "categories": ["daily"]}
 

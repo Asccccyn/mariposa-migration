@@ -75,7 +75,7 @@ class TestInvalidation:
         # 正式内容修订（版本前进）
         from mariposa.memory import extras
         extras.update_text(actors["jiaming"].principal_id, m["memory_id"],
-                           1, "搬家事件甲修订版", None, None, None)
+                           1, "搬家事件甲修订版", None, None)
         st = recall_service.status(actors["jiaming"], {"session_id": sid})
         assert st["receipts_revalidated"]["invalid_refs"]
         assert st["session"]["status"] == "STALE_RETRY_REQUIRED"

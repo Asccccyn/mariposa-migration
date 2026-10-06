@@ -261,7 +261,7 @@ class TestF10ReadNoResponseCache:
         out = hold_v2(actors, "写幂等第二条有独特鸢尾", "鸢尾",
                       date="2026-09-25")
         args = {"memory_id": out["memory_id"], "expected_version": 1,
-                "why_remember": "同 key 理由"}
+                "memory_date": "2026-02-02"}
         r1 = registry.invoke(actors["jiaming"], "memory.update", args,
                              "idem-key-write-1")
         assert r1["data"]["version"] == 2

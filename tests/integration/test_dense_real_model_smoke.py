@@ -155,7 +155,7 @@ class TestRealModelWarmupAndSmoke:
     def test_forbidden_fields_do_not_trigger(self, actors):
         """B：why/meaning/mood_note 独有关键词不触发 dense 召回。"""
         out = hold(actors["jiaming"], "完全平静的一段日常叙述",
-                   why_remember="因为雾隐茶室的缘故")
+)
         for probe in ("雾隐茶室",):
             r = registry.invoke(actors["jiaming"], "memory.recall.start",
                                 { "operation_id": f"op-forbidden-{probe}","query_plan": {
@@ -172,7 +172,7 @@ class TestRealModelWarmupAndSmoke:
         from mariposa import config as cfg
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "")
         out = hold(actors["jiaming"], "提供方关闭时的正文",
-                   why_remember="因为霡霂草的缘故")
+)
         with db.formal() as conn:
             sm = rsearch.search(conn, "霡霂")
         assert not sm["hits"], "why 禁检来源不得经任何文本通道命中"

@@ -25,7 +25,7 @@ def actors():
 
 
 def _hold(actors, text="关联测试桶", date="2026-06-01"):
-    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"])
+    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"], original_title="测试标题")
 
 
 class TestMemoryExtras:

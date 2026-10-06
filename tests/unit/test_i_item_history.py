@@ -61,7 +61,8 @@ def test_revise_can_be_informed_by_old_revision(actors):
 def test_i_revision_can_bind_memory_relation_without_entering_recall(actors):
     mem = memory_svc.hold(
         actors["jiaming"], "一次让我重新理解自己的经历",
-        categories=["milestone"], creation_mode="contemporaneous")
+        original_title="重新理解自己", categories=["milestone"],
+        creation_mode="contemporaneous")
     created = i_svc.item_create("jiaming", "A")
     item_id = created["item_id"]
     i_svc.item_revise(

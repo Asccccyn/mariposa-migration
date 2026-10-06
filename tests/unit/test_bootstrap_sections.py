@@ -28,7 +28,7 @@ class TestMemoryDaysPaging:
         ids = set()
         for i in range(60):  # 窗口内 60 桶 > 段上限 50
             h = memory.hold(actors["jiaming"], text=f"分页桶 {i}",
-                            memory_date=today.isoformat(), categories=["daily"])
+                            memory_date=today.isoformat(), categories=["daily"], original_title="测试标题")
             ids.add(h["memory_id"])
         first = bootstrap.get("jiaming", "cc", "cc")
         md = first["memory_days"]

@@ -48,7 +48,7 @@ _UNSET = object()  # 字段缺席哨兵（WR-04：缺席≠显式 null 清空）
 
 
 def update_text(principal_id: str, memory_id: str, expected_version: int,
-                text: str | None = None, why_remember=_UNSET,
+                text: str | None = None,
                 memory_date=_UNSET, date_confidence=_UNSET) -> dict:
     """修改桶正文：新版本，不就地覆盖（§4.5）。
 
@@ -78,9 +78,6 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                 new_text = None if v["event_text"] is not None else text
             else:
                 new_text = None if v["event_text"] is not None else v["hold_text"]
-            # WR-04：缺席（_UNSET）保留现值；显式 None 落实清空
-            new_why = (v["why_remember"] if why_remember is _UNSET
-                       else why_remember)
             if m["compression_state"] == "forgotten_summary":
                 raise Forbidden(
                     "forgotten memory cannot be edited in place; restore first")
@@ -94,23 +91,22 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             # N01：hash 输入与 canonical 正文字段一致——v2 正文在
             # event_text，只 hash hold_text(NULL) 会让不同正文同指纹
             payload = {"representation": "full", "hold_text": new_text,
-                       "event_text": new_event,
-                       "why_remember": new_why, "origin": "update"}
+                       "event_text": new_event, "origin": "update"}
             conn.execute(
                 "INSERT INTO memory_versions(memory_id, version_no, representation,"
-                " hold_text, compressed_summary, why_remember, authored_by, confirmed_by,"
+                " hold_text, compressed_summary, authored_by, confirmed_by,"
                 " origin_kind, payload_hash, created_at, original_title,"
                 " event_text, schema_version)"
-                " VALUES(?,?,'full',?,NULL,?,?,NULL,'initial_hold',?,?,?,?,?)",
-                (memory_id, new_version, new_text, new_why, principal_id,
+                " VALUES(?,?,'full',?,NULL,?,NULL,'initial_hold',?,?,?,?,?)",
+                (memory_id, new_version, new_text, principal_id,
                  memory.canonical_hash(payload), now, old_title, new_event,
                  old_schema))
             conn.execute(
                 "UPDATE memories SET current_version_no=?, memory_date=?,"
                 " date_confidence=?, updated_at=? WHERE memory_id=?",
                 (new_version,
-                 # WR-04 + RE-WR-02（2026-10-04 复审勘误）：why_remember
-                 # （可空列）显式 null=清空。memory_date 列**实际可空**
+                 # WR-04 + RE-WR-02（2026-10-04 复审勘误）：
+                 # memory_date 列**实际可空**
                  # （PRAGMA notnull=0，此前注释所称 NOT NULL 不实）——
                  # 显式 null 清空是**未实现的残留接口限制**：null 等同
                  # 未提供（保留现值）。date_confidence 同；其公开 schema

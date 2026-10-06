@@ -393,6 +393,7 @@ def apply_from_report(report_path: str) -> dict:
         return {"ok": False, "error": "报告超出合成样本规模；真实迁移需获准快照"}
     fdir = Path(report["fixture_dir"])
     applied, problems, skipped_existing = [], [], []
+    why_migrated: list[dict] = []
     from datetime import datetime as _dt
     from .retrieval import projection as _pj
     for e in entries:
@@ -432,10 +433,17 @@ def apply_from_report(report_path: str) -> dict:
             with _db.formal() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    # 2026-10-05 标题必填：旧库无标题元数据——按
+                    # meta.title → 正文首个非空行 → 文件名 顺序派生，
+                    # 截 30 字符（标题=提要）
+                    _title = (meta.get("title")
+                              or next((ln.strip() for ln in
+                                       body.splitlines() if ln.strip()), "")
+                              or name).strip()[:30] or "旧库迁移"
                     out = memory.hold_in_tx(
                         conn, _migrator,
                         text=body.strip(),
-                        why_remember=meta.get("why_remembered"),
+                        original_title=_title,
                         memory_date=e["mapping"]["memory_date"],
                         date_confidence="inferred",
                         categories=cats)
@@ -463,6 +471,17 @@ def apply_from_report(report_path: str) -> dict:
                 except Exception:
                     conn.execute("ROLLBACK")
                     raise
+            # 2026-10-05 江乔生裁定：why_remember 字段已删除，解释槽归
+            # 心情层——旧库的"为什么想记住"文本迁为心情记录（不静默丢
+            # 弃）。mood_write 自持连接与事务，必须在外层事务 COMMIT
+            # 之后调用（嵌套写锁会互相等死）
+            legacy_why = meta.get("why_remembered")
+            if isinstance(legacy_why, str) and legacy_why.strip():
+                from .memory import service as _mem_svc
+                _mem_svc.mood_write("jiaming", mid, note=legacy_why.strip(),
+                                    tags=None)
+                why_migrated.append({"legacy_id": e["legacy_id"],
+                                     "new_id": mid})
             applied.append({"legacy_id": e["legacy_id"], "new_id": mid,
                             "target": "memories"})
         else:
@@ -479,6 +498,7 @@ def apply_from_report(report_path: str) -> dict:
         if row is not None:
             verified += 1
     result = {"ok": not problems, "applied": len(applied),
+              "legacy_why_to_mood": len(why_migrated),
               "skipped_already_migrated": len(skipped_existing),
               "verified": verified, "problems": problems,
               "note": "幂等：重复 apply 按 migration_id_map 返回既有映射；"

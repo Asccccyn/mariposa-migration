@@ -98,9 +98,9 @@ def apply(report: dict) -> dict:
                 conn.execute(
                     "INSERT INTO memory_versions(memory_id, version_no,"
                     " representation, hold_text, compressed_summary,"
-                    " why_remember, authored_by, confirmed_by, origin_kind,"
+                    " authored_by, confirmed_by, origin_kind,"
                     " payload_hash, created_at)"
-                    " VALUES(?,?,'full',?,NULL,NULL,'offline_v17',NULL,"
+                    " VALUES(?,?,'full',?,NULL,'offline_v17',NULL,"
                     "'restore',?,datetime('now'))",
                     (mid, new_v, body, body_hash))
                 conn.execute(

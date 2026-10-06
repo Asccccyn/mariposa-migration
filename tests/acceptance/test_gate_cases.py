@@ -40,16 +40,16 @@ def actors():
 
 
 def _hold(actors, text="验收桶", date="2026-06-01"):
-    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"])
+    return memory.hold(actors["jiaming"], text=text, memory_date=date, categories=["daily"], original_title="测试标题")
 
 
 class TestID:
     def test_T_ID_01_same_principal_two_entries(self, actors):
         """T-ID-01：两入口同主体——作者均 jiaming，来源只在审计。"""
         a = memory.hold(actors["jiaming"], text="来自 Chat 的记忆",
-                        memory_date="2026-06-01", entry_source="claude_chat", categories=["daily"])
+                        memory_date="2026-06-01", entry_source="claude_chat", categories=["daily"], original_title="测试标题")
         b = memory.hold(actors["jiaming_cc"], text="来自 CC 的记忆",
-                        memory_date="2026-06-01", entry_source="cc", categories=["daily"])
+                        memory_date="2026-06-01", entry_source="cc", categories=["daily"], original_title="测试标题")
         for h in (a, b):
             with db.formal() as conn:
                 v = conn.execute(

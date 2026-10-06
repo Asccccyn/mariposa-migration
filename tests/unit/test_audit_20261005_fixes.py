@@ -35,7 +35,7 @@ def actors():
 
 def _hold(actors, text="审计回归桶", date="2026-06-01"):
     return memory.hold(actors["jiaming"], text=text, memory_date=date,
-                       categories=["daily"])
+                       categories=["daily"], original_title="测试标题")
 
 
 # ---------------------------------------------------------------- P1-01

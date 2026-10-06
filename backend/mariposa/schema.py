@@ -43,13 +43,19 @@ CREATE TABLE memories(
 CREATE INDEX idx_memories_date ON memories(memory_date);
 CREATE INDEX idx_memories_state ON memories(visibility, compression_state);
 
+-- 2026-10-05 桶编号持久计数（号段永不复用：桶删除不影响发号；
+-- 若从存活行取 MAX，删除后的下一只会回卷复用旧号）
+CREATE TABLE bucket_id_counters(
+  category TEXT PRIMARY KEY,
+  next INTEGER NOT NULL CHECK(next > 0)
+);
+
 CREATE TABLE memory_versions(
   memory_id TEXT NOT NULL REFERENCES memories(memory_id),
   version_no INTEGER NOT NULL,
   representation TEXT NOT NULL CHECK(representation IN ('full','forgotten_summary')),
   hold_text TEXT,
   compressed_summary TEXT,
-  why_remember TEXT,
   authored_by TEXT NOT NULL,
   confirmed_by TEXT,
   origin_kind TEXT NOT NULL
@@ -330,7 +336,7 @@ CREATE TABLE memory_moods(
   captured_session TEXT,
   captured_at TEXT NOT NULL,
   evidence_state TEXT NOT NULL CHECK(evidence_state IN
-    ('contemporaneous','window_verified','absent'))
+    ('contemporaneous','window_verified','absent','retrospective'))
 );
 
 CREATE TABLE memory_mood_tags(
@@ -1093,6 +1099,33 @@ CREATE TABLE memory_source_binding_members(
 );
 CREATE INDEX idx_msbm_msg ON memory_source_binding_members(source_message_id);
 """),
+(32, """
+-- ===== 2026-10-05 江乔生裁定：why_remember 字段删除 + 心情窗口放宽 =====
+-- 1) 心情层 CHECK 补 retrospective：跨窗口补记不再整单拒绝，解释槽
+--    （原 why_remember）归心情层由周家明随写，补记如实标注不冒充当时。
+--    SQLite 无法就地改 CHECK——重建表拷数据。
+CREATE TABLE memory_moods_v2(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  mood_text TEXT,
+  author TEXT NOT NULL,
+  captured_session TEXT,
+  captured_at TEXT NOT NULL,
+  evidence_state TEXT NOT NULL CHECK(evidence_state IN
+    ('contemporaneous','window_verified','absent','retrospective'))
+);
+INSERT INTO memory_moods_v2 SELECT memory_id, mood_text, author,
+  captured_session, captured_at, evidence_state FROM memory_moods;
+DROP TABLE memory_moods;
+ALTER TABLE memory_moods_v2 RENAME TO memory_moods;
+-- 3) 桶编号持久计数表（fresh 基线已含；此处旧库补建）
+CREATE TABLE IF NOT EXISTS bucket_id_counters(
+  category TEXT PRIMARY KEY,
+  next INTEGER NOT NULL CHECK(next > 0)
+);
+-- 2) memory_versions.why_remember 物理删除由 migrate() 内
+--    _drop_deleted_columns 按 pragma 形态分叉执行（编号迁移无法
+--    表达"列存在才删"；列已在基线 CREATE 中移除）
+"""),
 ]
 
 
@@ -1220,11 +1253,28 @@ def migrate() -> None:
     with db.formal() as conn:
         _require_identity(conn, "formal_v1")
         _apply(conn, FORMAL_MIGRATIONS)
+        _drop_deleted_columns(conn)
         _stamp_identity(conn, "formal_v1")
     with db.workspace() as conn:
         _require_identity(conn, "workspace_v1")
         _apply(conn, WORKSPACE_MIGRATIONS)
         _stamp_identity(conn, "workspace_v1")
+
+
+def _drop_deleted_columns(conn) -> None:
+    """已删除字段的物理清理（幂等；对号入座的编号迁移无法表达
+    "列存在才删"，只能按 pragma 实测形态分叉）。
+
+    2026-10-05 江乔生裁定删除 why_remember（解释槽归心情层）：
+    - 检索无影响——S03 禁检裁定（2026-09-30）起投影只含事件正文；
+    - 旧版本行的 payload_hash 只写不校验（无重算比对路径），删列
+      不破坏既有版本不可变回执。
+    """
+    cols = {r["name"] for r in conn.execute(
+        "PRAGMA table_info(memory_versions)")}
+    if "why_remember" in cols:
+        conn.execute("ALTER TABLE memory_versions"
+                     " DROP COLUMN why_remember")
 
 
 def _require_identity(conn, expected: str) -> None:

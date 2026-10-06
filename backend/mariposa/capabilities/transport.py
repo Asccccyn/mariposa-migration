@@ -236,7 +236,6 @@ def hold_domain_payload(a: dict) -> dict:
     """memory.hold 的领域归一化载荷（handler 与传输恢复共用一份）。"""
     return {
         "text": a.get("text"),
-        "why_remember": a.get("why_remember"),
         "memory_date": a.get("memory_date"),
         "date_confidence": a.get("date_confidence", "unknown"),
         "raw_pending": bool(a.get("raw_pending", True)),

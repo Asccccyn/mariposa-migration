@@ -85,6 +85,7 @@ def _hold_args(seeded, op="hold-1", specs=(0, 1), **extra):
     sel = {"conversation_id": seeded["conv_id"],
            "members": seeded["members"](*specs)}
     args = {"text": "今晚的约定", "categories": ["daily"],
+            "original_title": "今晚的约定",
             "memory_date": "2026-10-05", "date_confidence": "exact",
             "operation_id": op, "source_selections": [sel]}
     args.update(extra)
@@ -170,7 +171,8 @@ class TestAtomicHold:
     def test_legacy_hold_unchanged(self, seeded):
         jiaming = seeded["actors"]["jiaming"]
         r = registry.invoke(jiaming, "memory.hold", {
-            "text": "手工记忆", "categories": ["sweet"]}, None)["data"]
+            "text": "手工记忆", "original_title": "手工记忆",
+            "categories": ["sweet"]}, None)["data"]
         assert "operation_id" not in r or r.get("operation_id") is None
         with db.formal() as conn:
             assert conn.execute(
@@ -180,8 +182,8 @@ class TestAtomicHold:
     def test_deleted_memory_replay_does_not_recreate(self, seeded):
         jiaming = seeded["actors"]["jiaming"]
         # op-only hold（无绑定）——删除门不受新绑定关系阻挡
-        args = {"text": "无来源记忆", "categories": ["daily"],
-                "operation_id": "hold-nd"}
+        args = {"text": "无来源记忆", "original_title": "无来源记忆",
+                "categories": ["daily"], "operation_id": "hold-nd"}
         r = registry.invoke(jiaming, "memory.hold", args, None)["data"]
         registry.invoke(jiaming, "memory.delete",
                         {"memory_id": r["memory_id"],

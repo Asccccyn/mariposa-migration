@@ -405,7 +405,6 @@ def _hold(principal: Principal, a: dict) -> dict:
         return memory.hold(
             principal,
             text=str(a.get("text", "")),
-            why_remember=a.get("why_remember"),
             memory_date=a.get("memory_date"),
             date_confidence=a.get("date_confidence", "unknown"),
             entry_source=principal.entry_source,
@@ -433,7 +432,6 @@ def _hold(principal: Principal, a: dict) -> dict:
         out = memory.hold_in_tx(
             conn, principal,
             text=str(a.get("text", "")),
-            why_remember=a.get("why_remember"),
             memory_date=a.get("memory_date"),
             date_confidence=a.get("date_confidence", "unknown"),
             entry_source=principal.entry_source,
@@ -1090,7 +1088,6 @@ def _memory_update(principal: Principal, a: dict) -> dict:
     return extras.update_text(
         principal.principal_id, str(a.get("memory_id", "")),
         _int_arg(a, "expected_version", 0, 0, 1 << 31), a.get("text"),
-        a["why_remember"] if "why_remember" in a else _UNSET,
         a["memory_date"] if "memory_date" in a else _UNSET,
         a["date_confidence"] if "date_confidence" in a else _UNSET)
 

@@ -270,6 +270,10 @@ $('logoutBtn').onclick = () => {
 $('searchBtn').onclick = () => searchMemories($('q').value);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') searchMemories($('q').value); });
 $('newHoldBtn').onclick = async () => {
+  // 2026-10-05 裁定：标题必填（≤30 字精简提要——全量浏览先扫标题）
+  const title = prompt('标题（30 字内精简提要）', '');
+  if (!title || !title.trim()) return;
+  if (title.trim().length > 30) { setStatus('标题超 30 字，请精简', true); return; }
   const text = prompt('记忆正文', '');
   if (!text) return;
   // CB-053（2026-10-02 审计 P3）：正式写入不再伪造固定 40 天前的
@@ -280,7 +284,8 @@ $('newHoldBtn').onclick = async () => {
   try {
     const d = await api('memory.hold', {
       categories: [document.getElementById('holdCat').value],
-      text, why_remember: null,
+      text,
+      original_title: title.trim(),
       memory_date: trimmed || null,
       date_confidence: trimmed ? 'exact' : 'unknown',
     });
