@@ -173,3 +173,14 @@
 4. **recall 拆分等价性**：git diff 91aead4..479a16d -- recall/ 逐块对照搬移（我们声明零语义变更）
 5. **estómago classifyError 优先序**：httpStatus 在前 code 在后——找"状态码可重试但结构化码语义是永久冲突"的组合（如有，优先序应反转）
 6. 全量 1116 通过+1 跳过真实性（按 AGENTS.md 分批前台跑）
+
+
+---
+
+# 追加：联合审计返修 B3 批（2026-10-06，GLM 执行，基线推进至 cd66e52）
+
+**当前审计基线：`cd66e52`（main）**。上一批基线 5f91caf（=联合审计冻结快照）。依据=联合审计包（`~/Projects/devspace-workspace/joint-audit-20261006/`）+ 林石见返修任务书 B3 批。**既有合同→本次实现修正**（非新裁定落地）：
+
+| 提交 | 内容 | 审计重点 |
+|---|---|---|
+| cd66e52 | B3 七项：purge/reset 三子表（F-J-04）/raw_msg 读侧 invalid（F-J-05）/直达 NULL 三态游标（F-J-19）/placeholder 大类（F-J-20）/迁移工具拒无分类（F-J-23）/删除幂等落穿结构化（F-J-26）/continuation 合并提示（F-J-27） | 回归 tests/unit/test_joint_audit_b3.py 15 条；test_product_align 冻结断言按 F-J-23 新语义更新（applied=0+categories_missing，非自动 daily） |
