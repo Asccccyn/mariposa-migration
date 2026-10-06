@@ -286,11 +286,23 @@ def search(conn, query: str, limit: int = 20,
     # 语义路径（§8.3：仅有效投影向量参与；provider 未配置显式 degraded）。
     # 空 query 走浏览语义，不做语义匹配（避免空向量产生无依据"伪命中"）
     mode = "keyword"
+    semantic_error: str | None = None
     from .semantic import LOCAL_PROVIDERS
     if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS and phrase:
         # 语义是补充召回：关键词为主路径，语义命中取 top-5（同质语料防泛化）
-        sem = semantic.semantic_search(conn, query, min(5, limit))
-        mode = "hybrid"
+        # 裁定 2026-10-05（语义修正说明 §二.5）：provider 配置但模型
+        # 加载/推理失败时**明确降级**——关键词主路径照常、degraded 如实
+        # 标注、stderr 留痕；不偷偷 fallback 也不让补充路径 500 掉主路径
+        try:
+            sem = semantic.semantic_search(conn, query, min(5, limit))
+            mode = "hybrid"
+        except Exception as e:  # noqa: BLE001
+            import sys
+            sys.stderr.write(
+                f"[semantic] provider error, keyword path continues: "
+                f"{e!r}\n")
+            sem = []
+            semantic_error = "semantic_provider_error"
     else:
         sem = []
     # 语义命中去重（关键词已命中的桶保留 keyword 标注优先）；
@@ -317,4 +329,7 @@ def search(conn, query: str, limit: int = 20,
     else:
         result["semantic"] = "unavailable"
         result["degraded"] = "semantic_unavailable"
+    if semantic_error:
+        result["semantic"] = "error"
+        result["degraded"] = semantic_error
     return result
