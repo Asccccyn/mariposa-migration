@@ -468,6 +468,8 @@ def apply_from_report(report_path: str) -> dict:
                         original_title=_title,
                         memory_date=e["mapping"]["memory_date"],
                         date_confidence="inferred",
+                        # F-J-22：迁移即补写（语义如实，不是当下记录）
+                        creation_mode="retrospective",
                         categories=cats)
                     mid = out["memory_id"]
                     if e["mapping"].get("pinned"):
