@@ -271,3 +271,32 @@ class TestMoodTaxonomyFrozen:
             listing.by_emotion("酸")
         assert ei.value.code == "MOOD_TAG_VOCABULARY"
         assert "吃醋" in str(ei.value)
+
+
+class TestMoodVocabInterface:
+    def test_open_interface_returns_taxonomy(self, actors):
+        out = registry.invoke(actors["jiaming"], "memory.mood.vocab",
+                              {}, None)["data"]
+        assert out["taxonomy"]["占有"] == ["吃醋", "嫉妒"]
+        assert out["rules"]["max_tags"] == 3
+        assert "不能补写" in out["rules"]["write_window"]
+
+    def test_recall_filter_accepts_major_category(self, actors):
+        """召回过滤与 by_emotion 同语义：传大类=展开筛下层词。"""
+        from mariposa.retrieval import search as rsearch
+        a = _hold(actors, text="占有正文", title="占有",
+                  mood={"text": None, "tags": ["吃醋"]})
+        _hold(actors, text="无关正文", title="无关",
+              mood={"text": None, "tags": ["安心"]})
+        with db.formal() as conn:
+            out = rsearch.recall(conn, filters={"mood_tags": ["占有"]})
+        ids = {h["memory_id"] for h in out["hits"]}
+        assert ids == {a["memory_id"]}, "大类·占有 展开后只命中吃醋桶"
+
+    def test_recall_filter_rejects_unknown_word(self, actors):
+        from mariposa.retrieval import search as rsearch
+        from mariposa.errors import Forbidden as _F
+        with pytest.raises(_F) as ei:
+            with db.formal() as conn:
+                rsearch.recall(conn, filters={"mood_tags": ["酸"]})
+        assert ei.value.code == "MOOD_TAG_VOCABULARY"
