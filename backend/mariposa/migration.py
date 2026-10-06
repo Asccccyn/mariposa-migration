@@ -423,7 +423,13 @@ def apply_from_report(report_path: str) -> dict:
                                          "new_id": prior["new_id"]})
             continue
         if e["target"] == "memories":
-            cats = e["mapping"].get("categories") or ["daily"]
+            # F-J-23（联合审计 2026-10-06）：缺分类列问题报告拒迁——正式合同
+            # 无未分类默认值（CATEGORY_REQUIRED），迁移工具不静默补"日常"
+            cats = e["mapping"].get("categories")
+            if not cats:
+                problems.append({"legacy_id": e["legacy_id"],
+                                 "issue": "categories_missing"})
+                continue
             # CB-003（2026-10-02 审计 P1）：Memory 创建、置顶/隐藏/复审
             # 标记与 ID 映射同一写事务提交。此前 hold 自带事务先提交、
             # 其余副作用在 autocommit 里各自落盘——中间中断会让重试

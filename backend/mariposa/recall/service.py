@@ -726,7 +726,12 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
     # 携带同一个 ref（重放不丢、不新发）
     import uuid as _u_start
     _cref = f"cont_{_u_start.uuid4().hex[:12]}"
-    packet["continuation"] = {"continue_request_ref": _cref,
+    # F-J-27（联合审计 2026-10-06）：合并而非覆盖——words 证据不足的
+    # round2_raw 升级提示（RER-01）与新接续引用并存；保留提示不自动
+    # 授予 Round2 权限或额度（gate 八条件仍逐次校验）
+    _prev_cont = packet.get("continuation") or {}
+    packet["continuation"] = {**_prev_cont,
+                              "continue_request_ref": _cref,
                               "for_revision": 1}
     # P3（2026-10-05 审计）：continuation 在预算执行后注入——补一次
     # 终检，存储的 operation 回执与首次响应同一份受控包
@@ -796,7 +801,10 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
         # RER-01：接续引用先入 packet 再记录 operation 结果
         import uuid as _u_refine
         _cref = f"cont_{_u_refine.uuid4().hex[:12]}"
-        packet["continuation"] = {"continue_request_ref": _cref,
+        # F-J-27：同 start——升级提示与接续引用合并（不整体覆盖）
+        _prev_cont = packet.get("continuation") or {}
+        packet["continuation"] = {**_prev_cont,
+                                  "continue_request_ref": _cref,
                                   "for_revision": expected_revision + 1}
         with db.recall_runtime() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1221,10 +1229,11 @@ def revalidate_receipts(session_id: str) -> dict:
                         row["compression_state"] != "full":
                     invalid.append(ref)
             elif ref.startswith("raw_msg:"):
+                # F-J-05（联合审计 2026-10-06）：raw_messages 已随 Legacy Raw 退役
+                # （迁移 25 DROP）——legacy raw_msg: 前缀读侧一律不可解析=invalid
+                # （CURRENT §6 gap 语义），不再查询已不存在的表（此前 500）
                 checked += 1
-                if conn.execute("SELECT 1 FROM raw_messages WHERE id=?",
-                                (ref[len("raw_msg:"):],)).fetchone() is None:
-                    invalid.append(ref)
+                invalid.append(ref)
     result = {"checked": checked, "invalid_refs": invalid}
     if invalid:
         session = store.get_session(session_id)
