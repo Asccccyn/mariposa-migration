@@ -153,10 +153,16 @@ class TestRealModelWarmupAndSmoke:
             "memory_id")), "dense 卡携带真实版本"
 
     def test_forbidden_fields_do_not_trigger(self, actors):
-        """B：why/meaning/mood_note 独有关键词不触发 dense 召回。"""
+        """B：禁检来源独有关键词不触发 dense 召回（2026-10-05 勘误：
+        原探针在 why_remember 里，字段删除后被连带删掉致恒真空转——
+        探针迁入 mood_note，并补 title/our_words 两个禁检源）。
+        dense 向量=事件正文（whitelist_body）——阶段矩阵禁的字段
+        （CORE 无 title/words）结构性进不了向量，本测试钉死这一点。"""
         out = hold(actors["jiaming"], "完全平静的一段日常叙述",
-)
-        for probe in ("雾隐茶室",):
+                   original_title="霭麟馆纪行",
+                   mood={"text": "心里反复想着雾隐茶室", "tags": ["不安"]},
+                   our_words=[{"speaker": "jiaming", "text": "翾风转而说起了霡霂草"}])
+        for probe in ("雾隐茶室", "霭麟", "霡霂"):
             r = registry.invoke(actors["jiaming"], "memory.recall.start",
                                 { "operation_id": f"op-forbidden-{probe}","query_plan": {
                                     "original_request": f"找{probe}",
@@ -172,7 +178,7 @@ class TestRealModelWarmupAndSmoke:
         from mariposa import config as cfg
         monkeypatch.setattr(cfg, "SEMANTIC_PROVIDER", "")
         out = hold(actors["jiaming"], "提供方关闭时的正文",
-)
+                   mood={"text": "惦记着霡霂草", "tags": ["渴望"]})
         with db.formal() as conn:
             sm = rsearch.search(conn, "霡霂")
         assert not sm["hits"], "why 禁检来源不得经任何文本通道命中"
