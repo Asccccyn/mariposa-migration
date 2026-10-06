@@ -1,0 +1,24 @@
+# 可选 dense 通道依赖（Apple Silicon/MLX；2026-10-06 F-J-57 联合审计返修锁定）
+#
+# 背景：retrieval/qwen_embed.py 懒加载 mlx.core/mlx_lm——这些包此前只装在
+# 本机 .venv 而未入任何锁文件，按 requirements.lock 重建环境后启用
+# MARIPOSA_SEMANTIC_PROVIDER=mlx 会 ImportError。本文件锁定实际在用版本
+# （pip freeze 实测），仅 macOS/Apple Silicon 适用（mlx 无其他平台轮子）。
+#
+# 安装（仅在需要 dense 通道的机器）：
+#   .venv/bin/python -m pip install -r requirements-dense.lock
+#
+# 版本与用途：
+#   mlx==0.32.3 / mlx-metal==0.32.3   MLX 框架与 Metal 后端（qwen_embed 直接 import）
+#   mlx-lm==0.31.3                    load()/tokenizer（qwen_embed 直接 import）
+#   transformers==5.18.0 / safetensors==0.8.0 / jinja2==3.1.6 / numpy==2.5.3
+#                                     mlx-lm 的传递依赖（freeze 实测锁定）
+#   protobuf==7.36.2                  transformers 传递依赖
+mlx==0.32.3
+mlx-metal==0.32.3
+mlx-lm==0.31.3
+transformers==5.18.0
+safetensors==0.8.0
+Jinja2==3.1.6
+numpy==2.5.3
+protobuf==7.36.2
