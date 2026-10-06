@@ -737,8 +737,3 @@ if WEB_DIR.exists():
     @app.get("/")
     def index():
         return FileResponse(str(WEB_DIR / "index.html"))
-
-# React/Vite 构建产物（apps/web，npm run build 生成）；与 /api 同源
-WEB_DIST = _SOURCE_ROOT / "apps" / "web" / "dist"
-if WEB_DIST.exists():
-    app.mount("/app", StaticFiles(directory=str(WEB_DIST), html=True), name="webapp")

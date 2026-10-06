@@ -56,12 +56,6 @@ def compile_query(query: str) -> str:
     return '"' + " ".join(t.lower() for t in toks) + '"'
 
 
-def build_full(hold_text: str) -> str:
-    """S03 禁检裁定：解释类文字（旧 why_remember，2026-10-05 删除）
-    不进 searchable projection——full 投影只含事件正文。"""
-    return normalize_search_text(hold_text)
-
-
 def build_forgotten(compressed_summary: str) -> str:
     """遗忘桶：只有批准摘要可作为文本检索依据。"""
     return normalize_search_text(compressed_summary)

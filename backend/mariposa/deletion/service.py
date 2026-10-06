@@ -445,33 +445,3 @@ def deletion_submit(principal_id: str, resource_id: str, reason: str,
     """旧签名垫片：忽略已退役的 action/resource_kind（§3.1.3）。"""
     return deletion_request(principal_id, resource_id, reason,
                             operation_key=operation_key)
-
-
-def _replay_check(principal_id: str, capability: str,
-                  operation_key: str, memory_id: str) -> dict | None:
-    """同 key 重放返回原申请（不重复计数，§7.2）。
-
-    CB-008：记录键与 atomic_write 一致带 `op:` 前缀——领域 operation
-    键与 transport 幂等键（registry 裸键）此前共用
-    (principal, capability, key) 空间，同字符串双键会互相占坑。
-    """
-    import json as _json
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT result_ref FROM idempotency_records"
-            " WHERE principal_id=? AND capability=? AND idempotency_key=?",
-            (principal_id, capability, f"op:{operation_key}")).fetchone()
-    if row is None:
-        return None
-    try:
-        saved = _json.loads(row["result_ref"])
-    except (ValueError, TypeError):
-        return None
-    if saved.get("memory_id") == memory_id and saved.get("request_id"):
-        try:
-            out = deletion_get(saved["request_id"])
-            out["idempotent_replay"] = True
-            return out
-        except NotFound:
-            return None
-    return None

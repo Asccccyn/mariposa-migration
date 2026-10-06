@@ -44,6 +44,7 @@ class TestFieldProjection:
         out = memory.hold(
             actors["jiaming"], text="正文乙", categories=["sweet"],
             mood={"text": "没说出口的心事秘密词", "tags": ["开心"]},
+            creation_mode="contemporaneous",  # 1005B-R4：带心情须显式声明
             memory_date="2026-08-01", original_title="测试标题")
         with db.formal() as c:
             norm = " ".join(r["text_norm"] for r in c.execute(

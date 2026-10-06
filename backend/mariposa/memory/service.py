@@ -81,7 +81,7 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
         whitelist_body=projection.normalize_search_text(body))
 
 
-#: 2026-10-05 冻结裁定（当晚修订）：心情标签**只放大类**（固定 8 个，
+#: 2026-10-05 冻结裁定（当晚修订）：心情标签**只放大类**（固定大类表，
 #: 检索稳定性的唯一锚点）；子心情不预定义词表——模型有更具体的
 #: 感受就在 mood_note 自由写（如"开心想抱抱"），就一个大类能概括时
 #: 不必写（"开心"不必写子心情），写不写都合法。禁止把子心情塞进
@@ -89,6 +89,9 @@ def rebuild_full_projection(conn, memory_id: str) -> None:
 #: 2026-10-05 终版表（她当晚指 定）：开心/爱/生气/吃醋/悲伤/渴望/不安
 MOOD_CATEGORIES: tuple[str, ...] = (
     "开心", "爱", "生气", "吃醋", "悲伤", "渴望", "不安")
+#: 心情标签上限（V2-REC：不硬选唯一，也不堆砌）——服务端校验与
+#: memory.mood.vocab 的 max_tags 必须同源，不得各写一个 3
+MOOD_TAGS_MAX = 3
 
 
 def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
@@ -121,14 +124,14 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
         t = t.strip()
         if t and t not in deduped:
             deduped.append(t)
-    if len(deduped) > 3:
+    if len(deduped) > MOOD_TAGS_MAX:
         raise Forbidden(
-            f"心情标签最多 3 个（给了 {len(deduped)}）——不硬选唯一，"
-            "也不堆砌", code="MOOD_TAGS_LIMIT", tags=deduped)
+            f"心情标签最多 {MOOD_TAGS_MAX} 个（给了 {len(deduped)} 个）——"
+            "不硬选唯一，也不堆砌", code="MOOD_TAGS_LIMIT", tags=deduped)
     bad = [t for t in deduped if t not in MOOD_CATEGORIES]
     if bad:
         raise Forbidden(
-            "心情标签只能是大类（固定 8 个）："
+            f"心情标签只能是大类（固定 {len(MOOD_CATEGORIES)} 个）："
             + "、".join(MOOD_CATEGORIES)
             + "；更具体的当下感受写 mood_note（自由文字，可写可不写，"
               "永不进检索）",
@@ -373,7 +376,19 @@ def hold_in_tx(
                         code="INVALID_ARGUMENT")
     mood_data = None
     if mood is not None:
-        mood_data = _validate_mood(principal, mood, mode or "contemporaneous")
+        # 根因修复（审计 1005B）：此前 mood 给了而 creation_mode 缺省时
+        # 按 contemporaneous 默认放行——补记（给过去 memory_date）+心情
+        # 漏传即可绕过"不能补写当时心情"（V2-REC-04/冻结裁定）。服务端
+        # 不替调用方猜：要写当时心情，creation_mode 必须显式声明。
+        # 不做 memory_date↔creation_mode 交叉强校验（hold 晚于事发当晚
+        # 仍是同期，按日期猜会误伤）；显式声明由调用方对语义负责。
+        if creation_mode is None:
+            raise Forbidden(
+                "带当时心情的 hold 必须显式声明 creation_mode="
+                "\"contemporaneous\"（缺省不再默认同期——防补记心情"
+                "绕过 V2-REC-04 窗口裁定；事件本身不带心情可省略）",
+                code="MOOD_WINDOW_REQUIRED")
+        mood_data = _validate_mood(principal, mood, mode)
 
     memory_id = memory_id or _next_bucket_id(conn, cats[0])
     now = now or _now()
