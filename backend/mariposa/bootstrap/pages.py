@@ -33,6 +33,7 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
     # P1 复审（2026-10-02 接续）：校验 state_hash 与取页在同一读事务
     # ——此前校验连接先关、取页/Plan 各自重开连接，交错窗口内旧
     # snapshot 可拿到新数据
+    from .core import _ENTRY_ALLOWED
     with db.formal() as conn:
         conn.execute("BEGIN")
         try:
@@ -72,7 +73,16 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                     tuple(three_days) + (before_date, before_date,
                                          last_id or "",
                                          BOOT_SECTION_LIMIT)).fetchall()
-                items = [_memory_slim(conn, r["memory_id"]) for r in rows]
+                # D2（2026-10-06）：分页与首页同 profile——estomago 续页
+                # 同样不带 mood_text；快照记载的 profile 是唯一依据
+                _profile = (snap or {}).get("profile") if isinstance(snap, dict) else (snap["profile"] if snap else "claude_chat")
+                if _profile and entry_source not in _ENTRY_ALLOWED.get(_profile, {entry_source}):
+                    raise Forbidden(
+                        "entry_source 与快照 profile 不匹配",
+                        entry_source=entry_source, profile=_profile)
+                items = [_memory_slim(conn, r["memory_id"],
+                                      profile=_profile or "claude_chat")
+                         for r in rows]
                 total = conn.execute(
                     "SELECT COUNT(*) AS c FROM memories WHERE"
                     " visibility='active' AND memory_date IN (?,?,?)",
