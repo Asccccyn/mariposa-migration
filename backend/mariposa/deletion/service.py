@@ -178,7 +178,21 @@ def deletion_request(principal_id: str, memory_id: str, reason: str,
                             conn.execute("COMMIT")
                             return out
                         except NotFound:
-                            pass  # 回执指向的申请已不存在：继续新建
+                            # F-J-26（联合审计 2026-10-06）：回执指向的申请不存在
+                            # （现行合同 deletion_requests 行不删除，理论不可达）——
+                            # 落穿会在下方 INSERT 撞同键 UNIQUE 变裸 500，改结构化
+                            # 冲突；若未来裁定允许换发，先清旧记录再重建
+                            from ..errors import IdempotencyConflict
+                            raise IdempotencyConflict(
+                                "幂等回执指向的申请不存在（记录陈旧）",
+                                operation_key=operation_key)
+                    else:
+                        # F-J-26：同键指向不同桶（legacy 无 payload_hash 行
+                        # 可落到此）——结构化冲突，不落穿撞键
+                        from ..errors import IdempotencyConflict
+                        raise IdempotencyConflict(
+                            "same operation key with different memory target",
+                            operation_key=operation_key)
             if not conn.execute(
                     "SELECT 1 FROM memories WHERE memory_id=?",
                     (memory_id,)).fetchone():

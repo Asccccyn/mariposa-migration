@@ -139,11 +139,18 @@ class TestLegacyImportNoAutoMood:
         assert r["counts"]["total"] == 1
         from tests.unit.test_audit1004_batch2 import _last_report_path
         out = migration.apply_from_report(_last_report_path(tmp_path, r))
-        assert out["ok"] is True and out["applied"] == 1
+        # F-J-23（联合审计返修 2026-10-06）：正式合同无未分类默认值
+        # （CATEGORY_REQUIRED）——缺分类列问题报告拒迁（宁拒不猜），
+        # 迁移工具不再静默补"日常"落桶
+        assert out["applied"] == 0
+        assert any(p["issue"] == "categories_missing"
+                   for p in out["problems"])
         assert "legacy_why_to_mood" not in out
         with db.formal() as conn:
             assert conn.execute(
                 "SELECT COUNT(*) FROM memory_moods").fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT COUNT(*) FROM memories").fetchone()[0] == 0
 
 
 class TestDirectBrowseEntries:
