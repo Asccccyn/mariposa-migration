@@ -20,22 +20,8 @@ from tests.conftest import reset_all
 import re
 import inspect
 
-# 存量无 schema 的注册能力（E4 勘误：schema 声明补齐属契约整理批）。
-# 只许收缩：每补一个就从这里删一个；新增能力不写 schema 会直接红。
-SCHEMA_BACKLOG = frozenset({
-    "emotion.context.get", "handoff.latest", "listening.status",
-    "maintenance.activity.list", "maintenance.jobs.status",
-    "maintenance.outbox.status", "maintenance.settings.get",
-    "media.get", "media.list", "memory.by_tag", "memory.keeps.list",
-    "memory.list", "memory.relations.list", "memory.relations.trace",
-    "plan.list", "presence.status", "source.binding.list",
-    "source.conversation.get", "source.conversations.list",
-    "source.import.batches", "source.import.status", "source.memory.open",
-    "source.message.get", "source.range.open", "source.search",
-    "time.context", "time.now", "time.since",
-})
-
-
+# 裁定（她 2026-10-06 终版"删门不删档案"）：**无 backlog**——所有注册
+# 可调用能力必须在现行正本有 schema；历史包只是档案不是门卫。
 def _registered() -> set[str]:
     src = inspect.getsource(registry)
     return set(re.findall(r'add\("([a-z_.]+)"', src))
@@ -48,7 +34,7 @@ class TestSingleSource:
         键重叠合法（V2 覆盖取胜）；锁的是行为不变量：schema_for 的返回
         恒等于 V2 条目（同一对象），历史包独有的键一律 None。
         """
-        hist = set(sc.load_schemas())
+        hist = set(sc.load_legacy_execution_pack_schemas())
         for cap in hist | set(sc.V2_INPUT_SCHEMAS):
             got = sc.schema_for(cap)
             assert got is sc.V2_INPUT_SCHEMAS.get(cap), \
@@ -61,12 +47,9 @@ class TestSingleSource:
         """根因锁：注册能力必须有现行 schema 或在显式收缩的 backlog 里。"""
         reg = _registered()
         v2 = set(sc.V2_INPUT_SCHEMAS)
-        schemaless = reg - v2 - SCHEMA_BACKLOG
+        schemaless = reg - v2
         assert schemaless == set(), \
-            f"新增注册能力缺 schema（写进 V2 或登记 backlog）: {sorted(schemaless)}"
-        stale_backlog = SCHEMA_BACKLOG - reg
-        assert stale_backlog == set(), \
-            f"backlog 里的能力已不在注册表（应从 backlog 删除）: {sorted(stale_backlog)}"
+            f"注册能力缺现行 schema（写进 V2——没有 fallback，没有 backlog）: {sorted(schemaless)}"
 
 
 class TestFJ22CreationModeRequired:
