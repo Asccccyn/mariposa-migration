@@ -41,7 +41,7 @@ def _transport_name(canonical: str) -> str:
     return _T_PREFIX + canonical.replace(".", "_")
 
 
-# 反解必须查表（字符串变换不可逆：memory.versions.read 的下划线归属有歧义）。
+# 反解必须查表（字符串变换不可逆：memory.context.validate 的下划线归属有歧义）。
 # 实时查 REGISTRY：兼容层在运行期注册的能力同样可反解。
 def _canonical_name(transport: str) -> str:
     if transport.startswith(_T_PREFIX):

@@ -1166,28 +1166,6 @@
       "description": "修改桶正文（新版本，不就地覆盖；遗忘桶先恢复）"
     },
     {
-      "canonical_name": "memory.versions.list",
-      "transport_name": "mariposa_memory_versions_list",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": false,
-      "idempotent": false,
-      "description": "版本列表（不含正文；正文走 versions.read）"
-    },
-    {
-      "canonical_name": "memory.versions.read",
-      "transport_name": "mariposa_memory_versions_read",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": false,
-      "idempotent": false,
-      "description": "明确展开历史版本，不自动 restore"
-    },
-    {
       "canonical_name": "memory.view.confirm",
       "transport_name": "mariposa_memory_view_confirm",
       "allowed_principals": [

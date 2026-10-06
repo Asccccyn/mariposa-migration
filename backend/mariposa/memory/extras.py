@@ -130,12 +130,3 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
     return {"memory_id": memory_id, "version": new_version}
 
 
-def versions_list(memory_id: str) -> list[dict]:
-    with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT version_no, representation, origin_kind, authored_by,"
-            " confirmed_by, payload_hash, created_at FROM memory_versions"
-            " WHERE memory_id=? ORDER BY version_no", (memory_id,)).fetchall()
-    if not rows:
-        raise NotFound("memory not found", memory_id=memory_id)
-    return [dict(r) for r in rows]

@@ -40,12 +40,20 @@ class TestMemoryExtras:
         with pytest.raises(VersionConflict):
             extras.update_text("jiaming", h["memory_id"], 1, text="旧版本")
 
-    def test_versions_list_no_body(self, actors):
-        h = _hold(actors)
-        vs = extras.versions_list(h["memory_id"])
-        assert set(vs[0]) == {"version_no", "representation", "origin_kind",
-                              "authored_by", "confirmed_by", "payload_hash",
-                              "created_at"}
+    def test_versions_not_exposed_after_removal(self, actors):
+        """2026-10-05 裁定：桶的修改历史查看入口已删（只保留 I 的
+        修订历史）——能力层不再有 memory.versions.read/list。"""
+        from mariposa.capabilities import registry as reg
+        assert "memory.versions.read" not in reg.REGISTRY
+        assert "memory.versions.list" not in reg.REGISTRY
+        # 内部版本行仍在（冲突检测依赖），只是查看入口没了
+        h2 = _hold(actors)
+        extras.update_text("jiaming", h2["memory_id"], 1, text="第二版")
+        with db.formal() as conn:
+            c = conn.execute(
+                "SELECT COUNT(*) c FROM memory_versions WHERE memory_id=?",
+                (h2["memory_id"],)).fetchone()["c"]
+        assert c == 2
 
 
 class TestRelations:

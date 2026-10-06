@@ -169,8 +169,6 @@ def _register() -> dict[str, Capability]:
         description="按 word_id 读单条话语（当前表示校验；遗忘=disabled）")
     add("memory.context.validate", _context_validate, _owners(), False,
         description="装配上下文的资源引用+版本重查（estómago/CC 换窗用）")
-    add("memory.versions.read", _versions, _owners(), False,
-        description="明确展开历史版本，不自动 restore")
     # v1.7：遗忘/摘要/审查链已整体退役（决策 2026-09-28）——
     # memory.restore、workspace.forgetting.*、workspace.proposals.*、
     # memory.forgetting.decide、workspace.review.*、memory.retention.decide、
@@ -263,8 +261,6 @@ def _register() -> dict[str, Capability]:
     add("memory.anchor", lambda pr, a: extras.set_flag(
         pr.principal_id, str(a.get("memory_id", "")), "anchor",
         bool(a.get("value", True))), _owners(), True, description="锚定/取消")
-    add("memory.versions.list", _versions_list, _owners(), False,
-        description="版本列表（不含正文；正文走 versions.read）")
     add("memory.relations.link", _rel_link, _owners(), True,
         description="建立关联（单向存储，显式反向查询）")
     add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
@@ -643,11 +639,6 @@ def _i_suggestions(principal: Principal, a: dict) -> dict:
 def _get(principal: Principal, a: dict) -> dict:
     with db.formal() as conn:
         return memory.get(conn, str(a.get("memory_id", "")))
-
-
-def _versions(principal: Principal, a: dict) -> dict:
-    with db.formal() as conn:
-        return {"versions": memory.versions_read(conn, str(a.get("memory_id", "")))}
 
 
 def _search(principal: Principal, a: dict) -> dict:
@@ -1098,10 +1089,6 @@ def _memory_update(principal: Principal, a: dict) -> dict:
         _int_arg(a, "expected_version", 0, 0, 1 << 31), a.get("text"),
         a["memory_date"] if "memory_date" in a else _UNSET,
         a["date_confidence"] if "date_confidence" in a else _UNSET)
-
-
-def _versions_list(principal: Principal, a: dict) -> dict:
-    return {"versions": extras.versions_list(str(a.get("memory_id", "")))}
 
 
 def _rel_link(principal: Principal, a: dict) -> dict:
