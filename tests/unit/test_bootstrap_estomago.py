@@ -92,3 +92,11 @@ class TestEstomagoProfile:
     def test_public_schema_accepts_estomago_profile(self, jiaming):
         from mariposa.capabilities import input_schemas as sc
         sc.validate("bootstrap.get", {"profile": "estomago"})
+
+    def test_builtin_binding_entry_accepted(self, jiaming):
+        """内置绑定（estomago_builtin）也是 estomago profile 的合法 entry
+        ——宿主 B 点与模型工具共用该绑定（生产激活前置）。"""
+        _hold_with_mood()
+        pack = bootstrap.get("jiaming", "estomago_builtin", "estomago")
+        for it in pack["memory_days"]["items"]:
+            assert "mood_text" not in it
