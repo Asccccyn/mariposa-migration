@@ -51,7 +51,7 @@ class TestN01PayloadHashCoversBody:
         mid = out["memory_id"]
         memory_extras.update_text(
             actors["jiaming"].principal_id, mid, expected_version=1,
-            why_remember="只改理由")
+)
         with db.formal() as conn:
             hs = [r["payload_hash"] for r in conn.execute(
                 "SELECT payload_hash FROM memory_versions WHERE memory_id=?"
@@ -693,7 +693,7 @@ class TestP2Fixes:
             memory_date="2026-09-01", date_confidence="exact",
             original_title="一致性", categories=["daily"],
             creation_mode="contemporaneous", raw_pending=False,
-            why_remember="独特的纪念理由蓝风铃")
+)
         with db.formal() as conn:
             before = conn.execute(
                 "SELECT search_text, whitelist_body FROM"

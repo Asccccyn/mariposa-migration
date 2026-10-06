@@ -68,7 +68,8 @@ class TestS19Pool:
         _hold_hit(actors)
         p = _start(actors)
         refs = [c.get("resource_ref") for c in p["candidates"]]
-        assert any(r and r.startswith("memory:mem_") for r in refs), \
+        # 2026-10-05 新编号：分类字母+四位（与旧 mem_ 并存）
+        assert any(r and r.startswith("memory:") for r in refs), \
             f"第 2005 个桶必须被检索到：{refs}"
         assert p["coverage"]["event"] == "complete_within_scope"
         assert p["coverage"]["event_pool"] == {"scanned": 2005,
@@ -103,4 +104,4 @@ class TestS19Pool:
         assert p["coverage"]["event_pool"] == {"scanned": 50,
                                                "truncated": False}
         refs = [c.get("resource_ref") for c in p["candidates"]]
-        assert any(r and r.startswith("memory:mem_") for r in refs)
+        assert any(r and r.startswith("memory:") for r in refs)

@@ -345,7 +345,7 @@ class TestRuntime:
         m = hold(actors, "搬家事件", "2026-08-10")
         p = start(actors)
         extras.update_text("jiaming", m["memory_id"], 1, "修订版", None,
-                           None, None)
+                           None)
         st = recall_service.status(actors["jiaming"], {
             "session_id": p["recall_session_id"]})
         assert st["receipts_revalidated"]["invalid_refs"]

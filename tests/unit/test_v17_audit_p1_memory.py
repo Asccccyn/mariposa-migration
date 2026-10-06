@@ -77,7 +77,7 @@ class TestF14VersionsRead:
             try:
                 memory._insert_core_rows(
                     conn, memory_id=mid, principal_id="jiaming",
-                    text="v1 历史正文", why_remember=None,
+                    text="v1 历史正文",
                     memory_date="2026-07-03", date_confidence="exact",
                     mode="contemporaneous", original_title=None, v2=False,
                     now="2026-09-01T00:00:00+00:00")

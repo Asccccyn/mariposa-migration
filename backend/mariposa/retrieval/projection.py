@@ -1,6 +1,6 @@
 """可检索投影：唯一检索入口（§8.1）。
 
-active+full        -> hold_text + why_remember（+ meaning 各层，第一版未启用 meaning 表）
+active+full        -> hold_text/event_text 事件正文（S03 禁检：解释类文字不进投影）
 active+forgotten   -> 仅审批通过的 compressed_summary，其余一律不进 search_text
 hidden             -> 无投影、无 FTS 行
 
@@ -56,11 +56,10 @@ def compile_query(query: str) -> str:
     return '"' + " ".join(t.lower() for t in toks) + '"'
 
 
-def build_full(hold_text: str, why_remember: str | None) -> str:
-    parts = [hold_text]
-    if why_remember:
-        parts.append(why_remember)
-    return normalize_search_text("\n".join(parts))
+def build_full(hold_text: str) -> str:
+    """S03 禁检裁定：解释类文字（旧 why_remember，2026-10-05 删除）
+    不进 searchable projection——full 投影只含事件正文。"""
+    return normalize_search_text(hold_text)
 
 
 def build_forgotten(compressed_summary: str) -> str:

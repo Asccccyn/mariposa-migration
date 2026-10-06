@@ -16,8 +16,9 @@ NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
 
 
 def hold(actors, text, title=None, cats=("daily",), days_ago=0, words=None):
+    # 2026-10-05 标题必填：未显式给标题时用正文前 8 字作提要
     out = memory.hold(
-        actors["jiaming"], text=text, original_title=title,
+        actors["jiaming"], text=text, original_title=title or text[:8],
         categories=list(cats), creation_mode="contemporaneous",
         memory_date="2026-08-01", our_words=words)
     if days_ago:
@@ -43,7 +44,7 @@ class TestFieldProjection:
         out = memory.hold(
             actors["jiaming"], text="正文乙", categories=["sweet"],
             mood={"text": "没说出口的心事秘密词", "tags": ["开心"]},
-            memory_date="2026-08-01")
+            memory_date="2026-08-01", original_title="测试标题")
         with db.formal() as c:
             norm = " ".join(r["text_norm"] for r in c.execute(
                 "SELECT text_norm FROM field_search_docs WHERE memory_id=?",
@@ -164,7 +165,7 @@ class TestFindWords:
             actors["jiaming"], text="久远事件正文", categories=["daily"],
             memory_date="2026-08-01",
             our_words=[{"speaker": "qiaosheng", "text": "跨阶段话语词翎",
-                        "expression_kind": "verbatim"}])
+                        "expression_kind": "verbatim"}], original_title="测试标题")
         with db.formal() as c:
             c.execute("UPDATE memories SET held_at=?",
                       ((NOW - timedelta(days=100)).isoformat(),))

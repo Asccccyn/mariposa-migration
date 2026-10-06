@@ -52,6 +52,7 @@ def test_tools_call_same_handler_as_http(c):
     r = rpc(c, "/mcp", "tools/call", "jiaming", {
         "name": "mariposa_memory_hold",
         "arguments": {"text": "MCP 与 HTTP 共用 handler 的验证桶",
+                      "original_title": "MCP 共用验证",
                       "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False,
                       "categories": ["daily"]},
     })

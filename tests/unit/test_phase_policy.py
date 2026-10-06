@@ -189,7 +189,7 @@ class TestFactsFromDb:
         from mariposa.memory import keep as keep_mod
         out = memory.hold(actors["jiaming"], text="阶段事实桶",
                           memory_date="2026-09-20", date_confidence="exact",
-                          categories=["daily"])
+                          categories=["daily"], original_title="测试标题")
         mid = out["memory_id"]
         with db.formal() as c:
             c.execute("UPDATE memories SET held_at=? WHERE memory_id=?",
