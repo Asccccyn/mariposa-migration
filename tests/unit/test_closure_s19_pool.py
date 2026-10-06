@@ -26,7 +26,7 @@ def actors():
 
 
 def _fillers(n: int):
-    """a 前缀填料桶（memory_id 排序在 mem_* 之前），有 phase 事实、
+    """0- 前缀填料桶（'0-' 排序在纯数字编号之前）（memory_id 排序在 mem_* 之前），有 phase 事实、
     无版本无字段文档——参与池迭代但永不命中。"""
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -36,7 +36,7 @@ def _fillers(n: int):
                 " memory_date, date_confidence, visibility,"
                 " compression_state, created_at, updated_at, held_at)"
                 " VALUES(?,?,?,?,?,?,?,?,?)",
-                [(f"a-filler-{i:05d}", 1, "2026-09-01", "exact",
+                [(f"0-filler-{i:05d}", 1, "2026-09-01", "exact",
                   "active", "full", "2026-09-01T00:00:00+00:00",
                   "2026-09-01T00:00:00+00:00",
                   "2026-09-01T00:00:00+00:00") for i in range(n)])
