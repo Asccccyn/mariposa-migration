@@ -225,3 +225,49 @@ class TestSemanticProviderErrorDegrades:
         assert out["degraded"] == "semantic_provider_error"
         assert out["semantic"] == "error"
         assert out["mode"] == "keyword", "不得伪装 hybrid"
+
+
+class TestMoodTaxonomyFrozen:
+    """2026-10-05 冻结裁定：两层受控词表 + 大类筛选 + 证据边界。"""
+
+    def test_vocab_enforced_at_hold(self, actors):
+        from mariposa.errors import Forbidden as _F
+        with pytest.raises(_F) as ei:
+            _hold(actors, mood={"text": None, "tags": ["酸"]})
+        assert ei.value.code == "MOOD_TAG_VOCABULARY"
+        out = _hold(actors, mood={"text": None, "tags": ["吃醋", "想念"]})
+        assert out["memory_id"]
+
+    def test_max_three_tags(self, actors):
+        from mariposa.errors import Forbidden as _F
+        with pytest.raises(_F) as ei:
+            _hold(actors, mood={"text": None,
+                                "tags": ["开心", "安心", "满足", "期待"]})
+        assert ei.value.code == "MOOD_TAGS_LIMIT"
+
+    def test_empty_mood_still_legal(self, actors):
+        out = _hold(actors)  # 不带 mood
+        with db.formal() as conn:
+            got = memory.get(conn, out["memory_id"])
+        assert "mood" not in got
+
+    def test_major_category_filter_expands(self, actors):
+        from mariposa.memory import listing
+        _hold(actors, text="占有桶", title="占有",
+              mood={"text": None, "tags": ["吃醋"]})
+        _hold(actors, text="亲密桶", title="亲密",
+              mood={"text": None, "tags": ["想念"]})
+        broad = listing.by_emotion("亲密")   # 大类：喜欢/爱意/想念/亲近
+        assert {i["original_title"] for i in broad["items"]} == {"亲密"}
+        assert broad["scope"] == "大类·亲密"
+        exact = listing.by_emotion("吃醋")   # 下层词：精确
+        assert {i["original_title"] for i in exact["items"]} == {"占有"}
+        assert exact["scope"] == "心情"
+
+    def test_unknown_filter_word_rejected_with_vocab(self, actors):
+        from mariposa.memory import listing
+        from mariposa.errors import Forbidden as _F
+        with pytest.raises(_F) as ei:
+            listing.by_emotion("酸")
+        assert ei.value.code == "MOOD_TAG_VOCABULARY"
+        assert "吃醋" in str(ei.value)
