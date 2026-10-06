@@ -121,7 +121,17 @@
       <button id="catBrowseBtn">看分类</button>
       <input id="browseDate" type="date" title="发生日期（真实发生，非写入）" />
       <button id="dateBrowseBtn">看日期</button>
-      <input id="browseMood" placeholder="心情子分类，如：开心" style="max-width:180px" />
+      <input id="browseMood" list="moodVocab" placeholder="心情词或大类，如：开心 / 亲密" style="max-width:200px" />
+      <datalist id="moodVocab">
+        <option value="愉悦">大类·开心、安心、满足、期待、感动</option>
+        <option value="亲密">大类·喜欢、爱意、想念、亲近</option>
+        <option value="失落">大类·难过、委屈、失望、孤独</option>
+        <option value="对抗">大类·生气、愤怒、烦躁</option>
+        <option value="不安">大类·害怕、担心、紧张、不安</option>
+        <option value="占有">大类·吃醋、嫉妒</option>
+        <option value="渴望">大类·想要、渴望</option>
+        <option value="排斥">大类·讨厌、厌烦</option>
+      </datalist>
       <button id="moodBrowseBtn">看心情（空=全部）</button>
     </div>
     <div id="memResults"></div>

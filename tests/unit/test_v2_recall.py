@@ -121,7 +121,7 @@ class TestForbiddenProbes:
 
     def test_mood_text_only_probe_search07(self, actors):
         m = hold_v2(actors, text="普通正文", mood={"text": "惘湎心情词",
-                                                    "tags": ["平静"]})
+                                                    "tags": ["安心"]})
         assert m["memory_id"] not in hit_ids(recall(actors, "惘湎"))
 
     def test_our_words_only_probe_search08(self, actors):
