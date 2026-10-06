@@ -213,8 +213,8 @@ class TestByEmotionWhose:
 
     def test_whose_param_no_sql_error(self, actors):
         _hold(actors, "心情查询正文",
-              mood={"text": "安心", "tags": ["愉悦"]})
-        out = listing.by_emotion("愉悦", whose="jiaming")
+              mood={"text": "开心", "tags": ["开心"]})
+        out = listing.by_emotion("开心", whose="jiaming")
         assert isinstance(out["items"], list), \
             "whose 参数不得触发 no such column（NP6）"
         assert out["items"], "有心情标签的桶应命中"
