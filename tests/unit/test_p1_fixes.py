@@ -84,6 +84,7 @@ class TestB02CrashWindow:
     ARGS = {"text": "崩溃后重试", "original_title": "崩溃重试",
             "memory_date": "2026-01-01",
             "date_confidence": "exact", "raw_pending": False,
+            "creation_mode": "retrospective",  # F-J-22：公开面显式声明
             "categories": ["daily"]}
 
     def _seed_running(self, key, age_seconds):

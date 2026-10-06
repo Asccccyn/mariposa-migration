@@ -36,6 +36,7 @@ class TestSecurity:
         payload = {"arguments": {"text": "<img src=x onerror=alert(1)>药水",
                                  "original_title": "XSS 载荷桶",
                                  "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False,
+                                 "creation_mode": "retrospective",  # F-J-22
                                  "categories": ["daily"]}}
         r = c.post("/api/capability/memory.hold", json=payload,
                    headers=auth("jiaming"))
@@ -69,7 +70,9 @@ class TestSecurity:
     def test_cross_principal_idempotency_isolated(self, actors):
         """幂等键按 (principal, capability, key) 隔离：不同主体同 key 各自生效。"""
         args = {"text": "幂等隔离测试", "original_title": "幂等隔离",
-                "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False, "categories": ["daily"]}
+                "memory_date": "2026-06-01", "date_confidence": "exact", "raw_pending": False,
+                "creation_mode": "retrospective",  # F-J-22
+                "categories": ["daily"]}
         a = registry.invoke(actors["jiaming"], "memory.hold", args, "same-key")
         b = registry.invoke(actors["qiaosheng"], "memory.hold", args, "same-key")
         ida, idb = a["data"]["memory_id"], b["data"]["memory_id"]

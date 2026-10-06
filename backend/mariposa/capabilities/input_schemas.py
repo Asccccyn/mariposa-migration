@@ -24,6 +24,11 @@ _CACHE: dict | None = None
 
 
 def load_schemas() -> dict:
+    """历史 schema 读取器（execution_pack v1.1 考古/迁移核对/文档用途）。
+
+    ⚠️ 裁定（2026-10-06）：**不得参与 runtime validation**——公开校验唯一
+    正本=V2_INPUT_SCHEMAS（schema_for 只认它）。本函数仅服务考古比对。
+    """
     global _CACHE
     if _CACHE is None:
         candidates = [
@@ -616,9 +621,30 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                         # 校验兜底）
                                         "pattern": "^[A-Za-z0-9_-]{8,128}$"}},
     },
+    "memory.get": {
+        # 按现行 handler 合同（registry._get：仅 memory_id——version 不是
+        # 公开参数；旧 execution_pack schema 的 filters/mode 形状是 9 月口径）
+        "type": "object", "required": ["memory_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.search": {
+        # 按现行 handler 合同（registry._search：query+limit；结构化筛选走
+        # memory.recall 的 filters，不是本入口）
+        "type": "object", "required": ["query"],
+        "additionalProperties": False,
+        "properties": {"query": {"type": "string", "minLength": 1,
+                                  "maxLength": 2000},
+                       "limit": {"type": "integer", "minimum": 1,
+                                  "maximum": 200}},
+    },
     "memory.hold": {
+        # F-J-22（她批准 2026-10-06）：creation_mode 公开面显式必填——
+        # 当下/补记由调用方声明，服务端不猜；D1 当天自动日期保留
+        # （显式 contemporaneous 且未给日期时同事务补 held_at 上海日）
         "type": "object",
-        "required": ["text", "original_title", "categories"],
+        "required": ["text", "original_title",
+                     "categories", "creation_mode"],
         "additionalProperties": False,
         "properties": {
             "text": {"type": "string", "minLength": 1},
@@ -747,7 +773,18 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                             "properties": {
                                 "speaker": {"type": "string",
                                              "enum": ["jiaming", "qiaosheng"]},
-                                "text": {"type": "string", "minLength": 1}}}}},
+                                "text": {"type": "string", "minLength": 1},
+                                # F-J-24（她批准 2026-10-06）：开放事后追加的
+                                # 两字段——服务端 provenance 校验不放松
+                                # （source_msg: 必须解析到已发布消息；概括
+                                # 不得标 verbatim）
+                                "expression_kind": {"type": "string",
+                                                     "enum": ["verbatim",
+                                                              "paraphrase",
+                                                              "unspecified"]},
+                                "source_ref": {"anyOf": [
+                                    {"type": "string"},
+                                    {"type": "null"}]}}}}},
     },
     "memory.our_words.list": {
         "type": "object", "required": ["memory_id"], "additionalProperties": False,
@@ -1020,9 +1057,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
 
 
 def schema_for(capability: str) -> dict | None:
-    if capability in V2_INPUT_SCHEMAS:
-        return V2_INPUT_SCHEMAS[capability]
-    return load_schemas().get(capability)
+    # 裁定（2026-10-06 她/林石见批准）：V2_INPUT_SCHEMAS 是公开输入校验的
+    # **唯一运行时正本**——不再回退历史 execution_pack v1.1 schema（历史合同
+    # 绝不能重新成为当前运行时真源）。load_schemas() 仅存考古用途。
+    return V2_INPUT_SCHEMAS.get(capability)
 
 
 def validate(capability: str, arguments: dict) -> None:

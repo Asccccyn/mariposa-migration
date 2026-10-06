@@ -84,6 +84,7 @@ def test_full_http_flow(c):
     r = call(c, "jiaming", "memory.hold", {
         "text": "海边周末计划", "original_title": "海边周末",
         "memory_date": "2026-03-01", "date_confidence": "exact",
+        "creation_mode": "retrospective",  # F-J-22
         "categories": ["date"]})
     mem_id = r.json()["data"]["memory_id"]
     r = call(c, "jiaming", "source.binding.bind", {

@@ -87,6 +87,8 @@ def _hold_args(seeded, op="hold-1", specs=(0, 1), **extra):
     args = {"text": "今晚的约定", "categories": ["daily"],
             "original_title": "今晚的约定",
             "memory_date": "2026-10-05", "date_confidence": "exact",
+            # F-J-22（2026-10-06）：公开面显式声明当下/补记
+            "creation_mode": "retrospective",
             "operation_id": op, "source_selections": [sel]}
     args.update(extra)
     return args
@@ -172,7 +174,8 @@ class TestAtomicHold:
         jiaming = seeded["actors"]["jiaming"]
         r = registry.invoke(jiaming, "memory.hold", {
             "text": "手工记忆", "original_title": "手工记忆",
-            "categories": ["sweet"]}, None)["data"]
+            "categories": ["sweet"],
+            "creation_mode": "contemporaneous"}, None)["data"]
         assert "operation_id" not in r or r.get("operation_id") is None
         with db.formal() as conn:
             assert conn.execute(
@@ -183,7 +186,9 @@ class TestAtomicHold:
         jiaming = seeded["actors"]["jiaming"]
         # op-only hold（无绑定）——删除门不受新绑定关系阻挡
         args = {"text": "无来源记忆", "original_title": "无来源记忆",
-                "categories": ["daily"], "operation_id": "hold-nd"}
+                "categories": ["daily"],
+                "creation_mode": "contemporaneous",  # F-J-22：显式声明
+                "operation_id": "hold-nd"}
         r = registry.invoke(jiaming, "memory.hold", args, None)["data"]
         registry.invoke(jiaming, "memory.delete",
                         {"memory_id": r["memory_id"],
