@@ -129,3 +129,4 @@ class TestAutoDate:
         r = row(out["memory_id"])
         assert r["memory_date"] == "2026-10-08", "上海业务日（非 UTC 日）"
         assert r["held_at"] == utc_next_day, "held_at 原样"
+
