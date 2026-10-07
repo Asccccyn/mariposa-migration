@@ -244,7 +244,9 @@ def _register() -> dict[str, Capability]:
         description="删除申请列表")
     add("memory.tags.add", _tags_add, _owners(), True,
         description="加标签（情绪标签 whose 必填）")
-    add("episode.apply", _episode_apply, {"jiaming"}, True,
+    # R09（复审 2026-10-07，她裁定）：事件改类动作对 qiaosheng 开放
+    # （start=写仍仅 jiaming——动作级门在 episodes/service._authorize）
+    add("episode.apply", _episode_apply, {"jiaming", "qiaosheng"}, True,
         description="语义事件动作（start/continue/pause/close/correct）")
     add("episode.get", _episode_get, {"jiaming", "qiaosheng"}, False,
         description="按 ID 读取事件当前状态与证据引用")

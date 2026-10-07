@@ -143,6 +143,8 @@ TOKENS = {"qiaosheng": "tok-q", "jiaming": "tok-j", "worker": "tok-w"}
 
 FORMAL_TABLES = [
     # 子表在前，父表在后
+    "episode_operations", "episode_scope_grants",
+    "semantic_episodes",
     "i_revision_memory_relations", "i_item_revisions", "i_items",
     "i_suggestions", "i_versions", "i_documents",
     # 2026-10-05 桶编号持久计数（测试隔离：计数随库清零回 0001 起步；
