@@ -404,20 +404,29 @@ def _ingest_one(conn, principal, grant, batch_id: str, conv_id: str,
     msg_pid = provider_message_id_of(origin_instance, origin_conv, omid, rev)
     msg_row_id = f"sm_{_uuid.uuid4().hex[:16]}"
     display_t = _display_time(m)
-    conn.execute(
-        "INSERT INTO source_messages(id, conversation_id, provider,"
-        " provider_conversation_id, provider_message_id, id_synthetic,"
-        " parent_provider_message_id, raw_sender, normalized_sender,"
-        " speaker, created_at, updated_at, occurred_date, text,"
-        " content_json, attachments, has_thinking, has_tool_content,"
-        " sequence, import_batch_id, published, content_hash)"
-        " VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,0,0,?,?,1,?)",
-        (msg_row_id, conv_id, PROVIDER, conv_pid, msg_pid, 0, parent_pid,
-         normalized_sender, speaker, display_t, display_t,
-         _occurred_date(m), m["text"],
-         json.dumps({"origin_message_id": omid, "revision": rev,
-                     "published_kind": m["published_kind"],
-                     "occurred_at": m["occurred_at"],
+    # 跨流去重（episode 上线 2026-10-07）：同一消息已在其他 stream 入库
+    # → 不再 INSERT source_messages（UNIQUE 冲突），只补本流 revision 引用
+    _cross = conn.execute(
+        "SELECT id FROM source_messages WHERE provider=? AND"
+        " provider_message_id=?",
+        (PROVIDER, msg_pid)).fetchone()
+    if _cross is not None:
+        msg_row_id = _cross["id"]
+    else:
+        conn.execute(
+            "INSERT INTO source_messages(id, conversation_id, provider,"
+            " provider_conversation_id, provider_message_id, id_synthetic,"
+            " parent_provider_message_id, raw_sender, normalized_sender,"
+            " speaker, created_at, updated_at, occurred_date, text,"
+            " content_json, attachments, has_thinking, has_tool_content,"
+            " sequence, import_batch_id, published, content_hash)"
+            " VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,0,0,?,?,1,?)",
+            (msg_row_id, conv_id, PROVIDER, conv_pid, msg_pid, 0, parent_pid,
+             normalized_sender, speaker, display_t, display_t,
+             _occurred_date(m), m["text"],
+             json.dumps({"origin_message_id": omid, "revision": rev,
+                         "published_kind": m["published_kind"],
+                         "occurred_at": m["occurred_at"],
                      "received_at": m["received_at"],
                      "published_at": m["published_at"],
                      "sender": m["sender"]},
@@ -437,16 +446,25 @@ def _ingest_one(conn, principal, grant, batch_id: str, conv_id: str,
             (prior["source_message_id"],))
     if m["text"]:
         text_norm = projection.normalize_search_text(m["text"])
-        conn.execute(
-            "INSERT INTO source_search_docs(message_id,"
-            " provider_message_id, text_norm, text_hash,"
-            " projection_version, built_at) VALUES(?,?,?,?,?,?)",
-            (msg_row_id, msg_pid, text_norm,
-             hashlib.sha256(m["text"].encode()).hexdigest(),
-             config.SOURCE_PROJECTION_VERSION, _now()))
-        conn.execute(
-            "INSERT INTO source_fts(message_id, text_norm) VALUES(?,?)",
-            (msg_row_id, text_norm))
+        # 跨流去重：已有检索投影不重复 INSERT（同消息已在其他流建过索引）
+        _sd = conn.execute(
+            "SELECT 1 FROM source_search_docs WHERE message_id=?",
+            (msg_row_id,)).fetchone()
+        if _sd is None:
+            conn.execute(
+                "INSERT INTO source_search_docs(message_id,"
+                " provider_message_id, text_norm, text_hash,"
+                " projection_version, built_at) VALUES(?,?,?,?,?,?)",
+                (msg_row_id, msg_pid, text_norm,
+                 hashlib.sha256(m["text"].encode()).hexdigest(),
+                 config.SOURCE_PROJECTION_VERSION, _now()))
+        _fts = conn.execute(
+            "SELECT 1 FROM source_fts WHERE message_id=?",
+            (msg_row_id,)).fetchone()
+        if _fts is None:
+            conn.execute(
+                "INSERT INTO source_fts(message_id, text_norm)"
+                " VALUES(?,?)", (msg_row_id, text_norm))
     conn.execute(
         "INSERT INTO source_live_revisions(stream_id, origin_message_id,"
         " revision, source_conversation_id, source_message_id,"
