@@ -37,7 +37,10 @@ from . import archive
 PROVIDER = "estomago"
 PARSER_VERSION = "source_live_v1"
 #: 允许的发布类型（首版收口：普通正式消息；控制事件/草稿不入本投影）
-PUBLISHED_KINDS = ("chat_message",)
+# D5（她批 2026-10-06 扩展归档合同）：sticker/voice 消息按各自
+# published_kind 入库（转写文本与资产分存由 estómago 侧提供；发布门禁/
+# 检索投影/绑定链对全部 kind 一致生效）
+PUBLISHED_KINDS = ("chat_message", "sticker_message", "voice_message")
 
 _SENDER_MAP = {"user": ("human", "qiaosheng"),
                "assistant": ("assistant", "jiaming")}
