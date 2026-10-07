@@ -343,3 +343,35 @@ class TestFJ20Placeholder:
                     encoding="utf-8")
         assert "亲密" not in html.split("browseMood")[1].split("\n")[0], \
             "placeholder 不应引导已废子心情词（输入必被拒）"
+
+
+class TestD5PublishedKinds:
+    """D5（她批 2026-10-06）：贴纸/语音消息扩展归档合同。"""
+
+    def test_schema_accepts_new_kinds(self):
+        from mariposa.capabilities import input_schemas as sc
+        for k in ("chat_message", "sticker_message", "voice_message"):
+            sc.validate("source.ingest", {
+                "operation_id": f"op-{k}", "stream_id": "s",
+                "origin_instance": "estomago",
+                "origin_conversation_id": "primary",
+                "messages": [{
+                    "origin_message_id": f"m-{k}", "revision": 1,
+                    "conversation_sequence": 1, "sender": "user",
+                    "published_kind": k, "text": "贴纸/语音占位文本",
+                    "content_hash": "a" * 64}]})
+
+    def test_unknown_kind_still_rejected(self):
+        from mariposa.capabilities import input_schemas as sc
+        from mariposa.errors import Forbidden
+        import pytest as _pt
+        with _pt.raises(Forbidden):
+            sc.validate("source.ingest", {
+                "operation_id": "op-x", "stream_id": "s",
+                "origin_instance": "estomago",
+                "origin_conversation_id": "primary",
+                "messages": [{
+                    "origin_message_id": "m-x", "revision": 1,
+                    "conversation_sequence": 1, "sender": "user",
+                    "published_kind": "system_event", "text": "x",
+                    "content_hash": "a" * 64}]})
