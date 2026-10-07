@@ -48,7 +48,8 @@ ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab",
              "bootstrap.get", "bootstrap.next",
              "memory.recall.start", "memory.recall.refine",
              "memory.recall.status", "memory.recall.accept",
-             "memory.recall.reject"]
+             "memory.recall.reject",
+             "episode.apply", "episode.get", "episode.list"]
 ENTRY_SOURCE = "estomago_builtin"
 
 
