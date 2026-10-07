@@ -199,3 +199,22 @@ B3 批之后的 maripoga 侧返修提交（既有合同→本次实现修正，�
 | 167086d | B3 补：迁移工具 categories 全链打通（F-J-23 完整版——dry_run 从 frontmatter 携带分类；全量回归曾抓出 dry_run 不产出 categories 致 apply 全拒的缺口） |
 
 返修后全量：unit 1014+1skip / integration 41+新增 / acceptance 67（分批前台复跑）。estómago 侧批次见其 README 索引（B1–B5）。跨仓真实双端验证=审计包 probes/b1（R01 正例经真实 HostToolExecutor→真实 mariposa 全链；R02 旧错误形状仍拒）。
+
+
+---
+
+# 追加：episode+终批+生产激活（2026-10-07，GLM；当前基线 `2d1b470`）
+
+| 提交 | 内容 |
+|---|---|
+| 92f21d2 | D2 前置修复：estomago_builtin 合法 entry |
+| 2f80f86 | D5：published_kind 扩 sticker/voice |
+| ade098b | F-J-30a：Jev 缓存隔离负例 |
+| 6390fa4 | **episode 落地**（她批"做吧"）：表+五动作+11 回归 |
+| 706417a | contracts 同步 episode 三能力 |
+| e4c6184 | 发币白名单扩至 13 能力 |
+| 2d1b470 | **跨流去重**：换 stream 后旧消息重发 UNIQUE 冲突修复 |
+
+**生产状态**（2026-10-07 晨）：mariposa pid 28421+（episode+跨流去重已载）；Judge typesafe_jev 已配已通（FOUND+正文交付）；estómago LaunchAgent 常驻（epl-3 stream 归档链 14 条全 acked）；四链全通：**记(hold)→存(归档)→忆(bootstrap B 点)→查(recall+judge)**+episode 事件跟踪。
+
+**数据状态**（2026-10-07）：生产库有 1 条合成记忆（天台看月亮/00001）+ episode 首验 1 条；15 条 source_messages（estómago 归档）。无真实用户数据。
