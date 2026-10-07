@@ -233,11 +233,11 @@ class TestReplayGuardN03N04:
                                 "expression_kind": "verbatim"}])
         r1 = self._start_words(actors, "op-n04-w1")
         inner = r1["data"]
-        first = inner["data"]["candidates"]
+        first = inner["candidates"]
         assert first, "前置：words 首轮应有候选"
         r2 = self._start_words(actors, "op-n04-w1")
         assert r2["data"].get("idempotent_replay") is True
-        replayed = r2["data"]["data"]["candidates"]
+        replayed = r2["data"]["candidates"]
         assert len(replayed) == len(first), \
             f"N04：合法 words 重试丢卡 {len(first)} -> {len(replayed)}"
 
@@ -330,7 +330,7 @@ class TestReplayGuardN03N04:
                                         "channels": ["event"],
                                         "lexical_terms": ["搬家"]},
                          "operation_id": "op-hdr-1"}, None)
-        sid = r1["data"]["data"]["recall_session_id"]
+        sid = r1["data"]["recall_session_id"]
         # 同计划 refine：指纹不变 → revision 前进后旧包仍可合法重放，
         # 且头部以当前 session 现值刷新（N03 原意）
         reg.invoke(actors["jiaming"], "memory.recall.refine",
@@ -345,7 +345,7 @@ class TestReplayGuardN03N04:
                                         "lexical_terms": ["搬家"]},
                          "operation_id": "op-hdr-1"}, None)
         assert r3["data"].get("idempotent_replay") is True
-        replayed = r3["data"]["data"]
+        replayed = r3["data"]
         assert replayed["revision"] == 2, \
             f"N03：重放包仍宣称旧 revision：{replayed['revision']}"
         assert replayed["budget"]["rounds_used"] == 2
@@ -428,37 +428,37 @@ class TestP101ActionOperationAtomicity:
     def test_close_retry_replays_first_result(self, actors):
         self._hold(actors, "关闭幂等场景搬家正文")
         p = self._start(actors)
-        sid = p["data"]["data"]["recall_session_id"]
+        sid = p["data"]["recall_session_id"]
         args = {"session_id": sid, "outcome": "cancelled",
                 "operation_id": "idem-p1-close"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.close",
                              args, None)
-        assert r1["data"]["data"]["status"] == "CANCELLED"
+        assert r1["data"]["status"] == "CANCELLED"
         # 响应丢失重试：重放首次结果，不再 INVALID_STATE
         r2 = registry.invoke(actors["jiaming"], "memory.recall.close",
                              args, "idem-p1-close")
         assert r2["data"].get("idempotent_replay") is True
-        assert r2["data"]["data"]["status"] == "CANCELLED"
+        assert r2["data"]["status"] == "CANCELLED"
 
     def test_accept_close_retry_replays(self, actors):
         self._hold(actors, "接受幂等场景搬家正文")
         p = self._start(actors)
-        sid = p["data"]["data"]["recall_session_id"]
-        cand = p["data"]["data"]["candidates"][0]["candidate_ref"]
+        sid = p["data"]["recall_session_id"]
+        cand = p["data"]["candidates"][0]["candidate_ref"]
         args = {"session_id": sid, "candidate_ref": cand, "close": True,
                 "operation_id": "idem-p1-accept"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.accept",
                              args, None)
-        assert r1["data"]["data"]["status"] == "RESOLVED"
+        assert r1["data"]["status"] == "RESOLVED"
         r2 = registry.invoke(actors["jiaming"], "memory.recall.accept",
                              args, "idem-p1-accept")
         assert r2["data"].get("idempotent_replay") is True
-        assert r2["data"]["data"]["status"] == "RESOLVED"
+        assert r2["data"]["status"] == "RESOLVED"
 
     def test_no_budget_refine_retry_replays(self, actors):
         self._hold(actors, "无余额幂等场景搬家正文")
         p = self._start(actors)
-        sid = p["data"]["data"]["recall_session_id"]
+        sid = p["data"]["recall_session_id"]
         base = {"session_id": sid,
                 "query_plan": {"original_request": "再查",
                                "channels": ["event"],
@@ -470,26 +470,26 @@ class TestP101ActionOperationAtomicity:
         args = {**base, "operation_id": "idem-p1-nb"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.refine",
                              args, None)
-        assert r1["data"]["data"]["status"] == "BUDGET_EXHAUSTED"
-        rev_after_first = r1["data"]["data"]["revision"]
+        assert r1["data"]["status"] == "BUDGET_EXHAUSTED"
+        rev_after_first = r1["data"]["revision"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
                              args, None)
         assert r2["data"].get("idempotent_replay") is True, \
             "无余额 refine 重试应重放首次结果"
-        assert r2["data"]["data"]["revision"] == rev_after_first, \
+        assert r2["data"]["revision"] == rev_after_first, \
             "重试不得再次推进 revision"
 
     def test_reject_retry_replays(self, actors):
         self._hold(actors, "拒绝幂等场景搬家正文")
         p = self._start(actors)
-        sid = p["data"]["data"]["recall_session_id"]
-        cand = p["data"]["data"]["candidates"][0]
+        sid = p["data"]["recall_session_id"]
+        cand = p["data"]["candidates"][0]
         args = {"session_id": sid, "candidate_ref": cand["candidate_ref"],
                 "reject_target": "candidate",
                 "operation_id": "idem-p1-reject"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.reject",
                              args, None)
-        assert r1["data"]["data"]["rejected"]["candidate_ref"] == \
+        assert r1["data"]["rejected"]["candidate_ref"] == \
             cand["candidate_ref"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.reject",
                              args, "idem-p1-reject")
@@ -500,7 +500,7 @@ class TestP101ActionOperationAtomicity:
         """事务内 operation 记录失败 → 业务状态一并回滚（原子性）。"""
         self._hold(actors, "崩溃原子场景搬家正文")
         p = self._start(actors)
-        sid = p["data"]["data"]["recall_session_id"]
+        sid = p["data"]["recall_session_id"]
 
         def boom(conn, *a, **kw):
             raise RuntimeError("operation record write failed")
@@ -519,7 +519,7 @@ class TestP101ActionOperationAtomicity:
         r = registry.invoke(actors["jiaming"], "memory.recall.close",
                             {"session_id": sid, "outcome": "cancelled",
                              "operation_id": "idem-p1-crash"}, None)
-        assert r["data"]["data"]["status"] == "CANCELLED"
+        assert r["data"]["status"] == "CANCELLED"
 
 
 class TestP103LeaseFencing:
@@ -659,7 +659,7 @@ class TestP102DenseWiring:
             "semantic_query": "极光", "lexical_terms": ["zzz不存在的词"]},
             "operation_id": "op-dense-1"}
         r1 = reg.invoke(actors["jiaming"], "memory.recall.start", args, None)
-        cards = [c for c in r1["data"]["data"]["candidates"]
+        cards = [c for c in r1["data"]["candidates"]
                  if c.get("memory_id") == mid]
         assert cards, "前置：dense 应召回正文命中的记忆"
         card = cards[0]
@@ -673,7 +673,7 @@ class TestP102DenseWiring:
         # 同 operation 重放：dense 卡不被 guard 删除
         r2 = reg.invoke(actors["jiaming"], "memory.recall.start", args, None)
         assert r2["data"].get("idempotent_replay") is True
-        replayed = [c for c in r2["data"]["data"]["candidates"]
+        replayed = [c for c in r2["data"]["candidates"]
                     if c.get("memory_id") == mid]
         assert replayed, "P1-02：dense 卡被自己的 replay guard 误删"
 

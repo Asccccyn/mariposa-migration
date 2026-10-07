@@ -131,7 +131,7 @@ class TestCommitTimeRevalidation:
         session 复活为 ACTIVE/revision2——现在提交时重验拒绝。"""
         _seed_word(actors["jiaming"])
         r1 = _start(actors)
-        sid = r1["data"]["data"]["recall_session_id"]
+        sid = r1["data"]["recall_session_id"]
 
         orig = recall_service._run_round_compute
 
@@ -169,7 +169,7 @@ class TestCommitTimeRevalidation:
         现在最终写锁内重读行重跑状态机，拒绝且 CANCELLED 保留。"""
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-f03-acc")
-        sid = r1["data"]["data"]["recall_session_id"]
+        sid = r1["data"]["recall_session_id"]
         original = recall_service.require_owned_session
         armed = [True]
 
@@ -195,8 +195,8 @@ class TestCommitTimeRevalidation:
         session 上不再落 rejected 标记。"""
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-f03-rej")
-        sid = r1["data"]["data"]["recall_session_id"]
-        cand = r1["data"]["data"]["candidates"][0]["candidate_ref"]
+        sid = r1["data"]["recall_session_id"]
+        cand = r1["data"]["candidates"][0]["candidate_ref"]
         original = recall_service.require_owned_session
         armed = [True]
 
@@ -224,7 +224,7 @@ class TestCommitTimeRevalidation:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
 
             orig_raw = pipeline.raw_deep_search
@@ -273,10 +273,10 @@ class TestRawToggleLifecycle:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid)
-            assert r2["data"]["data"]["round"] == 2
+            assert r2["data"]["round"] == 2
             s = store.get_session(sid)
             with db.recall_runtime() as conn:
                 token = store.issue_raw_continuation(
@@ -306,10 +306,10 @@ class TestRawToggleLifecycle:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid)
-            saved = r2["data"]["data"]
+            saved = r2["data"]
             assert saved.get("round") == 2
             old_flag = cfg.RECALL_RAW_FALLBACK_ENABLED
             cfg.RECALL_RAW_FALLBACK_ENABLED = False
@@ -328,7 +328,7 @@ class TestRawToggleLifecycle:
         from mariposa.errors import StaleOperation
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-f02-words")
-        saved = r1["data"]["data"]
+        saved = r1["data"]
         assert saved.get("intent") == "find_words"
         assert saved["candidates"], "前置：开启时至少一张 words 卡"
         old_flag = cfg.RECALL_WORDS_ENABLED
@@ -347,7 +347,7 @@ class TestRawToggleLifecycle:
         _hold(actors["jiaming"], "崧蓝染色的事件正文")
         r1 = _start(actors, terms=("崧蓝",), op="op-f02-mix",
                     channels=["event", "words"])
-        saved = r1["data"]["data"]
+        saved = r1["data"]
         channels_seen = {c.get("channel") for c in saved["candidates"]}
         assert "words" in channels_seen, "前置：混合包里有 words 卡"
         old_flag = cfg.RECALL_WORDS_ENABLED
@@ -399,7 +399,7 @@ class TestRawLease:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             s = store.get_session(sid)
             held = recall_service._acquire_raw_lease(
@@ -415,7 +415,7 @@ class TestRawLease:
                     sid, s["current_revision"], s["current_burst"], held)
             # 租约释放后正常通过
             r2 = _round2(actors, sid, op="op-cb-r2b")
-            assert r2["data"]["data"]["round"] == 2
+            assert r2["data"]["round"] == 2
             assert calls["n"] >= 1
         finally:
             cfg.RECALL_JUDGE_PROVIDER = old
@@ -453,7 +453,7 @@ class TestJudgeProofValidity:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             with db.recall_runtime() as conn:
                 receipt = store.read_round1_receipt(conn, sid, 1)
             assert receipt is not None
@@ -527,10 +527,10 @@ class TestJudgeProofValidity:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid)
-            cov = r2["data"]["data"]["coverage"]
+            cov = r2["data"]["coverage"]
             assert cov.get("judge") == "unavailable", \
                 "重复 ref 的判断集合不得签 evaluated"
         finally:
@@ -550,7 +550,7 @@ class TestWordsBrowseCoverage:
         _hold(actors["jiaming"], "二十五句话语的正文", our_words=words)
         r1 = _start(actors, terms=(), op="op-cb013",
                     exact_phrases=["崧蓝染色"])
-        data = r1["data"]["data"]
+        data = r1["data"]
         cov = data["coverage"]
         assert cov.get("words_lexical") == "partial_topk_window", \
             "截断浏览窗口必须如实报 partial"
@@ -573,7 +573,7 @@ class TestReplayGuards:
         from mariposa.errors import StaleOperation
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-cb014a")
-        saved = r1["data"]["data"]
+        saved = r1["data"]
         sid = saved["recall_session_id"]
         assert saved["candidates"] or saved.get("coverage"), "前置"
         registry.invoke(actors["jiaming"], "memory.recall.refine", {
@@ -591,7 +591,7 @@ class TestReplayGuards:
         """正路径：plan 未变的重放不被指纹误伤。"""
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-cb014b")
-        saved = r1["data"]["data"]
+        saved = r1["data"]
         out = recall_service.revalidate_replayed("memory.recall.start",
                                                  saved, None)
         assert out is not None
@@ -602,10 +602,10 @@ class TestReplayGuards:
         try:
             _seed_word(actors["jiaming"])
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid, op="op-cb014r")
-            saved = r2["data"]["data"]
+            saved = r2["data"]
             refs = [c["resource_ref"] for c in saved["candidates"]]
             assert any(r.startswith("source_msg:") for r in refs), \
                 "前置：round2 交付了 source 卡"
@@ -639,12 +639,12 @@ class TestExactPhraseConstraint:
             _seed_word(actors["jiaming"])
             r1 = _start(actors, terms=(), op="op-cb015",
                         exact_phrases=["UNMATCHABLE_PHRASE"])
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source(text="完全无关的日常原文")
             # exact-only Round1 零交付 → 升级理由是 NO_DELIVERABLE_CANDIDATE
             r2 = _round2(actors, sid, reason="NO_DELIVERABLE_CANDIDATE",
                          op="op-cb015r")
-            packet = r2["data"]["data"]
+            packet = r2["data"]
             assert packet["candidates"] == [], \
                 "exact-only 查询不得交付不满足逐字约束的原文"
         finally:

@@ -59,7 +59,7 @@ class TestForbiddenSourcesNeverRecall:
                                     "original_request": probe,
                                     "channels": ["event"],
                                     "lexical_terms": [probe]}}, None)
-            cands = r["data"]["data"]["candidates"]
+            cands = r["data"]["candidates"]
             assert all(c.get("memory_id") != mid for c in cands), \
                 f"recall 主链命中禁检来源：{probe}"
 
@@ -88,7 +88,7 @@ class TestForbiddenSourcesNeverRecall:
                                 "channels": ["event"],
                                 "semantic_query": "雾隐",
                                 "lexical_terms": ["zzz不存在"]}}, None)
-        cands = r["data"]["data"]["candidates"]
+        cands = r["data"]["candidates"]
         assert all(c.get("memory_id") != mid for c in cands), \
             "dense 经禁检来源（meaning）召回"
 

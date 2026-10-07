@@ -64,7 +64,7 @@ class TestMatchModeAll:
                 "explicit_constraints": {
                     "categories": ["daily", "sweet"],
                     "category_match": "all"}},
-            "operation_id": "cb040-all"}, None)["data"]["data"]
+            "operation_id": "cb040-all"}, None)["data"]
         assert out["candidates"] == [], \
             "category_match=all 的交集条件必须实际执行（反例：曾按 any 交付）"
 
@@ -78,7 +78,7 @@ class TestMatchModeAll:
                 "explicit_constraints": {
                     "categories": ["sweet"],
                     "category_match": "any"}},
-            "operation_id": "cb040-any"}, None)["data"]["data"]
+            "operation_id": "cb040-any"}, None)["data"]
         assert out["candidates"] == [], "any 不误伤（sweet 不含 daily）"
 
 
@@ -120,7 +120,7 @@ class TestFindWordsTopLevelParams:
             "query": "原话",
             "exact_phrases": ["完全不存在的话"],
             "operation_id": "cb047-a"}, None)
-        data = out["data"]["data"] if out["data"].get("data") \
+        data = out["data"] if out["data"].get("data") \
             else out["data"]
         assert data["candidates"] == [], \
             "顶层 exact_phrases 必须进入统一 plan（不得静默丢弃）"
@@ -156,7 +156,7 @@ class TestNavigateScopeAndReject:
                            "lexical_terms": ["范围"],
                            "explicit_constraints": {
                                "categories": ["sweet"]}},
-            "operation_id": "cb041-s"}, None)["data"]["data"]
+            "operation_id": "cb041-s"}, None)["data"]
         sid = r1["recall_session_id"]
         anchor = r1["candidates"][0]["candidate_ref"] if r1[
             "candidates"] else None
@@ -164,7 +164,7 @@ class TestNavigateScopeAndReject:
         nav = registry.invoke(actors["jiaming"], "memory.recall.navigate", {
             "session_id": sid, "direction": "earlier",
             "anchor_candidate_ref": anchor,
-            "operation_id": "cb041-n"}, None)["data"]["data"]
+            "operation_id": "cb041-n"}, None)["data"]
         cats = []
         with db.formal() as conn:
             for c in nav.get("candidates", []):
@@ -190,7 +190,7 @@ class TestNavigateScopeAndReject:
             "query_plan": {"original_request": "拒绝",
                            "channels": ["words"],
                            "lexical_terms": ["拒绝"]},
-            "operation_id": "cb041w-s"}, None)["data"]["data"]
+            "operation_id": "cb041w-s"}, None)["data"]
         sid = r1["recall_session_id"]
         registry.invoke(actors["jiaming"], "memory.recall.reject", {
             "session_id": sid, "candidate_ref": f"our_word:{word_id}",
@@ -284,7 +284,7 @@ class TestOutputBudgetCarriers:
             "query_plan": {"original_request": "预算",
                            "channels": ["words"],
                            "lexical_terms": ["预算"]},
-            "operation_id": "cb042-a"}, None)["data"]["data"]
+            "operation_id": "cb042-a"}, None)["data"]
         blob = json.dumps(out, ensure_ascii=False).encode("utf-8")
         assert len(blob) <= 24576, \
             f"完整 packet 必须受字节预算终检：{len(blob)}"

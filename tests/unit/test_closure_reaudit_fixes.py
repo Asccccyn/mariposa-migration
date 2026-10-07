@@ -57,7 +57,7 @@ class TestP11SessionOwnerIsolation:
         """审计反例：周家明建 chat-A session，乔生持 id 不带 scope
         调 status——原先可读，现必须拒。"""
         r = _start_words(actors)
-        sid = r["data"]["data"]["recall_session_id"]
+        sid = r["data"]["recall_session_id"]
         # 不带 scope、跨主体
         with pytest.raises(Forbidden) as ei:
             registry.invoke(actors["qiaosheng"],
@@ -71,7 +71,7 @@ class TestP11SessionOwnerIsolation:
 
     def test_all_actions_guarded(self, actors):
         r = _start_words(actors)
-        sid = r["data"]["data"]["recall_session_id"]
+        sid = r["data"]["recall_session_id"]
         for cap, args in (
                 ("memory.recall.refine",
                  {"session_id": sid, "operation_id": "op-p11-refine",
@@ -142,7 +142,7 @@ class TestP13Round2ReasonFacts:
                                     "channels": ["event"],
                                     "lexical_terms": ["中秋", "约会"]},
                                  "operation_id": "op-p13a"}, None)
-            sid = r["data"]["data"]["recall_session_id"]
+            sid = r["data"]["recall_session_id"]
             for reason in ("EVIDENCE_INSUFFICIENT",
                            "SOURCE_DISAMBIGUATION_NEEDED"):
                 with pytest.raises(Forbidden) as ei:
@@ -162,7 +162,7 @@ class TestP13Round2ReasonFacts:
         try:
             _hold_word(actors["jiaming"], "复述：晚风吹过窗边")
             r = _start_words(actors)
-            sid = r["data"]["data"]["recall_session_id"]
+            sid = r["data"]["recall_session_id"]
             with db.recall_runtime() as conn:
                 receipt = store.read_round1_receipt(conn, sid, 1)
             facts = receipt["coverage"]["_first_round_facts"]
@@ -385,7 +385,7 @@ class TestP26ReplayKeepsSourceMsg:
         try:
             _hold_word(actors["jiaming"], "复述：晚风吹过窗边")
             r1 = _start_words(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             from mariposa.source import importer
             import json as _json
             import tempfile
@@ -407,8 +407,8 @@ class TestP26ReplayKeepsSourceMsg:
                                     "memory.recall.round2", a, None)
             second = registry.invoke(actors["jiaming"],
                                      "memory.recall.round2", a, None)
-            f1 = first["data"]["data"]["candidates"]
-            f2 = second["data"]["data"]["candidates"]
+            f1 = first["data"]["candidates"]
+            f2 = second["data"]["candidates"]
             assert second["data"].get("idempotent_replay") is True
             assert [c["resource_ref"] for c in f1] == \
                 [c["resource_ref"] for c in f2], \
@@ -475,7 +475,7 @@ class TestF05RegistryLevelRoleGate:
                     "original_request": "中秋",
                     "channels": ["event"],
                     "lexical_terms": ["中秋"]},
-                 "operation_id": "f05-reg-1"}, None)["data"]["data"]
+                 "operation_id": "f05-reg-1"}, None)["data"]
             for c in packet["candidates"]:
                 body_bits = json.dumps(c, ensure_ascii=False)
                 assert "山里修电路" not in body_bits, \

@@ -113,7 +113,7 @@ class TestAComputeFailureZeroTrace:
             f"检索失败留下了正式痕迹：{c}"
         monkeypatch.undo()
         packet = start_op(actors, op="op-a1")
-        assert packet["data"]["data"]["recall_session_id"]
+        assert packet["data"]["recall_session_id"]
         c = runtime_counts()
         assert c["sessions"] == 1 and c["rounds"] == 1 \
             and c["operations"] == 1
@@ -134,7 +134,7 @@ class TestAComputeFailureZeroTrace:
         assert c["sessions"] == 0 and c["rounds"] == 0 \
             and c["operations"] == 0, f"Jev 失败留下了正式痕迹：{c}"
         monkeypatch.undo()
-        assert start_op(actors, op="op-b1")["data"]["data"]["candidates"] \
+        assert start_op(actors, op="op-b1")["data"]["candidates"] \
             is not None
 
     def test_assembly_failure_after_jev_no_trace(self, actors,
@@ -186,7 +186,7 @@ class TestEIdempotentResubmit:
         r1 = start_op(actors, op="op-e1")
         r2 = start_op(actors, op="op-e1")
         assert r2["data"].get("idempotent_replay") is True
-        p1, p2 = r1["data"]["data"], r2["data"]["data"]
+        p1, p2 = r1["data"], r2["data"]
         assert p1["recall_session_id"] == p2["recall_session_id"]
         c = runtime_counts()
         assert c["sessions"] == 1 and c["rounds"] == 1 \
@@ -196,11 +196,11 @@ class TestEIdempotentResubmit:
         """I：COMMIT 已成功、响应丢失 → 重试读取已有结果。"""
         hold(actors)
         r1 = start_op(actors, op="op-i1")
-        sid = r1["data"]["data"]["recall_session_id"]
+        sid = r1["data"]["recall_session_id"]
         # 模拟客户端从未收到响应，再次提交同 operation_id
         r2 = start_op(actors, op="op-i1")
         assert r2["data"].get("idempotent_replay") is True
-        assert r2["data"]["data"]["recall_session_id"] == sid
+        assert r2["data"]["recall_session_id"] == sid
         c = runtime_counts()
         assert c["sessions"] == 1 and c["rounds"] == 1
 
@@ -217,8 +217,8 @@ class TestFConcurrentSameOperation:
         with ThreadPoolExecutor(max_workers=2) as ex:
             f1, f2 = ex.submit(run, 0), ex.submit(run, 1)
             r1, r2 = f1.result(timeout=30), f2.result(timeout=30)
-        sids = {r1["data"]["data"]["recall_session_id"],
-                r2["data"]["data"]["recall_session_id"]}
+        sids = {r1["data"]["recall_session_id"],
+                r2["data"]["recall_session_id"]}
         assert len(sids) == 1, "同 operation 并发产生了两个 session"
         replays = [bool(r1["data"].get("idempotent_replay")),
                    bool(r2["data"].get("idempotent_replay"))]
@@ -234,14 +234,14 @@ class TestGBudgetFinalCheckConcurrency:
         最终只有一个成为该轮，round 总数不突破上限。"""
         hold(actors)
         p = start_op(actors, op="op-g0")          # round 1
-        sid = p["data"]["data"]["recall_session_id"]
+        sid = p["data"]["recall_session_id"]
         r2 = registry.invoke(
             actors["jiaming"], "memory.recall.refine",
             {"session_id": sid,
              "query_plan": {"original_request": "二查", "channels": ["event"],
                             "lexical_terms": ["搬家"]},
              "operation_id": "op-g1"}, None)       # round 2
-        assert r2["data"]["data"]["revision"] == 2
+        assert r2["data"]["revision"] == 2
         # 两边都完成事务外计算后在最终事务前同步冲线，制造真实的
         # "计算都完成、写事务并发"场景（预算终检/CAS 串行化验证）
         from mariposa.recall import service as svc

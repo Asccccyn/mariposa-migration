@@ -89,8 +89,9 @@ def _project_bootstrap(out: dict) -> None:
 
 
 def _project_recall(out: dict) -> None:
-    # 包可能再包一层 {"data": packet}（runtime operation 形态）
-    target = out.get("data") if isinstance(out.get("data"), dict) else out
+    # R01（复审 2026-10-07）：recall 运行时出站已统一为裸 packet
+    # （run_operation 不再包 {"data": ...} 内层信封），无需双形状兼容。
+    target = out
     for k in _RECALL_PACKET_DROP:
         target.pop(k, None)
         out.pop(k, None)

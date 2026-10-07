@@ -130,8 +130,8 @@ class TestMcpDefaultCompact:
                               {"operation_id": "op-rc1",
                                "query": "晚饭"},
                               None, default_output_profile="compact_v1")
-        assert "query_fingerprint" not in out["data"]["data"]
-        assert "token_count" not in out["data"]["data"]
+        assert "query_fingerprint" not in out["data"]
+        assert "token_count" not in out["data"]
 
     def test_default_profile_silent_fallback_unsupported(self, actors):
         """R3：默认提升对不支持 compact 的能力静默回退 legacy
@@ -158,7 +158,7 @@ class TestMcpDefaultCompact:
                               {"operation_id": "op-rc2", "query": "晚饭",
                                "output_profile": "legacy"},
                               None, default_output_profile="compact_v1")
-        assert "query_fingerprint" in out["data"]["data"]
+        assert "query_fingerprint" in out["data"]
 
     def test_http_face_default_unchanged(self, actors):
         """R3：不传 default_output_profile（HTTP 面路径）默认 legacy
@@ -166,7 +166,7 @@ class TestMcpDefaultCompact:
         out = registry.invoke(actors["jiaming"], "memory.find_words",
                               {"operation_id": "op-rc3", "query": "晚饭"},
                               None)
-        assert "query_fingerprint" in out["data"]["data"]
+        assert "query_fingerprint" in out["data"]
 
 
 # ---------------------------------------------------------------- R4

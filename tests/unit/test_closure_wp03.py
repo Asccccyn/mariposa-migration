@@ -98,7 +98,7 @@ class TestScopeIsolation:
                                  "original_request": "风筝",
                                  "channels": ["event"],
                                  "lexical_terms": ["风筝"]}}, None)
-        c1 = [c["memory_id"] for c in r1["data"]["data"]["candidates"]]
+        c1 = [c["memory_id"] for c in r1["data"]["candidates"]]
         # 隐藏 b：a 仍应可检索，且不受 b 的 df 影响
         with db.formal() as conn:
             conn.execute("UPDATE memories SET visibility='hidden'"
@@ -108,7 +108,7 @@ class TestScopeIsolation:
                                  "original_request": "风筝",
                                  "channels": ["event"],
                                  "lexical_terms": ["风筝"]}}, None)
-        c2 = [c["memory_id"] for c in r2["data"]["data"]["candidates"]]
+        c2 = [c["memory_id"] for c in r2["data"]["candidates"]]
         assert a["memory_id"] in c2, "隐藏其他桶不影响可见桶命中"
         assert b["memory_id"] not in c2
         assert a["memory_id"] in c1
@@ -123,9 +123,9 @@ class TestScopeIsolation:
                                 "original_request": "星空",
                                 "channels": ["event"],
                                 "semantic_query": "夜空繁星"}}, None)
-        assert r["data"]["data"]["coverage"]["dense_event"] == "unavailable", \
+        assert r["data"]["coverage"]["dense_event"] == "unavailable", \
             "显式语义请求必须真实尝试 dense（此处 provider 关闭）"
-        assert not r["data"]["data"].get("lexical_terms")
+        assert not r["data"].get("lexical_terms")
 
 
 class TestCorpusGeneration:

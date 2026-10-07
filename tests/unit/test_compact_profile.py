@@ -119,7 +119,7 @@ class TestRecallCompact:
                                 "lexical_terms": ["召回瘦身"],
                                 "request_ref": "cp-cpt"},
                              "output_profile": "compact_v1"}, None)
-        cp = r["data"]["data"]
+        cp = r["data"]
         assert "query_fingerprint" not in cp
         assert "token_count" not in cp
         for k in ("lexical_scorer", "stage_filter", "event_pool"):
@@ -149,14 +149,14 @@ class TestRecallCompact:
                                "lexical_terms": ["切档不重做"],
                                "request_ref": "cp-switch"}}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             dict(plan), None)["data"]["data"]
+                             dict(plan), None)["data"]
         sid = r1["recall_session_id"]
         before = store.get_session(sid)
         # 同 request_ref 换 compact_v1：重放同一业务结果（不新建 session
         # 不重算——session 计数不变），只是出站投影不同
         r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {**plan, "output_profile": "compact_v1"},
-                             None)["data"]["data"]
+                             None)["data"]
         after = store.get_session(sid)
         assert r2["recall_session_id"] == sid
         assert (before["rounds_used"], before["bursts_used"]) == \

@@ -238,12 +238,12 @@ class Test5FindWords:
         a = {"query": "鹡鸰", "operation_id": "op-fw-core"}
         r1 = registry.invoke(actors["jiaming"], "memory.words.recall",
                              a, None)
-        first = r1["data"]["data"]
+        first = r1["data"]
         assert first["candidates"], "前置：专项跨阶段命中"
         r2 = registry.invoke(actors["jiaming"], "memory.words.recall",
                              a, None)
         assert r2["data"].get("idempotent_replay") is True
-        replayed = r2["data"]["data"]
+        replayed = r2["data"]
         assert len(replayed["candidates"]) == \
             len(first["candidates"]), \
             "专项 words 重放不得按 event phase 剔卡"
