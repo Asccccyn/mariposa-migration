@@ -274,7 +274,11 @@ def _register() -> dict[str, Capability]:
     # ===== 规格 v2.0：纠错 + 直删 + 反查路由（§5.4/§6.2/§7.1）=====
     add("memory.relations.correct", _rel_correct, _owners(), True,
         description="纠错桶间关系（binding_error；remove/replace_wrong_binding）")
-    add("i.item.relations.correct", _i_rel_correct, {"jiaming"}, True,
+    # 接线权（她 1007 裁定"relation 也复刻一份"）：i 层关系纠错对她开放
+    # ——连线是关系结构不是 i 正文，与"我不改 i"不冲突；记忆层
+    # memory.relations.link/correct 本就 _owners() 两人都有
+    add("i.item.relations.correct", _i_rel_correct,
+        {"jiaming", "qiaosheng"}, True,
         description="纠错 I 修订与桶的错误关系（不改 I 正文）")
     add("source.binding.correct", _source_bind_correct, _owners(), True,
         description="纠错原文区间绑定（remove/replace_wrong_binding）")

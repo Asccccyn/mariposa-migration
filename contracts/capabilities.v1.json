@@ -333,7 +333,8 @@
       "canonical_name": "i.item.relations.correct",
       "transport_name": "mariposa_i_item_relations_correct",
       "allowed_principals": [
-        "jiaming"
+        "jiaming",
+        "qiaosheng"
       ],
       "write": true,
       "idempotent": false,
