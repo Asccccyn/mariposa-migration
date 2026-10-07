@@ -1112,6 +1112,26 @@ CREATE TABLE IF NOT EXISTS bucket_id_counters(
 --    _drop_deleted_columns 按 pragma 形态分叉执行（编号迁移无法
 --    表达"列存在才删"；列已在基线 CREATE 中移除）
 """),
+(33, """
+-- ===== episode（她批 2026-10-07）：语义事件当前态表 =====
+-- 蓝图 §6.1 最小模型；短标签≤80 码点仅导航不参与检索；无叙事正文槽
+CREATE TABLE IF NOT EXISTS semantic_episodes(
+  episode_id TEXT PRIMARY KEY,
+  scope_id TEXT NOT NULL,
+  label TEXT NOT NULL CHECK(length(label) <= 80),
+  state TEXT NOT NULL CHECK(state IN ('OPEN','QUIESCENT','CLOSED')),
+  revision INTEGER NOT NULL CHECK(revision >= 1),
+  source_selections_json TEXT NOT NULL DEFAULT '[]',
+  terminal_source_ref TEXT,
+  decision_source_refs_json TEXT NOT NULL DEFAULT '[]',
+  last_reason_code TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_recorded_at TEXT
+);
+CREATE INDEX idx_episodes_scope ON semantic_episodes(scope_id, state, updated_at DESC);
+"""),
 ]
 
 

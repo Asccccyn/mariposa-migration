@@ -118,6 +118,51 @@ def _matches(spec: dict, value, root: dict) -> bool:
 
 #: v2 能力输入 schema（spec_v2 §12；与包内 v1.1 契约分层，schema_for 优先取此层）
 V2_INPUT_SCHEMAS: dict[str, dict] = {
+    # —— episode（她批 2026-10-07"做吧"）：蓝图 §6 三个能力 ——
+    "episode.apply": {
+        "type": "object",
+        "required": ["action", "scope_id", "reason_code"],
+        "additionalProperties": False,
+        "properties": {
+            "action": {"type": "string",
+                        "enum": ["start", "continue", "pause", "close",
+                                  "correct"]},
+            "scope_id": {"type": "string", "minLength": 1, "maxLength": 256},
+            "episode_id": {"type": "string", "minLength": 1, "maxLength": 256},
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "label": {"type": "string", "minLength": 1, "maxLength": 80},
+            "source_selections": {"type": "array", "minItems": 1,
+                                   "maxItems": 16},
+            "terminal_source_ref": {"type": "object"},
+            "decision_source_refs": {"type": "array", "minItems": 1,
+                                      "maxItems": 16},
+            "reason_code": {"type": "string",
+                             "enum": ["tracking_requested", "same_episode",
+                                       "waiting", "explicit_completion",
+                                       "goal_resolved", "episode_concluded",
+                                       "boundary_error"]},
+            "note": {"type": "string", "maxLength": 500},
+            "corrected_state": {"type": "string",
+                                 "enum": ["OPEN", "QUIESCENT", "CLOSED"]}},
+    },
+    "episode.get": {
+        "type": "object", "required": ["episode_id"],
+        "additionalProperties": False,
+        "properties": {"episode_id": {"type": "string", "minLength": 1,
+                                       "maxLength": 256}},
+    },
+    "episode.list": {
+        "type": "object", "required": ["scope_id"],
+        "additionalProperties": False,
+        "properties": {"scope_id": {"type": "string", "minLength": 1,
+                                     "maxLength": 256},
+                        "states": {"type": "array",
+                                    "items": {"type": "string",
+                                               "enum": ["OPEN", "QUIESCENT",
+                                                         "CLOSED"]}},
+                        "limit": {},
+                        "cursor": {"type": "object"}},
+    },
 
     # —— 裁定（她 2026-10-06"删门不删档案"终版）：以下注册能力此前无
     #    schema（走零校验），按现行 handler 合同补齐——注册即可调用 ⇒

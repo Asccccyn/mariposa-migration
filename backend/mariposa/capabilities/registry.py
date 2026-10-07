@@ -244,6 +244,12 @@ def _register() -> dict[str, Capability]:
         description="删除申请列表")
     add("memory.tags.add", _tags_add, _owners(), True,
         description="加标签（情绪标签 whose 必填）")
+    add("episode.apply", _episode_apply, {"jiaming"}, True,
+        description="语义事件动作（start/continue/pause/close/correct）")
+    add("episode.get", _episode_get, {"jiaming", "qiaosheng"}, False,
+        description="按 ID 读取事件当前状态与证据引用")
+    add("episode.list", _episode_list, {"jiaming", "qiaosheng"}, False,
+        description="scope 内分页读取事件状态（不给全库）")
     add("memory.mood.vocab", _mood_vocab, _owners(), False,
         description="心情词表开放接口（大类/下层词+写入规则，单一事实源）")
     add("memory.by_emotion", _by_emotion, _owners(), False,
@@ -1419,6 +1425,23 @@ def _emotion_reserved(principal: Principal, a: dict) -> dict:
 def _listening_reserved(principal: Principal, a: dict) -> dict:
     return {"status": "reserved", "provider": None,
             "note": "一起听歌未选供应商；不承诺第三方曲库；capability 标 reserved"}
+
+
+# ---------- episode handlers（她批 2026-10-07"做吧"） ----------
+
+def _episode_apply(principal: Principal, a: dict) -> dict:
+    from ..episodes import service as _ep
+    return _ep.apply(principal, a)
+
+
+def _episode_get(principal: Principal, a: dict) -> dict:
+    from ..episodes import service as _ep
+    return _ep.get(principal, a)
+
+
+def _episode_list(principal: Principal, a: dict) -> dict:
+    from ..episodes import service as _ep
+    return _ep.list_episodes(principal, a)
 
 
 REGISTRY = _register()
