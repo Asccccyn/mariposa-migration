@@ -41,7 +41,7 @@ def _start(actors, terms, op):
                                "channels": ["event"],
                                "lexical_terms": list(terms)},
                             "operation_id": op},
-                           None)["data"]["data"]
+                           None)["data"]
 
 
 class TestDeliveryReceiptSemantics:

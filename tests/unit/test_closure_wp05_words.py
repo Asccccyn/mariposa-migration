@@ -146,7 +146,7 @@ class TestUnifiedEntries:
         p3 = recall_service.start(actors["jiaming"], {"query_plan": {
             "original_request": "找梧桐话语", "channels": ["words"],
             "lexical_terms": ["梧桐"]}})
-        for out in (p1, p2["data"]["data"], p3):
+        for out in (p1, p2["data"], p3):
             assert out["candidates"], "入口应有命中"
             assert len(out["candidates"]) <= 3
             assert out["delivery_action"] == "needs_validation"

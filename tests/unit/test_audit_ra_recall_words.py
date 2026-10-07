@@ -85,7 +85,7 @@ class TestWordRevokedRoutes:
             "query_plan": {"original_request": "撤销链路",
                            "channels": ["words"],
                            "lexical_terms": ["撤销链路"]},
-            "operation_id": "rvk-s"}, None)["data"]["data"]
+            "operation_id": "rvk-s"}, None)["data"]
         for c in r1.get("candidates", []):
             for ev in c.get("evidence") or []:
                 assert ev.get("evidence_kind") != "word_verbatim", \
@@ -108,7 +108,7 @@ class TestWordRevokedRoutes:
                          "replacement": {"source_ref": ref},
                          "operation_id": "rvk-rp"}, None)
         replayed = recall_service.revalidate_replayed(
-            "memory.recall.start", old["data"]["data"], None)
+            "memory.recall.start", old["data"], None)
         for c in replayed.get("candidates", []):
             if c.get("resource_ref", "").startswith("our_word:"):
                 for ev in c.get("evidence") or []:
@@ -126,7 +126,7 @@ class TestFindWordsTopLevel:
             "query": "数组词句",
             "lexical_terms": ["数组词句"],
             "explicit_constraints": {"speaker": "qiaosheng"},
-            "operation_id": "ra014-a"}, None)["data"]["data"]
+            "operation_id": "ra014-a"}, None)["data"]
         assert out["candidates"] == [], \
             "顶层数组直接使用 + speaker 过滤生效（RA-014）"
 
@@ -139,7 +139,7 @@ class TestNavigateReplay:
             "query_plan": {"original_request": "导航",
                            "channels": ["event"],
                            "lexical_terms": ["导航"]},
-            "operation_id": "ra015-s"}, None)["data"]["data"]
+            "operation_id": "ra015-s"}, None)["data"]
         sid = r1["recall_session_id"]
         nav1 = registry.invoke(actors["jiaming"], "memory.recall.navigate", {
             "session_id": sid, "direction": "earlier",
@@ -164,7 +164,7 @@ class TestBudgetAggregate:
             "query_plan": {"original_request": "预算",
                            "channels": ["words"],
                            "lexical_terms": ["预算"]},
-            "operation_id": "ra016-s"}, None)["data"]["data"]
+            "operation_id": "ra016-s"}, None)["data"]
 
         def body_chars(c):
             n = 0

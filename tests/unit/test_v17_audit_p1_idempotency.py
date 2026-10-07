@@ -56,8 +56,8 @@ def start_op(actors, terms, op, session_id="new"):
                               "channels": ["event"],
                               "lexical_terms": list(terms)},
                            "operation_id": op}, None)
-    inner = res["data"]  # claim_operation 包装层
-    return inner["data"], inner.get("idempotent_replay", False)
+    inner = res["data"]  # R01 后=裸 packet（重放标记在顶层）
+    return inner, inner.get("idempotent_replay", False)
 
 
 
@@ -110,7 +110,7 @@ class TestF26CommitAtEnd:
             f2 = ex.submit(run, 1)
             r1, r2 = f1.result(timeout=20), f2.result(timeout=20)
         assert len(calls) == 1, "并发同 key 产生了两次计算/副作用"
-        values = {r1["data"]["value"], r2["data"]["value"]}
+        values = {r1["value"], r2["value"]}
         assert values == {"done"}
         replays = [bool(r1.get("idempotent_replay")),
                    bool(r2.get("idempotent_replay"))]
@@ -135,7 +135,7 @@ class TestF26CommitAtEnd:
             "jiaming", "op-retry-2",
             make_builder("op-retry-2", "h1", lambda: {"ok": True}),
             payload_hash="h1")
-        assert out["data"] == {"ok": True}
+        assert out == {"ok": True}
         assert len(calls) == 1  # 原失败不重复计
 
     def test_same_key_different_payload_conflict(self, actors):
@@ -143,7 +143,7 @@ class TestF26CommitAtEnd:
             "jiaming", "op-hash-2",
             make_builder("op-hash-2", "h1", lambda: {"a": 1}),
             payload_hash="h1")
-        assert out["data"] == {"a": 1}
+        assert out == {"a": 1}
         with pytest.raises(IdempotencyConflict):
             store.run_operation(
                 "jiaming", "op-hash-2", lambda: {"a": 2},
@@ -159,9 +159,8 @@ class TestF26CommitAtEnd:
             "jiaming", "op-seq-2",
             make_builder("op-seq-2", "h1", lambda: {"n": 2}),
             payload_hash="h1")
-        assert out1["data"] == {"n": 1}
-        assert out2["idempotent_replay"] is True
-        assert out2["data"] == {"n": 1}
+        assert out1 == {"n": 1}
+        assert out2 == {"n": 1, "idempotent_replay": True}
 
 
 class TestF07StaleReplay:

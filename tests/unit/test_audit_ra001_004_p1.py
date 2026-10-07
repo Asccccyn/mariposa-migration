@@ -126,7 +126,7 @@ class TestRawLeaseFencing:
                                 "evidence_requirement":
                                     "verbatim_required"},
                  "operation_id": "op-ra002-s"},
-                None)["data"]["data"]
+                None)["data"]
             sid = r1["recall_session_id"]
             _seed_src()
             s = store.get_session(sid)
@@ -221,7 +221,7 @@ class TestJudgeValidity:
                                 "evidence_requirement":
                                     "verbatim_required"},
                  "operation_id": "op-ra003-s"},
-                None)["data"]["data"]
+                None)["data"]
             sid = r1["recall_session_id"]
             with db.recall_runtime() as conn:
                 receipt = store.read_round1_receipt(conn, sid, 1)
@@ -301,12 +301,12 @@ class TestJudgeValidity:
                                 "evidence_requirement":
                                     "verbatim_required"},
                  "operation_id": "op-ra003d-s"},
-                None)["data"]["data"]
+                None)["data"]
             sid = r1["recall_session_id"]
             _seed_src()
             r2 = registry.invoke(actors["jiaming"], "memory.recall.round2", {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
-                "operation_id": "op-ra003d-r2"}, None)["data"]["data"]
+                "operation_id": "op-ra003d-r2"}, None)["data"]
             assert r2["candidates"] == [], \
                 "重复 ref 整批判断作废——不得保留首项交付正文（审计反例）"
             assert r2["coverage"]["judge"] == "unavailable"

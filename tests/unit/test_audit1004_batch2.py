@@ -187,7 +187,7 @@ class TestReauditRound:
                                  "channels": ["event"],
                                  "lexical_terms": ["重放保留"],
                                  "request_ref": "rer1-s"}}, None
-                             )["data"]["data"]
+                             )["data"]
         ref1 = r1["continuation"]["continue_request_ref"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": {
@@ -195,7 +195,7 @@ class TestReauditRound:
                                  "channels": ["event"],
                                  "lexical_terms": ["重放保留"],
                                  "request_ref": "rer1-s"}}, None
-                             )["data"]["data"]
+                             )["data"]
         assert r2["continuation"]["continue_request_ref"] == ref1, \
             "同 operation 重放必须携带同一接续引用"
         # 且该 ref 仍可消费（未因重放被消耗/重复签发）
@@ -210,7 +210,7 @@ class TestReauditRound:
                                       "original_request": "再找重放保留",
                                       "channels": ["event"],
                                       "lexical_terms": ["重放保留"]},
-                                  "request_ref": "rer1-r"}, None)["data"]["data"]
+                                  "request_ref": "rer1-r"}, None)["data"]
             assert rr["revision"] == 2
         finally:
             cfg.RECALL_BURST_ROUNDS = old

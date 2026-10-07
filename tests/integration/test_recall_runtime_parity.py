@@ -68,7 +68,7 @@ def test_session01_mcp_full_loop(c, seeded):
         "operation_id": "op-par-s1-start",
         "query_plan": {"original_request": "找搬家的事",
                        "channels": ["event"],
-                       "lexical_terms": ["搬家"]}})["data"]
+                       "lexical_terms": ["搬家"]}})
     sid = packet["recall_session_id"]
     assert packet["candidates"]
     newest = max(packet["candidates"], key=lambda x: x.get("memory_date")
@@ -83,12 +83,12 @@ def test_session01_mcp_full_loop(c, seeded):
                        "channels": ["event"], "lexical_terms": ["搬家"],
                        "explicit_constraints": {
                            "event_date": {"from": "2026-08-01",
-                                          "to": "2026-08-31"}}}})["data"]
+                                          "to": "2026-08-31"}}}})
     assert newest["resource_ref"] not in [x["resource_ref"]
                                           for x in p2["candidates"]]
     nav = tool(c, "jiaming", "mariposa_memory_recall_navigate", {
         "session_id": sid, "direction": "earlier",
-        "operation_id": "op-par-s1-nav"})["data"]
+        "operation_id": "op-par-s1-nav"})
     assert nav["candidates"], "scope 内应有更早的八月事件"
     assert all((x.get("memory_date") or "") >= "2026-08-01"
                for x in nav["candidates"]), \
@@ -98,7 +98,7 @@ def test_session01_mcp_full_loop(c, seeded):
     assert st["receipts_revalidated"]["checked"] >= 1
     closed = tool(c, "jiaming", "mariposa_memory_recall_close", {
         "session_id": sid, "outcome": "resolved",
-        "operation_id": "op-par-s1-close"})["data"]
+        "operation_id": "op-par-s1-close"})
     assert closed["status"] == "RESOLVED"
 
 
@@ -108,8 +108,8 @@ def test_session02_http_mcp_same_semantics(c, seeded):
     http = c.post("/api/capability/memory.words.recall",
                   json={"arguments": args},
                   headers={"Authorization": f"Bearer {TOKENS['jiaming']}"}
-                  ).json()["data"]["data"]
-    mcp = tool(c, "jiaming", "mariposa_memory_words_recall", args)["data"]
+                  ).json()["data"]
+    mcp = tool(c, "jiaming", "mariposa_memory_words_recall", args)
     # 统一入口每次建短期 session：候选等价性按稳定字段比较
     # （version_receipt/judge 回执为每次随机）
     def norm(cands):
@@ -122,7 +122,7 @@ def test_session02_http_mcp_same_semantics(c, seeded):
     ev = tool(c, "jiaming", "mariposa_memory_recall_start", {
         "operation_id": "op-par-s2-start",
         "query_plan": {"original_request": "窗帘", "channels": ["event"],
-                       "lexical_terms": ["窗帘"]}})["data"]
+                       "lexical_terms": ["窗帘"]}})
     assert ev["candidates"], "WIDE 六入口应含我们的话（HTTP/MCP 一致）"
 
 

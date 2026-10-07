@@ -120,7 +120,7 @@ class TestV13Session:
         p = reg.invoke(actors["jiaming"], "memory.recall.start", { "operation_id": "op-4-162",
             "query_plan": {"original_request": "找搬家",
                            "channels": ["event"],
-                           "lexical_terms": ["搬家"]}}, None)["data"]["data"]
+                           "lexical_terms": ["搬家"]}}, None)["data"]
         sid = p["recall_session_id"]
         reg.invoke(actors["jiaming"], "memory.recall.reject", { "operation_id": "op-3-167",
             "session_id": sid,
@@ -128,7 +128,7 @@ class TestV13Session:
         p2 = reg.invoke(actors["jiaming"], "memory.recall.refine", { "operation_id": "op-2-170",
             "session_id": sid,
             "query_plan": {"original_request": "再", "channels": ["event"],
-                           "lexical_terms": ["搬家"]}}, None)["data"]["data"]
+                           "lexical_terms": ["搬家"]}}, None)["data"]
         assert p2["revision"] == 2
         reg.invoke(actors["jiaming"], "memory.recall.navigate", { "operation_id": "op-1-175",
             "session_id": sid, "direction": "later"}, None)
@@ -136,7 +136,7 @@ class TestV13Session:
             "session_id": sid}, None)["data"]
         assert st["receipts_revalidated"]["checked"] >= 1
         out = reg.invoke(actors["jiaming"], "memory.recall.close", { "operation_id": "op-0-180",
-            "session_id": sid, "outcome": "resolved"}, None)["data"]["data"]
+            "session_id": sid, "outcome": "resolved"}, None)["data"]
         assert out["status"] == "RESOLVED"
 
     def test_session03_ref_and_validate(self, actors):

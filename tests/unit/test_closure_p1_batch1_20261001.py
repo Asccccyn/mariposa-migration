@@ -348,8 +348,8 @@ class TestIdempotencyBoundary:
             r2 = registry.invoke(actors["jiaming"], "memory.find_words",
                                  a, None)
             assert r2["data"].get("idempotent_replay") is True
-            sid1 = r1["data"]["data"]["recall_session_id"]
-            sid2 = r2["data"]["data"]["recall_session_id"]
+            sid1 = r1["data"]["recall_session_id"]
+            sid2 = r2["data"]["recall_session_id"]
             assert sid1 == sid2, "重试不得另建 session"
             assert cap.calls == 1, "重试不得重复 Jev"
         finally:

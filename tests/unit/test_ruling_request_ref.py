@@ -47,10 +47,10 @@ class TestRequestRefIdempotency:
     def test_same_ref_same_payload_replays_original_session(self, actors):
         _hold(actors, "窗帘事件的正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": PLAN_A}, None)["data"]["data"]
+                             {"query_plan": PLAN_A}, None)["data"]
         sid = r1["recall_session_id"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": dict(PLAN_A)}, None)["data"]["data"]
+                             {"query_plan": dict(PLAN_A)}, None)["data"]
         assert r2["recall_session_id"] == sid, \
             "同 request_ref 重放必须回原 session，不得新建"
 
@@ -68,7 +68,7 @@ class TestRequestRefIdempotency:
         from mariposa.recall import store
         _hold(actors, "预算重放正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": PLAN_A}, None)["data"]["data"]
+                             {"query_plan": PLAN_A}, None)["data"]
         sid = r1["recall_session_id"]
         before = store.get_session(sid)
         registry.invoke(actors["jiaming"], "memory.recall.start",
@@ -92,7 +92,7 @@ class TestLinearContinuation:
                                  "original_request": "找窗帘",
                                  "channels": ["event"],
                                  "lexical_terms": ["窗帘"],
-                                 "request_ref": "lc-start"}}, None)["data"]["data"]
+                                 "request_ref": "lc-start"}}, None)["data"]
         sid = r1["recall_session_id"]
         r1_ref = r1["continuation"]["continue_request_ref"]
         assert r1["continuation"]["for_revision"] == 1
@@ -103,7 +103,7 @@ class TestLinearContinuation:
                            "channels": ["event"],
                            "lexical_terms": ["窗帘"]},
             "continue_request_ref": r1_ref,
-            "request_ref": "lc-r1"}, None)["data"]["data"]
+            "request_ref": "lc-r1"}, None)["data"]
         assert r2["revision"] == 2, "第一次接续应成功领 burst2"
         r2_ref = r2["continuation"]["continue_request_ref"]
         # 已消费的旧 ref → stale
@@ -131,7 +131,7 @@ class TestLinearContinuation:
                            "channels": ["event"],
                            "lexical_terms": ["窗帘"]},
             "continue_request_ref": r2_ref,
-            "request_ref": "lc-r2-new"}, None)["data"]["data"]
+            "request_ref": "lc-r2-new"}, None)["data"]
         assert r3["revision"] == 3
 
     def test_same_request_ref_retry_replays_not_double_consume(
@@ -146,7 +146,7 @@ class TestLinearContinuation:
                                  "original_request": "找窗帘",
                                  "channels": ["event"],
                                  "lexical_terms": ["窗帘"],
-                                 "request_ref": "rc-start"}}, None)["data"]["data"]
+                                 "request_ref": "rc-start"}}, None)["data"]
         sid = r1["recall_session_id"]
         args = {"session_id": sid,
                 "query_plan": {"original_request": "再找窗帘",
@@ -156,10 +156,10 @@ class TestLinearContinuation:
                     "continue_request_ref"],
                 "request_ref": "rc-r1"}
         r2 = registry.invoke(actors["jiaming"], "memory.recall.refine",
-                             args, None)["data"]["data"]
+                             args, None)["data"]
         bursts_after_first = store.get_session(sid)["bursts_used"]
         r2b = registry.invoke(actors["jiaming"], "memory.recall.refine",
-                              dict(args), None)["data"]["data"]
+                              dict(args), None)["data"]
         assert r2b["revision"] == r2["revision"], "重试应重放原结果"
         assert store.get_session(sid)["bursts_used"] == bursts_after_first
 
@@ -172,7 +172,7 @@ class TestRequestRefIdentityNotBypassable:
         _hold(actors, "身份不可替换正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": PLAN_A,
-                              "operation_id": "op-A"}, None)["data"]["data"]
+                              "operation_id": "op-A"}, None)["data"]
         # 同 request_ref + 不同 operation_id：仍须判定为同一逻辑请求
         with pytest.raises(Forbidden) as ei:
             registry.invoke(actors["jiaming"], "memory.recall.start",
@@ -183,7 +183,7 @@ class TestRequestRefIdentityNotBypassable:
         r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": dict(PLAN_A),
                               "operation_id": "op-C-different"}, None
-                             )["data"]["data"]
+                             )["data"]
         assert r2["recall_session_id"] == r1["recall_session_id"]
 
     def test_refine_ref_not_reusable_across_sessions(self, actors):
@@ -197,7 +197,7 @@ class TestRequestRefIdentityNotBypassable:
                                  "channels": ["event"],
                                  "lexical_terms": ["甲"],
                                  "request_ref": "xs-start-1"}}, None
-                             )["data"]["data"]["recall_session_id"]
+                             )["data"]["recall_session_id"]
         _hold(actors, "跨会话复用正文乙")
         s2 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": {
@@ -205,7 +205,7 @@ class TestRequestRefIdentityNotBypassable:
                                  "channels": ["event"],
                                  "lexical_terms": ["乙"],
                                  "request_ref": "xs-start-2"}}, None
-                             )["data"]["data"]["recall_session_id"]
+                             )["data"]["recall_session_id"]
         assert s1 != s2
         common = {"query_plan": {"original_request": "改查甲",
                                  "channels": ["event"],
@@ -233,14 +233,14 @@ class TestJudgeDisabledBlocksReplayBodies:
         from mariposa import config as cfg
         _hold(actors, "Judge关闭重放的窗帘正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": PLAN_A}, None)["data"]["data"]
+                             {"query_plan": PLAN_A}, None)["data"]
         assert r1["candidates"], "前置：Judge 开启时有交付"
         old_provider = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "disabled"
         try:
             r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
                                  {"query_plan": dict(PLAN_A)}, None
-                                 )["data"]["data"]
+                                 )["data"]
         finally:
             cfg.RECALL_JUDGE_PROVIDER = old_provider
         assert r2["candidates"] == [], "Judge 关闭后重放不得释放旧正文"

@@ -81,7 +81,7 @@ class TestQwenProviderWiring:
                                 "channels": ["event"],
                                 "semantic_query": "那座海角的白色灯塔",
                                 "lexical_terms": ["qqqxyz"]}}, None)
-        cands = r["data"]["data"]["candidates"]
+        cands = r["data"]["candidates"]
         assert any(c.get("memory_id") == out["memory_id"] for c in cands)
         with db.formal() as conn:
             row = conn.execute(
