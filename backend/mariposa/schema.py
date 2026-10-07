@@ -1131,8 +1131,11 @@ CREATE TABLE IF NOT EXISTS semantic_episodes(
   closed_recorded_at TEXT
 );
 CREATE INDEX idx_episodes_scope ON semantic_episodes(scope_id, state, updated_at DESC);
--- R06（复审 2026-10-07）：episode 领域操作身份——同 op 同事务完成回执，
--- 提交后/传输完成前崩溃的同 op 重试回放原结果（无进行中队列）
+"""),
+    # 34（复审返修 2026-10-07 R06/R09）：episode 操作身份与授权映射表。
+    # 教训：新表必须进**新版本号**迁移——塞进已应用的旧迁移体，既有库按
+    # 版本跳过永远建不出来（测试全绿是因每次重建库走全量 DDL）。
+    (34, """
 CREATE TABLE IF NOT EXISTS episode_operations(
   operation_key TEXT PRIMARY KEY,
   principal_id TEXT NOT NULL,
@@ -1140,8 +1143,6 @@ CREATE TABLE IF NOT EXISTS episode_operations(
   result_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
--- R09（复审 2026-10-07，她 1007 裁定）：批准范围→身份→动作 服务端映射
--- （方案B 数据驱动；scope_id='*' 为通配，仅授予读类动作）
 CREATE TABLE IF NOT EXISTS episode_scope_grants(
   scope_id TEXT NOT NULL,
   principal_id TEXT NOT NULL,
