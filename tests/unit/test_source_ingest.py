@@ -337,3 +337,78 @@ class TestAtomicity:
         msgs = [_msg(f"m{i}", i, f"t{i}") for i in range(51)]
         with pytest.raises(Forbidden):
             live.ingest(env, _req("op-1", msgs))
+
+
+class TestCrossStreamIdentityR03:
+    """R03（复审 2026-10-07）：跨流复用进门验内容身份、ACK 由已验证行
+    构造、跨流换代按共同消息身份披露漂移。反例：同消息同修订从另一条
+    合法 stream 送不同正文，旧码回 integrity=verified 且 ACK 用新 hash
+    而库内仍是旧正文——回执宣称了未兑现的内容身份。"""
+
+    STREAM2 = "stream_pri_2"
+
+    def _second_stream(self):
+        live.create_grant(ARCHIVE_BINDING, self.STREAM2, "estomago", ROOM,
+                          ["user", "assistant"], "private", "qiaosheng")
+
+    def test_same_content_cross_stream_reuses_verified_row(self, env):
+        self._second_stream()
+        a = live.ingest(env, _req("op-a", [_msg("m1", 1, "正文甲")]))
+        b = live.ingest(env, _req("op-b", [_msg("m1", 1, "正文甲")],
+                                  stream_id=self.STREAM2))
+        assert b["integrity"] == "verified"
+        am, bm = a["messages"][0], b["messages"][0]
+        assert bm["source_message_id"] == am["source_message_id"], \
+            "同内容跨流复用同一行"
+        with db.formal() as conn:
+            row = conn.execute(
+                "SELECT content_hash FROM source_messages WHERE id=?",
+                (am["source_message_id"],)).fetchone()
+            streams = {r["stream_id"] for r in conn.execute(
+                "SELECT stream_id FROM source_live_revisions WHERE"
+                " source_message_id=?",
+                (am["source_message_id"],)).fetchall()}
+        assert bm["content_hash"] == row["content_hash"], \
+            "ACK hash 必须由已验证行构造"
+        assert streams == {STREAM, self.STREAM2}, "两条合法谱系共存"
+
+    def test_same_revision_different_body_rejected_whole_batch(self, env):
+        self._second_stream()
+        a = live.ingest(env, _req("op-a", [_msg("m1", 1, "正文甲")]))
+        with pytest.raises(Forbidden) as e:
+            live.ingest(env, _req("op-b", [
+                _msg("m1", 1, "正文乙"), _msg("m2", 2, "无关消息")],
+                stream_id=self.STREAM2))
+        assert e.value.code == "SOURCE_CROSS_STREAM_CONFLICT"
+        with db.formal() as conn:
+            lin2 = conn.execute(
+                "SELECT COUNT(*) c FROM source_live_revisions WHERE"
+                " stream_id=?", (self.STREAM2,)).fetchone()["c"]
+            row = conn.execute(
+                "SELECT text, content_hash FROM source_messages WHERE id=?",
+                (a["messages"][0]["source_message_id"],)).fetchone()
+        assert lin2 == 0, "整批回滚：B 流不得残留任何谱系"
+        assert row["text"] == "正文甲", "旧正文不被覆盖"
+        assert row["content_hash"] == _text_hash("正文甲")
+
+    def test_cross_stream_upgrade_disclosed_as_drift(self, env):
+        from mariposa.source import binding
+        self._second_stream()
+        a = live.ingest(env, _req("op-a", [_msg("m1", 1, "正文甲")]))
+        am = a["messages"][0]
+        sm, conv = am["source_message_id"], am["source_conversation_id"]
+        live.ingest(env, _req("op-b", [_msg("m1", 1, "正文甲")],
+                              stream_id=self.STREAM2))
+        live.ingest(env, _req("op-b2", [
+            _msg("m1", 2, "正文甲改", rev=2, prev_rev=1)],
+            stream_id=self.STREAM2))
+        out = binding.open_selection({
+            "conversation_id": conv,
+            "members": [{"source_message_id": sm,
+                         "content_hash": am["content_hash"]}]})
+        assert out["drifted_members"] == [sm], \
+            "跨流换代后，钉住 r1 的读取必须披露漂移"
+        drift = out["members"][0]["version_drift"]
+        assert drift["pinned_revision"] == 1
+        assert drift["latest_revision"] == 2
+        assert drift["current"] == _text_hash("正文甲改")

@@ -265,25 +265,30 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
                     member_drift = {"pinned": pinned,
                                     "current": row["content_hash"]}
             if member_drift is None and isinstance(pinned, str):
-                # 在线修订换代：钉住行不可变，漂移信号=同 origin 消息已
-                # 有更新修订（谱系表判定，不比对不可变行自身）
-                lr = conn.execute(
-                    "SELECT l.revision, (SELECT MAX(l2.revision) FROM"
-                    " source_live_revisions l2 WHERE l2.stream_id="
-                    " l.stream_id AND l2.origin_message_id="
-                    " l.origin_message_id) AS max_rev, (SELECT"
-                    " l3.content_hash FROM source_live_revisions l3"
-                    " WHERE l3.stream_id=l.stream_id AND"
-                    " l3.origin_message_id=l.origin_message_id ORDER BY"
-                    " l3.revision DESC LIMIT 1) AS latest_hash FROM"
-                    " source_live_revisions l WHERE l.source_message_id=?",
-                    (sid,)).fetchone()
-                if lr is not None and lr["max_rev"] is not None and \
-                        lr["max_rev"] > lr["revision"]:
-                    member_drift = {"pinned": pinned,
-                                    "current": lr["latest_hash"],
-                                    "pinned_revision": lr["revision"],
-                                    "latest_revision": lr["max_rev"]}
+                # 在线修订换代：钉住行不可变，漂移信号=同 origin 消息已有
+                # 更新修订。R03（复审 2026-10-07）：按共同消息身份
+                # （origin_message_id）跨全部有权谱系判定——跨流复用后
+                # 同一 source_message_id 有多条谱系、新修订又落在新行
+                # 新谱系上，旧行 fetchone 只看单条谱系会漏报其他流换代
+                lrows = conn.execute(
+                    "SELECT revision, origin_message_id FROM"
+                    " source_live_revisions WHERE source_message_id=?",
+                    (sid,)).fetchall()
+                if lrows:
+                    omid_all = lrows[0]["origin_message_id"]
+                    pinned_rev = min(r["revision"] for r in lrows
+                                     if r["revision"] is not None)
+                    newer = conn.execute(
+                        "SELECT revision, content_hash FROM"
+                        " source_live_revisions WHERE origin_message_id=?"
+                        " AND revision>? ORDER BY revision DESC LIMIT 1",
+                        (omid_all, pinned_rev)).fetchone()
+                    if newer is not None:
+                        member_drift = {
+                            "pinned": pinned,
+                            "current": newer["content_hash"],
+                            "pinned_revision": pinned_rev,
+                            "latest_revision": newer["revision"]}
             if member_drift is not None:
                 item["version_drift"] = member_drift
                 drifted.append(sid)
