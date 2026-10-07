@@ -423,3 +423,43 @@ def memory_get(mid):
     with db.formal() as conn:
         from mariposa.memory import service as ms
         return ms.get(conn, mid)
+
+
+class TestR09LinkingRights:
+    """接线权（她 1007 裁定"我也可以连线，不管是 relation 还是 episode"）：
+    i 层关系纠错对她开放（连线=关系结构，不是 i 正文）；记忆层主动连线
+    memory.relations.link/correct 本就 _owners() 两人都有——现状保留。"""
+
+    def test_qiaosheng_i_relation_correct_and_memory_link(self, actors):
+        from mariposa.identity_i import service as i_svc
+        m = memory.hold(actors["jiaming"], text="接线权正文一",
+                        memory_date="2026-09-20", date_confidence="exact",
+                        original_title="t", categories=["daily"],
+                        creation_mode="contemporaneous", raw_pending=False)
+        item = i_svc.item_create("jiaming", "她的连线正文",
+                                 relations=[{"memory_id": m["memory_id"],
+                                             "relation_type": "related_to"}])
+        with db.formal() as conn:
+            irr = conn.execute(
+                "SELECT relation_id FROM i_revision_memory_relations"
+                " WHERE item_id=? AND memory_id=?",
+                (item["item_id"], m["memory_id"])).fetchone()
+        assert irr, "前置：I 修订关系已建"
+        cor = registry.invoke(actors["qiaosheng"],
+                              "i.item.relations.correct",
+                              {"relation_id": irr["relation_id"],
+                               "correction_action":
+                                   "remove_wrong_binding",
+                               "operation_id": "op-r09-link"}, None)["data"]
+        assert cor["removed_relation_id"] == irr["relation_id"], \
+            "她的 i 层关系纠错权（复刻一份）"
+
+        m2 = memory.hold(actors["jiaming"], text="接线权正文二",
+                         memory_date="2026-09-21", date_confidence="exact",
+                         original_title="t2", categories=["daily"],
+                         creation_mode="contemporaneous", raw_pending=False)
+        lnk = registry.invoke(actors["qiaosheng"], "memory.relations.link",
+                              {"from_memory": m["memory_id"],
+                               "to_memory": m2["memory_id"],
+                               "relation_type": "related_to"}, None)["data"]
+        assert lnk, "她的记忆层主动连线（现状确认保留）"

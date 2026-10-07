@@ -539,8 +539,11 @@ def correct_item_relation(principal_id: str, relation_id: str,
     from .. import db as _db
     from ..errors import Forbidden, NotFound
     from ..relations.corrections import record_correction
-    if principal_id != "jiaming":
-        raise Forbidden("I 修订关系仅周家明可变更（§5.6）",
+    # 接线权（她裁定 2026-10-07"我也可以连线，不管是 relation 还是
+    # episode"）：关系结构对 qiaosheng 开放——只删/换错误关系行，不改
+    # I 正文，与"我不改 i"不冲突
+    if principal_id not in ("jiaming", "qiaosheng"):
+        raise Forbidden("I 修订关系仅两人可变更（§5.6 + 接线权裁定）",
                         code="OWNER_MISMATCH")
     if correction_action not in ("remove_wrong_binding",
                                  "replace_wrong_binding"):
