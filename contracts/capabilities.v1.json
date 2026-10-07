@@ -145,6 +145,38 @@
       "description": "情绪补充召回（reserved，默认禁用）"
     },
     {
+      "canonical_name": "episode.apply",
+      "transport_name": "mariposa_episode_apply",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "语义事件动作（start/continue/pause/close/correct）"
+    },
+    {
+      "canonical_name": "episode.get",
+      "transport_name": "mariposa_episode_get",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "按 ID 读取事件当前状态与证据引用"
+    },
+    {
+      "canonical_name": "episode.list",
+      "transport_name": "mariposa_episode_list",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "scope 内分页读取事件状态（不给全库）"
+    },
+    {
       "canonical_name": "group.archive.get",
       "transport_name": "mariposa_group_archive_get",
       "allowed_principals": [
