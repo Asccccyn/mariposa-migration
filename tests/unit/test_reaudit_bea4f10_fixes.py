@@ -377,18 +377,18 @@ class TestCR01R1ReplayRoleGate:
             cfg.RECALL_JUDGE_PROVIDER = "g_full"
             r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                                  {**plan, "operation_id": "cr01-op"},
-                                 None)["data"]["data"]
+                                 None)["data"]
             assert len(r1["candidates"]) == 1
             # 撤回 event_excerpt：fresh 与旧 operation 重放同权 0 卡
             cfg.RECALL_JUDGE_PROVIDER = "g_narrow"
             fresh = registry.invoke(actors["jiaming"],
                                     "memory.recall.start",
                                     {**plan, "operation_id": "cr01-fresh"},
-                                    None)["data"]["data"]
+                                    None)["data"]
             replay = registry.invoke(actors["jiaming"],
                                      "memory.recall.start",
                                      {**plan, "operation_id": "cr01-op"},
-                                     None)["data"]["data"]
+                                     None)["data"]
             assert len(fresh["candidates"]) == 0
             assert len(replay["candidates"]) == 0, \
                 "event_excerpt 撤回后旧 operation 不得继续释放正文"
@@ -421,17 +421,17 @@ class TestCR01R1ReplayRoleGate:
             cfg.RECALL_JUDGE_PROVIDER = "gw_full"
             r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                                  {**plan, "operation_id": "cr01w-op"},
-                                 None)["data"]["data"]
+                                 None)["data"]
             assert len(r1["candidates"]) == 1
             cfg.RECALL_JUDGE_PROVIDER = "gw_narrow"
             fresh = registry.invoke(actors["jiaming"],
                                     "memory.recall.start",
                                     {**plan, "operation_id":
-                                     "cr01w-fresh"}, None)["data"]["data"]
+                                     "cr01w-fresh"}, None)["data"]
             replay = registry.invoke(actors["jiaming"],
                                      "memory.recall.start",
                                      {**plan, "operation_id": "cr01w-op"},
-                                     None)["data"]["data"]
+                                     None)["data"]
             assert len(fresh["candidates"]) == 0
             assert len(replay["candidates"]) == 0, \
                 "word_excerpt 撤回后旧 operation 不得继续释放话语正文"

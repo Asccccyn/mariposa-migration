@@ -110,16 +110,16 @@ class TestCR01R2TitleOnlyRole:
             cfg.RECALL_JUDGE_PROVIDER = "r2_full"
             r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                                  {**plan, "operation_id": "r2-op"},
-                                 None)["data"]["data"]
+                                 None)["data"]
             assert len(r1["candidates"]) == 1
 
             cfg.RECALL_JUDGE_PROVIDER = "r2_title"
             fresh_t = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
-                {**plan, "operation_id": "r2-f1"}, None)["data"]["data"]
+                {**plan, "operation_id": "r2-f1"}, None)["data"]
             replay_t = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
-                {**plan, "operation_id": "r2-op"}, None)["data"]["data"]
+                {**plan, "operation_id": "r2-op"}, None)["data"]
             assert len(fresh_t["candidates"]) == 0
             assert len(replay_t["candidates"]) == 0, \
                 "title_cue-only：标题命中不得让旧 operation 重放事件正文"
@@ -127,10 +127,10 @@ class TestCR01R2TitleOnlyRole:
             cfg.RECALL_JUDGE_PROVIDER = "r2_event"
             fresh_e = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
-                {**plan, "operation_id": "r2-f2"}, None)["data"]["data"]
+                {**plan, "operation_id": "r2-f2"}, None)["data"]
             replay_e = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
-                {**plan, "operation_id": "r2-op"}, None)["data"]["data"]
+                {**plan, "operation_id": "r2-op"}, None)["data"]
             assert len(fresh_e["candidates"]) == 1
             assert len(replay_e["candidates"]) == 1, \
                 "event_excerpt-only：事件许可下标题命中重放不得被误杀"
@@ -545,7 +545,7 @@ class TestCR01R3FullProfileMatrix:
             base = registry.invoke(
                 seeded, "memory.recall.start",
                 {**plan, "operation_id": f"mx-{tag}-base"},
-                None)["data"]["data"]
+                None)["data"]
             for n in range(1, len(self.ALL_ROLES) + 1):
                 for combo in itertools.combinations(self.ALL_ROLES, n):
                     key = ",".join(combo)
@@ -556,11 +556,11 @@ class TestCR01R3FullProfileMatrix:
                         seeded, "memory.recall.start",
                         {**plan, "operation_id": f"mx-{tag}-{n}-"
                          f"{abs(hash(key)) % 10**8}"},
-                        None)["data"]["data"]
+                        None)["data"]
                     replay = registry.invoke(
                         seeded, "memory.recall.start",
                         {**plan, "operation_id": f"mx-{tag}-base"},
-                        None)["data"]["data"]
+                        None)["data"]
                     results[key] = (len(fresh["candidates"]),
                                     len(replay["candidates"]))
         finally:
@@ -697,12 +697,12 @@ class TestSelfAudit20261005:
                     "operation_id": "snav-1"}
             cfg.RECALL_JUDGE_PROVIDER = "snav_full"
             r1 = registry.invoke(j, "memory.recall.start", dict(plan),
-                                 None)["data"]["data"]
+                                 None)["data"]
             sid = r1["recall_session_id"]
             nav_args = {"session_id": sid, "direction": "earlier",
                         "operation_id": "snavn-1"}
             full = registry.invoke(j, "memory.recall.navigate",
-                                   dict(nav_args), None)["data"]["data"]
+                                   dict(nav_args), None)["data"]
             n_full = len(full["candidates"])
             assert n_full >= 1, "夹具应产出导航卡"
             body_full = json.dumps(full, ensure_ascii=False)
@@ -714,9 +714,9 @@ class TestSelfAudit20261005:
             fresh_n = registry.invoke(
                 j, "memory.recall.navigate",
                 {**nav_args, "operation_id": "snavn-2"},
-                None)["data"]["data"]["candidates"]
+                None)["data"]["candidates"]
             replay = registry.invoke(j, "memory.recall.navigate",
-                                     dict(nav_args), None)["data"]["data"]
+                                     dict(nav_args), None)["data"]
             assert len(fresh_n) == n_full
             assert len(replay["candidates"]) == n_full, \
                 "缩权 profile 下导航卡重放不得被误杀"
@@ -856,12 +856,12 @@ class TestFourthRound20261005:
                     "operation_id": "r4-1"}
             cfg.RECALL_JUDGE_PROVIDER = "r4_full"
             r1 = registry.invoke(j, "memory.recall.start", dict(plan),
-                                 None)["data"]["data"]
+                                 None)["data"]
             nav_args = {"session_id": r1["recall_session_id"],
                         "direction": "earlier",
                         "operation_id": "r4n-1"}
             full = registry.invoke(j, "memory.recall.navigate",
-                                   dict(nav_args), None)["data"]["data"]
+                                   dict(nav_args), None)["data"]
             n_full = len(full["candidates"])
             assert n_full >= 1
             for down in ("r4_no_policy", "r4_no_key"):
@@ -869,10 +869,10 @@ class TestFourthRound20261005:
                 fresh = registry.invoke(
                     j, "memory.recall.navigate",
                     {**nav_args, "operation_id": f"r4n-{down}"},
-                    None)["data"]["data"]["candidates"]
+                    None)["data"]["candidates"]
                 replay = registry.invoke(j, "memory.recall.navigate",
                                          dict(nav_args),
-                                         None)["data"]["data"]
+                                         None)["data"]
                 assert len(fresh) == n_full, f"{down} fresh 导航不得丢卡"
                 assert len(replay["candidates"]) == n_full, \
                     f"{down} judge 不可用时导航重放不得丢结构卡"

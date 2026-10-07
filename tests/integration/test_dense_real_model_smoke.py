@@ -83,7 +83,7 @@ class TestLegacyVectorInvalidation:
                                     "semantic_query": "甲板咸风",
                                     "lexical_terms": ["zzz不存在"]}}, None)
             hit1 = any(c.get("memory_id") == mid
-                       for c in r["data"]["data"]["candidates"])
+                       for c in r["data"]["candidates"])
             old_hash = conn.execute(
                 "SELECT search_text_hash FROM retrieval_documents"
                 " WHERE memory_id=?", (mid,)).fetchone()["search_text_hash"]
@@ -111,7 +111,7 @@ class TestLegacyVectorInvalidation:
                                  "semantic_query": "甲板咸风",
                                  "lexical_terms": ["zzz不存在"]}}, None)
         hit2 = any(c.get("memory_id") == mid
-                   for c in r2["data"]["data"]["candidates"])
+                   for c in r2["data"]["candidates"])
         assert hit2, "重嵌后仍可命中（按新投影语料）"
         with db.formal() as conn:
             vec_hash = conn.execute(
@@ -146,7 +146,7 @@ class TestRealModelWarmupAndSmoke:
                                 "channels": ["event"],
                                 "semantic_query": "夜空中的繁星银河",
                                 "lexical_terms": ["zzz不存在"]}}, None)
-        cands = r["data"]["data"]["candidates"]
+        cands = r["data"]["candidates"]
         assert any(c.get("memory_id") == out["memory_id"] for c in cands), \
             "真实模型：同义表达应可召回事件正文"
         assert all(c.get("content_version") for c in cands if c.get(
@@ -170,7 +170,7 @@ class TestRealModelWarmupAndSmoke:
                                     "semantic_query": probe,
                                     "lexical_terms": ["zzz不存在"]}}, None)
             assert all(c.get("memory_id") != out["memory_id"]
-                       for c in r["data"]["data"]["candidates"]), \
+                       for c in r["data"]["candidates"]), \
                 f"禁检来源经 dense 触发召回：{probe}"
 
     def test_no_fallback_when_unavailable(self, actors, monkeypatch):
@@ -190,5 +190,5 @@ class TestRealModelWarmupAndSmoke:
                                 "semantic_query": "鸭跖草",
                                 "lexical_terms": ["zzz不存在"]}}, None)
         # dense 不可用不伪装：degraded 标注，正文词法通道不受影响
-        assert "semantic_unavailable" in (r["data"]["data"].get("degraded_reasons")
+        assert "semantic_unavailable" in (r["data"].get("degraded_reasons")
                                           or [])

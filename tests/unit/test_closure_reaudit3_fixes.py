@@ -505,7 +505,7 @@ class Test6FindWordsQueryOnly:
                         "expression_kind": "verbatim"}])
         out = registry.invoke(actors["jiaming"], "memory.find_words",
                               { "operation_id": "op-auto-test_c-0","query": "梧桐"}, None)
-        data = out["data"]["data"]
+        data = out["data"]
         assert data["recall_session_id"], \
             "只传 query 必须正常建 session（original_request 回填）"
         assert data["candidates"], "梧桐 命中应交付"

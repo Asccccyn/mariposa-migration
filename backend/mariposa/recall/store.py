@@ -565,11 +565,21 @@ def read_operation(principal_id: str, operation_key: str):
 
 
 def replay_operation_row(row, replay_guard):
-    """重放已完成 operation：guard 按当前状态重校验后出站（审计 F07）。"""
+    """重放已完成 operation：guard 按当前状态重校验后出站（审计 F07）。
+
+    R01（复审 2026-10-07）：出站=裸 packet，重放标记并进顶层字段——与
+    通用 transport 幂等回执（capabilities/transport.py）及 deletion/keep/
+    corrections 各域惯例一致。不再返回 {"data": ...} 内层信封：那使同一
+    能力出现两种嵌套深度，estómago 适配层因此把 FOUND 吞成空候选。
+    """
     saved = json.loads(row["result_ref"])
     if replay_guard is not None:
         saved = replay_guard(saved)
-    return {"idempotent_replay": True, "data": saved}
+    if not isinstance(saved, dict):
+        return saved
+    out = dict(saved)
+    out["idempotent_replay"] = True
+    return out
 
 
 _OPERATION_LOCKS: dict[str, tuple] = {}  # key -> (Lock, waiter_count)
@@ -654,7 +664,10 @@ def run_operation(principal_id: str, operation_key: str, builder,
                     "operation handler returned without recording its "
                     "operation row inside its final transaction: "
                     f"{operation_key}")
-            return {"data": data}
+            # R01（复审 2026-10-07）：返回裸 packet（重放路径见
+            # replay_operation_row——顶层 idempotent_replay 标记）。
+            # 出站统一单层信封 {ok, data}，由 registry.invoke 包一次。
+            return data
     finally:
         _release_operation_lock(operation_key, entry)
 

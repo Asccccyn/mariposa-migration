@@ -127,10 +127,10 @@ class TestRound2FullChain:
         try:
             _seed_word(actors["jiaming"], "复述：崧蓝染色的傍晚")
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid)
-            packet = r2["data"]["data"]
+            packet = r2["data"]
             assert packet["round"] == 2
             assert packet["candidates"], "raw 候选应经 judge 交付"
             assert all(c["channel"] == "raw" for c in packet["candidates"])
@@ -171,7 +171,7 @@ class TestRound2FullChain:
         try:
             hold(actors["jiaming"], "故障场景正文")
             r1 = _start(actors, terms=("故障",))
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             with pytest.raises(Forbidden) as ei:
                 _round2(actors, sid)
             assert ei.value.code == "ROUND2_GATE_DENIED"
@@ -187,7 +187,7 @@ class TestRound2FullChain:
         try:
             _seed_word(actors["jiaming"], "复述：事实支持场景的崧蓝")
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             # 闭集外
             with pytest.raises(Forbidden) as e1:
                 _round2(actors, sid, reason="随便理由")
@@ -208,7 +208,7 @@ class TestRound2FullChain:
         """S15：无 source_excerpt 外发许可 → raw 不开始（授权门在
         判据前，不产生任何 round）。"""
         r1 = _start(actors)
-        sid = r1["data"]["data"]["recall_session_id"]
+        sid = r1["data"]["recall_session_id"]
         with pytest.raises(Forbidden) as ei:
             _round2(actors, sid)
         gate = ei.value.detail["gate"]
@@ -219,7 +219,7 @@ class TestRound2FullChain:
         try:
             _seed_word(actors["jiaming"], "复述：重放场景的崧蓝")
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             r2 = _round2(actors, sid, op="op-w4-replay")
             r2b = _round2(actors, sid, op="op-w4-replay")
@@ -240,7 +240,7 @@ class TestRound2FullChain:
         try:
             _seed_word(actors["jiaming"], "复述：防重跑场景的崧蓝")
             r1 = _start(actors)
-            sid = r1["data"]["data"]["recall_session_id"]
+            sid = r1["data"]["recall_session_id"]
             _seed_source()
             _round2(actors, sid, op="op-w4-first")
             with pytest.raises(Forbidden) as ei:
