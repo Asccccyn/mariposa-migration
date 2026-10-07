@@ -70,7 +70,9 @@ def _int_arg(a: dict, key: str, default: int, lo: int, hi: int) -> int:
         raw = default
     try:
         v = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # R15（复审 2026-10-07）：OverflowError=JSON 非有限值（1e400→inf）
+        # 经 int() 抛裸异常逃逸成 500；统一结构化 INVALID_ARGUMENT
         raise Forbidden(f"{key} must be an integer",
                         code="INVALID_ARGUMENT", argument=key)
     return min(max(v, lo), hi)

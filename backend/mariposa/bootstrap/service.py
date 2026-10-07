@@ -96,12 +96,23 @@ def get(principal_id: str, entry_source: str, profile: str,
             current_state = _state_hash(conn)
             if loaded_snapshot_id:
                 snap = conn.execute(
-                    "SELECT state_hash FROM bootstrap_snapshots WHERE"
-                    " snapshot_id=?",
+                    "SELECT state_hash, profile FROM bootstrap_snapshots"
+                    " WHERE snapshot_id=?",
                     (loaded_snapshot_id,)).fetchone()
                 if snap is None:
                     raise SnapshotStale(
                         "snapshot unknown; re-fetch bootstrap")
+                # R14（复审 2026-10-07）：快照复用同核 profile——此前仅比
+                # state_hash，CC 的包可被 estomago 身份冒充 unchanged 复用
+                # （错误许可复用旧投影；响应本身无新泄漏）
+                _saved_profile = snap["profile"] \
+                    if "profile" in snap.keys() else None
+                if _saved_profile and _saved_profile != profile:
+                    raise SnapshotStale(
+                        "snapshot belongs to a different profile;"
+                        " re-fetch bootstrap",
+                        snapshot_id=loaded_snapshot_id,
+                        saved_profile=_saved_profile, profile=profile)
                 if snap["state_hash"] != current_state:
                     raise SnapshotStale(
                         "underlying resources changed since snapshot;"

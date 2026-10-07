@@ -46,6 +46,15 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                 raise SnapshotStale(
                     "underlying resources changed; re-fetch",
                     snapshot_id=snapshot_id)
+            # R14（复审 2026-10-07）：续页身份检查统一前置（此前仅在
+            # memory_days 分支——i/plans/plan_content 续页不核 profile）
+            _snap_profile = snap["profile"] if "profile" in snap.keys() \
+                else None
+            if _snap_profile and entry_source not in _ENTRY_ALLOWED.get(
+                    _snap_profile, {entry_source}):
+                raise Forbidden(
+                    "entry_source 与快照 profile 不匹配",
+                    entry_source=entry_source, profile=_snap_profile)
             tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
             from datetime import datetime, timezone
             today = datetime.now(timezone.utc).astimezone(tz).date()
@@ -59,11 +68,33 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
             three_days = [(today - timedelta(days=i)).isoformat()
                           for i in range(BOOT_MEMORY_DAYS)]
 
+            def _cur_str(key: str, *, required: bool = True):
+                v = (cursor or {}).get(key)
+                if v is None:
+                    if required:
+                        raise Forbidden(f"cursor.{key} required",
+                                        code="INVALID_ARGUMENT",
+                                        cursor_field=key)
+                    return None
+                if not isinstance(v, str):
+                    raise Forbidden(f"cursor.{key} must be a string",
+                                    code="INVALID_ARGUMENT",
+                                    cursor_field=key, got=repr(v)[:40])
+                return v
+
+            def _cur_int(key: str, *, default: int = 0, minimum: int = 0):
+                v = (cursor or {}).get(key)
+                if v is None:
+                    v = default
+                if isinstance(v, bool) or not isinstance(v, int):
+                    raise Forbidden(f"cursor.{key} must be an integer",
+                                    code="INVALID_ARGUMENT",
+                                    cursor_field=key, got=repr(v)[:40])
+                return max(v, minimum)
+
             if section == "memory_days":
-                before_date = (cursor or {}).get("memory_before_date")
-                last_id = (cursor or {}).get("memory_last_id")
-                if not before_date:
-                    raise Forbidden("cursor.memory_before_date required")
+                before_date = _cur_str("memory_before_date")
+                last_id = _cur_str("memory_last_id", required=False) or ""
                 rows = conn.execute(
                     "SELECT memory_id, memory_date FROM memories WHERE"
                     " visibility='active' AND memory_date IN (?,?,?)"
@@ -73,15 +104,11 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                     tuple(three_days) + (before_date, before_date,
                                          last_id or "",
                                          BOOT_SECTION_LIMIT)).fetchall()
-                # D2（2026-10-06）：分页与首页同 profile——estomago 续页
-                # 同样不带 mood_text；快照记载的 profile 是唯一依据
-                _profile = (snap or {}).get("profile") if isinstance(snap, dict) else (snap["profile"] if snap else "claude_chat")
-                if _profile and entry_source not in _ENTRY_ALLOWED.get(_profile, {entry_source}):
-                    raise Forbidden(
-                        "entry_source 与快照 profile 不匹配",
-                        entry_source=entry_source, profile=_profile)
+                # D2（2026-10-06）+R14：分页与首页同 profile（身份检查
+                # 已统一前置；此处仅按快照 profile 装配内容）
                 items = [_memory_slim(conn, r["memory_id"],
-                                      profile=_profile or "claude_chat")
+                                      profile=_snap_profile
+                                      or "claude_chat")
                          for r in rows]
                 total = conn.execute(
                     "SELECT COUNT(*) AS c FROM memories WHERE"
@@ -102,11 +129,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
             # plan_content：单条 Plan 正文分节续取（裁定 2026-10-04）
             if section == "plan_content":
                 from ..plans import service as _plans_svc
-                plan_id = str((cursor or {}).get("plan_id") or "")
-                plan_off = int((cursor or {}).get("plan_offset") or 0)
-                if not plan_id:
-                    raise Forbidden("cursor.plan_id required",
-                                    code="INVALID_ARGUMENT")
+                plan_id = _cur_str("plan_id")
+                plan_off = _cur_int("plan_offset")
                 plan = _plans_svc.get(conn, plan_id)
                 content = plan.get("content") or ""
                 if plan_off < 0 or plan_off > len(content):
@@ -135,8 +159,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                 from ..identity_i import service as _i_svc
                 i_cur = _i_svc.get(conn=conn)
                 content = i_cur["content"] or ""
-                i_off = int((cursor or {}).get("i_offset") or 0)
-                if i_off < 0 or i_off > len(content):
+                i_off = _cur_int("i_offset")
+                if i_off > len(content):
                     raise Forbidden("cursor.i_offset 超出当前正文范围",
                                     code="INVALID_ARGUMENT",
                                     got=i_off, total_chars=len(content))
@@ -154,7 +178,7 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                                         if nxt_i else None)}
 
             # plans：offset 游标（同事务经 conn 装配）
-            offset = int((cursor or {}).get("plans_offset") or 0)
+            offset = _cur_int("plans_offset")
             all_plans = plans.bootstrap_plans(
                 today, BOOT_UPCOMING_DAYS, conn=conn)
             page = []
