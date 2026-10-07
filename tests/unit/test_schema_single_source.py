@@ -22,9 +22,11 @@ import inspect
 
 # 裁定（她 2026-10-06 终版"删门不删档案"）：**无 backlog**——所有注册
 # 可调用能力必须在现行正本有 schema；历史包只是档案不是门卫。
+# R13（复审 2026-10-07）：按**真实运行时 registry**断言（含 v1_compat 动态
+# 注册），不再源码正则——正则漏数让 42 项（含 7 个真实可见入口）无 schema
+# 存活；新增能力漏 schema 现在必被真实注册表捕获
 def _registered() -> set[str]:
-    src = inspect.getsource(registry)
-    return set(re.findall(r'add\("([a-z_.]+)"', src))
+    return set(registry.REGISTRY.keys())
 
 
 class TestSingleSource:
