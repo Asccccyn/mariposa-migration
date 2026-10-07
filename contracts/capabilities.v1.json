@@ -148,7 +148,8 @@
       "canonical_name": "episode.apply",
       "transport_name": "mariposa_episode_apply",
       "allowed_principals": [
-        "jiaming"
+        "jiaming",
+        "qiaosheng"
       ],
       "write": true,
       "idempotent": false,

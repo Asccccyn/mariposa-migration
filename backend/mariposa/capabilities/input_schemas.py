@@ -143,7 +143,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                        "boundary_error"]},
             "note": {"type": "string", "maxLength": 500},
             "corrected_state": {"type": "string",
-                                 "enum": ["OPEN", "QUIESCENT", "CLOSED"]}},
+                                 "enum": ["OPEN", "QUIESCENT", "CLOSED"]},
+            "operation_id": {"type": "string", "minLength": 1,
+                             "maxLength": 256}},
     },
     "episode.get": {
         "type": "object", "required": ["episode_id"],
