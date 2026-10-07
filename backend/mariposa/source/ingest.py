@@ -404,14 +404,28 @@ def _ingest_one(conn, principal, grant, batch_id: str, conv_id: str,
     msg_pid = provider_message_id_of(origin_instance, origin_conv, omid, rev)
     msg_row_id = f"sm_{_uuid.uuid4().hex[:16]}"
     display_t = _display_time(m)
-    # 跨流去重（episode 上线 2026-10-07）：同一消息已在其他 stream 入库
-    # → 不再 INSERT source_messages（UNIQUE 冲突），只补本流 revision 引用
+    # 跨流去重（episode 上线 2026-10-07；R03 复审 2026-10-07 补进门验身份）：
+    # 同一消息已在其他 stream 入库 → 复用前先核内容身份——同 hash 同正文才
+    # 复用（与上方同流重放门同语义）；不一致=跨流内容身份冲突，整批拒绝。
+    # 回执 hash 一律由已验证行构造，不许宣称未兑现的内容身份。
     _cross = conn.execute(
-        "SELECT id FROM source_messages WHERE provider=? AND"
-        " provider_message_id=?",
+        "SELECT id, content_hash, text FROM source_messages WHERE provider=?"
+        " AND provider_message_id=?",
         (PROVIDER, msg_pid)).fetchone()
+    ack_hash = m["content_hash"]
     if _cross is not None:
+        if _cross["content_hash"] != m["content_hash"] or \
+                (_cross["text"] or "") != (m["text"] or ""):
+            raise Forbidden(
+                f"跨流同 (origin, revision) 内容不一致：{omid} r{rev}"
+                f"——已入库 {omid} 哈希 {_cross['content_hash'][:12]}…，"
+                f"本次 {m['content_hash'][:12]}…；复用必须内容身份一致",
+                code="SOURCE_CROSS_STREAM_CONFLICT",
+                origin_message_id=omid, revision=rev, stream_id=stream_id,
+                stored_content_hash=_cross["content_hash"],
+                received_content_hash=m["content_hash"])
         msg_row_id = _cross["id"]
+        ack_hash = _cross["content_hash"]
     else:
         conn.execute(
             "INSERT INTO source_messages(id, conversation_id, provider,"
@@ -478,12 +492,12 @@ def _ingest_one(conn, principal, grant, batch_id: str, conv_id: str,
          pred["origin_message_id"] if pred else None,
          pred["revision"] if pred else None,
          m["sender"], m["published_kind"], m["occurred_at"],
-         m["received_at"], m["published_at"], m["content_hash"],
+         m["received_at"], m["published_at"], ack_hash,
          op, _now()))
     return {"origin_message_id": omid, "revision": rev,
             "source_conversation_id": conv_id,
             "source_message_id": msg_row_id,
-            "content_hash": m["content_hash"]}
+            "content_hash": ack_hash}
 
 
 def _provider_message_id(conn, source_message_id: str) -> str | None:
