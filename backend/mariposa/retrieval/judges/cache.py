@@ -30,10 +30,14 @@ def rerank_identity(*, query_projection: dict, candidate_projection: dict,
                     representation_version: str | None,
                     projection_version: str | None,
                     requested_model: str, prompt_version: str,
-                    policy_version: str, schema_version: str) -> dict:
+                    policy_version: str, schema_version: str,
+                    namespace: str = "jev") -> dict:
+    """namespace：判断缓存按 provider 分键（WP6 J12——Jev 与 Codex 的分数
+    缓存不互相命中；同表异键，删除缓存互不影响）。"""
     qfp = fingerprint(query_projection)
     cfp = fingerprint(candidate_projection)
     parts = {
+        "namespace": namespace,
         "query_fingerprint": qfp,
         "candidate_fingerprint": cfp,
         "candidate_ref": candidate_ref,
