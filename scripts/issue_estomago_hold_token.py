@@ -44,9 +44,13 @@ from mariposa import db, identity, schema  # noqa: E402
 # 全部调用面 = hold 面 + 开窗只读（bootstrap）+ 召回按需（recall 家族）。
 # estómago 新增任何 mariposa 能力调用时必须同步本清单与已发绑定的
 # capabilities_allowlist，否则该调用 403——白名单机制的故意行为。
+# MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08 WP2）：+memory.recall.page
+# （关闭模式冻结结果集续页——memory_recall_next 工具的消费面）；
+# maintenance.recall_policy.* 不进本清单（模型无政策读写权）。
 ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab",
              "bootstrap.get", "bootstrap.next",
              "memory.recall.start", "memory.recall.refine",
+             "memory.recall.page",
              "memory.recall.status", "memory.recall.accept",
              "memory.recall.reject",
              "episode.apply", "episode.get", "episode.list"]
