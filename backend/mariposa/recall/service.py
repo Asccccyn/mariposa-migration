@@ -719,6 +719,11 @@ def _run_round_compute(session: dict, plan: dict,
         # start/refine 的提交事务调用 paging.freeze_set 落库）
         **({"page_set": {"cards": frozen_cards, "policy": policy}}
            if policy["mode"] == "off" else {}),
+        # §4.4：首轮回执记录政策冻结标记（Round2 gate 核对模式一致，
+        # 人类切换后旧 revision 的 Round2 拒 RECALL_POLICY_CHANGED）
+        "judge_policy": {"mode": policy["mode"],
+                         "revision": int(policy.get("revision") or 0),
+                         "required": bool(policy["judge_required"])},
         # 闭环复审 P1-3：Round2 事实源——真实证据状态而非通用
         # needs_validation 标签（rank_only 下一切正常交付都是
         # needs_validation，不能当"证据不足"）
@@ -848,6 +853,8 @@ def _commit_round_effects(conn, session_id: str, revision: int,
         cov = dict(effects.get("coverage") or {})
         if effects.get("first_round_facts") is not None:
             cov["_first_round_facts"] = effects["first_round_facts"]
+        if effects.get("judge_policy") is not None:
+            cov["_judge_policy"] = effects["judge_policy"]
         store.record_round1_receipt(
             conn, session_id=session_id, revision=revision,
             plan_hash=canonical_hash(plan),

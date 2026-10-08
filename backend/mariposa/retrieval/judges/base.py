@@ -70,6 +70,17 @@ class JudgeProvider:
               execution_context: dict) -> JudgeBatchResult:
         raise NotImplementedError
 
+    def outbound_grants(self) -> frozenset:
+        """该 provider 自身获准外发的数据许可集合（provider 无关接口，
+        MANUAL_HANDOFF_JUDGE_SWITCH_V1 §4.4）。
+
+        原文 Round2 的 source_excerpt 许可按**当前所选 provider 自己的**
+        许可集核验——不再 isinstance(TypeSafeJevJudge)；许可分立配置，
+        批准给 Jev 的数据许可不自动转授其他 provider。默认空集=无任何
+        外发许可（fail-closed）。
+        """
+        return frozenset()
+
 
 class DisabledJudge(JudgeProvider):
     """默认 provider：不尝试任何网络/SDK/密钥访问。"""

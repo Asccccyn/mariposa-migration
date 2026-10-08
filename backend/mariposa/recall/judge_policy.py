@@ -184,7 +184,9 @@ def update_policy(principal_id: str, *, expected_revision: int,
         raise Forbidden(
             "召回判断政策仅人类网页登录（qiaosheng）可写；模型与 "
             "worker 无切换权", code="FORBIDDEN", principal=principal_id)
-    if provider is not None and provider not in KNOWN_PROVIDERS:
+    if provider is not None and not _provider_known(provider):
+        # 生产写侧实际白名单=KNOWN_PROVIDERS（_INJECTED 恒空）；
+        # 测试注入的 fake 经 register_for_tests 后可被选为政策 provider
         raise Forbidden(
             f"provider 必须是 {list(KNOWN_PROVIDERS)} 或 null（未配置）",
             code="INVALID_ARGUMENT", provider=provider)
