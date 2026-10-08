@@ -86,24 +86,27 @@ def revalidate_replayed(fn_name: str, saved: dict,
     # 同一当前 provider 可用性判定（不只认 DisabledJudge 类名）：
     # TypeSafe 配置失效/缺 key/无有效 profile 同样不可用；raw 卡
     # 还须当前 profile 仍含 source_excerpt。
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：可用性判定按**政策所选
+    # provider**（不再走 env 兼容入口——政策为正本）；关闭模式已在上方
+    # RECALL_POLICY_CHANGED 早退，到这里的必为 on/unconfigured。许可核对
+    # 用 provider 无关接口 outbound_grants（Jev/Codex 同一入口）。
     from ..retrieval.judges import base as _jb
-    from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
-    _provider = _jb.get_provider()
+    _pol = _cur_pol
+    _provider = _jb.get_provider_by_name(
+        _pol.get("provider") if _pol["mode"] == "on" else None)
     _judge_down = isinstance(_provider, _jb.DisabledJudge)
-    _profile = None
-    if isinstance(_provider, TypeSafeJevJudge):
-        if getattr(_provider, "_disabled_reason", None):
-            _judge_down = True
-        _profile = getattr(_provider, "_data_profile", None) \
-            or frozenset()
-        if not _profile:
-            _judge_down = True
-        # 缺 key 只对"仍在用原生 judge()（真实 HTTP 路径）"的实例
-        # 判不可用——测试注入的 fake 覆写 judge() 且常以类属性声明
-        # key，实例级 env 缺失会遮蔽它，但 fake 根本不走 HTTP
-        if (not getattr(_provider, "_api_key", None)
-                and type(_provider).judge is
-                TypeSafeJevJudge.judge):
+    # 许可集语义：provider **显式声明**了非空 outbound_grants 才参与
+    # 逐卡角色过滤（Jev profile 即许可；Codex 同接口）。基类默认空集
+    # （含测试注入 fake）=该 provider 未声明许可面——不过滤（与旧
+    # 非 TypeSafeJevJudge 行为一致），就绪性由 provider_readiness 判定。
+    _grants = _provider.outbound_grants() if not _judge_down else None
+    _profile = _grants if _grants else None
+    # provider 自身就绪性（缺 key/非法 profile 等，按 provider 各自口径；
+    # 测试注入的 fake 不走 HTTP 不受 key 缺失影响）——与网页就绪探针同源
+    if not _judge_down:
+        from . import judge_policy as _jp
+        _rd = _jp.provider_readiness(_pol.get("provider"))
+        if not _rd.get("ready"):
             _judge_down = True
     if _judge_down and isinstance(saved.get("candidates"), list) \
             and saved["candidates"]:

@@ -271,6 +271,13 @@ def provider_readiness(provider: str | None) -> dict:
         return {"provider": None, "ready": False,
                 "blocked_reason": "provider_not_selected"}
     if provider not in KNOWN_PROVIDERS:
+        # 测试注入的 fake provider（register_for_tests）按就绪计——生产
+        # _INJECTED 恒空；就绪探针零网络语义不变
+        from ..retrieval.judges import base as _jb2
+        inj = _jb2._INJECTED.get(provider)
+        if inj is not None and not isinstance(inj, _jb2.DisabledJudge):
+            return {"provider": provider, "ready": True,
+                    "blocked_reason": None}
         return {"provider": provider, "ready": False,
                 "blocked_reason": "provider_unknown"}
     if provider == "typesafe_jev":
