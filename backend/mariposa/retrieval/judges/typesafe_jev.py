@@ -88,6 +88,11 @@ class TypeSafeJevJudge(base.JudgeProvider):
     # ------------------------------------------------------------------
     # Public provider contract
 
+    def outbound_grants(self) -> frozenset:
+        """Jev 自身的数据外发许可（S15 显式 profile；provider 无关接口
+        MANUAL_HANDOFF_JUDGE_SWITCH_V1 §4.4——许可分立，不转授）。"""
+        return self._data_profile or frozenset()
+
     def judge(self, query_plan: dict, candidates: list[dict],
               execution_context: dict) -> base.JudgeBatchResult:
         # P1-06：query anchors 从当次 query_plan 派生（缓存路径与

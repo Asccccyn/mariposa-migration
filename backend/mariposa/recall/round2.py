@@ -83,10 +83,21 @@ _RETRIEVAL_COMPLETE_VALUES = frozenset({
 
 
 def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
-    """六条件全部以服务端事实核验（S13）。返回 (allowed, gate 详情)。"""
+    """条件全部以服务端事实核验（S13；2026-10-08 判断层政策化）。
+    返回 (allowed, gate 详情)。
+
+    判断类条件（unjudged_zero/judge_no_fault/外发许可）按政策分形
+    （§4.4）：开启=所选 provider 自己的 source_excerpt 许可；关闭=
+    无外发故不要求 provider 许可、判断统计条件按 judge_required=
+    false 跳过；其余条件（首轮完成/覆盖/预算/理由闭集）两模式同权。
+    """
     sid = session["session_id"]
     rev = session["current_revision"]
-    gate: dict = {"reason_in_closed_set": reason in _ROUND2_REASONS}
+    from . import judge_policy
+    policy = judge_policy.effective()
+    gate: dict = {"reason_in_closed_set": reason in _ROUND2_REASONS,
+                  "judge_mode": policy["mode"],
+                  "judge_policy_revision": policy.get("revision")}
 
     # 3. 当前范围的有效 Round1 完成事实
     # 全量审计 P1-01：统计回执存在 ≠ 完整完成——必须本 revision 的
@@ -97,6 +108,17 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
                               and receipt.get("completed") == 1)
     gate["round1_completed"] = gate["round1_receipt"]
     if receipt is not None:
+        # §3.2 政策冻结核对：首轮执行时的政策模式与当前一致才放行
+        # ——切换后旧 revision 的 Round2 拒绝（RECALL_POLICY_CHANGED，
+        # 不混模式、不自动另起查询）
+        r1_pol = (receipt["coverage"] or {}).get("_judge_policy") or {}
+        if r1_pol.get("mode") and r1_pol["mode"] != policy["mode"]:
+            raise Forbidden(
+                f"召回判断政策已切换（首轮回执 {r1_pol['mode']}，当前 "
+                f"{policy['mode']}）：Round2 拒绝，请基于新政策重新查询",
+                code="RECALL_POLICY_CHANGED",
+                receipt_mode=r1_pol["mode"], current_mode=policy["mode"],
+                session_id=sid)
         # 复审#3 + 三轮复审#1：本轮请求过的每个 retrieval family 都必须
         # complete_within_scope——unavailable/partial/pending/truncated
         # 都不能冒充"完整搜过以后没有候选"；只检查白名单内的 family
@@ -105,22 +127,32 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
         incomplete = sorted(
             k for k in _RETRIEVAL_FAMILY_STATUS_KEYS
             if isinstance(cov.get(k), str)
-            and cov[k] not in _RETRIEVAL_COMPLETE_VALUES)
+            and cov[k] not in _RETRIEVAL_COMPLETE_VALUES
+            # 关闭模式 judge=bypassed_by_user 不是故障——完整性按检索
+            # family 判断，判断层状态由下方政策分形条件承担
+            and not (policy["mode"] == "off" and k == "judge"))
         # not_configured 仅当该 family 本就未请求（plan 无
         # semantic_query 时 dense not_requested；这里 provider 未配
         # 但请求过语义 = unavailable，由请求侧写入）
         gate["retrieval_complete"] = not incomplete
         gate["incomplete_families"] = incomplete
-        gate["unjudged_zero"] = receipt["unjudged_count"] == 0
-        empty_input = (receipt["judged_count"] == 0
-                       and receipt["unavailable_count"] == 0
-                       and receipt["candidate_set_hash"]
-                       == _canonical_hash([]))
-        gate["judge_no_fault"] = (
-            receipt["unavailable_count"] == 0
-            and receipt["coverage"].get("judge") in (
-                "evaluated", "not_configured")
-            and (receipt["judged_count"] > 0 or empty_input))
+        if policy["judge_required"]:
+            # §4.4：unjudged_zero/judge_no_fault 只在 judge_required=
+            # true 时使用；关闭模式 judged_count 恒 0、无判断故障可言
+            gate["unjudged_zero"] = receipt["unjudged_count"] == 0
+            empty_input = (receipt["judged_count"] == 0
+                           and receipt["unavailable_count"] == 0
+                           and receipt["candidate_set_hash"]
+                           == _canonical_hash([]))
+            gate["judge_no_fault"] = (
+                receipt["unavailable_count"] == 0
+                and receipt["coverage"].get("judge") in (
+                    "evaluated", "not_configured")
+                and (receipt["judged_count"] > 0 or empty_input))
+        else:
+            gate["unjudged_zero"] = True
+            gate["judge_no_fault"] = True
+            gate["judge_conditions_bypassed"] = True
         # 6. 理由的服务端事实支持（闭环复审 P1-3：按真实证据状态
         # 判定，不用通用 needs_validation——rank_only 下一切正常
         # 交付都是 needs_validation，不构成升级理由）
@@ -128,15 +160,21 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
             sid, reason,
             receipt["coverage"].get("_first_round_facts") or {})
 
-    # 4. raw 搜索 + 当前 Jev 供应商外发授权（S15：无 source_excerpt
-    #    许可则 raw 不开始）
-    from ..retrieval.judges import base as judge_base
-    from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
-    provider = judge_base.get_provider()
-    profile_ok = False
-    if isinstance(provider, TypeSafeJevJudge):
-        profile_ok = "source_excerpt" in (provider._data_profile
-                                          or frozenset())
+    # 4. raw 搜索 + 判断层外发授权（S15；§4.4 政策分形）：开启=当前
+    #    所选 provider 自己的 source_excerpt 许可（provider 无关，
+    #    不再 isinstance TypeSafeJevJudge）；关闭=无外发不要求许可；
+    #    未配置=无许可（fail-closed）
+    provider = (judge_base.get_provider_by_name(policy["provider"])
+                if policy["mode"] == "on" else None)
+    if policy["mode"] == "off":
+        profile_ok = True  # 未向辅助判断模型外发原文
+        gate["judge_outbound_basis"] = "bypassed_by_user"
+    elif policy["mode"] == "on":
+        profile_ok = "source_excerpt" in provider.outbound_grants()
+        gate["judge_outbound_basis"] = "provider_grant"
+    else:
+        profile_ok = False
+        gate["judge_outbound_basis"] = "unconfigured"
     gate["raw_search_authorized"] = bool(
         config.RECALL_RUNTIME_ENABLED
         and config.RECALL_RAW_FALLBACK_ENABLED)
@@ -304,18 +342,21 @@ def _round2_resolve_offset(a: dict, session: dict) -> int:
     if cont_token and not config.RECALL_RAW_FALLBACK_ENABLED:
         raise _F("Raw 通道当前已关闭（MARIPOSA_RAW_FALLBACK_ENABLED）",
                  code="RAW_DISABLED")
-    # RA-018（2026-10-02 复审 P2）：翻页同样复核当前 source_excerpt
-    # 出站授权——首页 gate 的许可生命周期必须覆盖续页
+    # RA-018（2026-10-02 复审 P2）+ §4.4（2026-10-08）：翻页同样复核
+    # 当前有效门——许可生命周期必须覆盖续页；按政策分形：开启=当前
+    # 所选 provider 自己的 source_excerpt 许可（provider 无关）；关闭
+    # =无外发不要求许可（R08：切换/撤权后按当前模式重检，不静默重开）
     if cont_token:
-        from ..retrieval.judges import base as _jb_r2
-        from ..retrieval.judges.typesafe_jev import TypeSafeJevJudge
-        _prov = _jb_r2.get_provider()
-        _profile_ok = (
-            isinstance(_prov, TypeSafeJevJudge)
-            and "source_excerpt" in (_prov._data_profile or frozenset()))
-        if not _profile_ok:
-            raise _F("当前 judge profile 不含 source_excerpt 许可；"
-                     "Raw 翻页拒绝", code="RAW_PROFILE_WITHDRAWN")
+        from . import judge_policy as _jp
+        _pol = _jp.effective()
+        if _pol["mode"] == "on":
+            _prov = judge_base.get_provider_by_name(_pol["provider"])
+            if "source_excerpt" not in _prov.outbound_grants():
+                raise _F("当前判断 provider 不含 source_excerpt 外发"
+                         "许可；Raw 翻页拒绝", code="RAW_PROFILE_WITHDRAWN")
+        elif _pol["mode"] == "unconfigured":
+            raise _F("判断层未配置（provider 缺失）；原文外发许可不"
+                     "存在，Raw 翻页拒绝", code="RAW_PROFILE_WITHDRAWN")
     with _db.recall_runtime() as conn:
         if cont_token:
             cont = store.read_raw_continuation(
@@ -341,16 +382,26 @@ def _round2_resolve_offset(a: dict, session: dict) -> int:
 
 def _round2_judge_cards(sid: str, session: dict, plan: dict,
                         raw_cards: list, raw_has_more: bool,
+                        policy: dict | None = None,
                         ) -> tuple[list, dict, list]:
-    """Round2 的 Jev 出站+基数对账（1005B 重构：从 _round2_body
-    逐字拆出，行为零变更）。返回 (judge_candidates, coverage,
-    degraded)——raw_has_more 由调用方从 raw_out 取。"""
+    """Round2 的判断层出站+基数对账（1005B 拆出；2026-10-08 政策化）。
+    返回 (judge_candidates, coverage, degraded)。
+
+    政策关闭：不构造/不调用任何 provider，本批候选全集直通分页
+    （§4.4：无外发故不要求 provider 许可，judged_count=0）；开启：
+    构造**所选** provider（provider 无关接口，不串联接力）。"""
     from ..retrieval.judges import base as judge_base
-    provider = judge_base.get_provider()
+    from . import judge_policy
+    policy = policy or judge_policy.effective()
     coverage = {"raw": ("partial_has_more" if raw_has_more
                         else "complete_within_scope"),
                 "judge": "evaluated"}
     degraded: list[str] = []
+    if policy["mode"] == "off":
+        coverage["judge"] = "bypassed_by_user"
+        return raw_cards, coverage, degraded
+    provider = judge_base.get_provider_by_name(
+        policy["provider"] if policy["mode"] == "on" else None)
     judge_candidates = raw_cards[:config.RECALL_JUDGE_CANDIDATE_CAP]
     if isinstance(provider, judge_base.DisabledJudge):
         coverage["judge"] = "not_configured"
@@ -358,7 +409,9 @@ def _round2_judge_cards(sid: str, session: dict, plan: dict,
         judge_result = provider.judge(plan, judge_candidates,
                                       {"session_id": sid,
                                        "revision": session[
-                                           "current_revision"]})
+                                           "current_revision"],
+                                       "judge_policy_revision":
+                                           policy.get("revision")})
         # CB-012：Round2 judge 对账——重复 ref/陌生 ref 不是有效判断，
         # 不得静默去重后照签 evaluated（反例：provider 对一张卡返回
         # 两个相同 ref 仍 coverage=evaluated 且交付）
@@ -391,9 +444,14 @@ def _round2_judge_cards(sid: str, session: dict, plan: dict,
 def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                  lease_token: str | None = None) -> dict:
     """round2 主体（首轮由 round2 的租约互斥包装调用，携带 fencing
-    token——TTL 被接管后原持有者不得外发/提交，RA-002）。"""
+    token——TTL 被接管后原持有者不得外发/提交，RA-002）。
+
+    2026-10-08（§4.4）：判断层按政策分形——关闭模式本批候选全集冻结
+    分页（上游 raw 游标与交付分页游标分槽，R05/R06），开启模式保持
+    原判断后有界交付。"""
     from .. import db as _db
     from . import pipeline as _pl
+    from . import judge_policy
     from ..errors import Forbidden as _F, StaleOperation
     _require_enabled()
     sid = str(a.get("session_id", ""))
@@ -410,14 +468,16 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
     # cont_token 主函数留存（提交事务/预算判断多处使用）
     cont_token = str(a.get("continuation_token") or "")
     offset = _round2_resolve_offset(a, session)
+    # 政策快照（§3.2：查询固定 policy_revision/模式；交付前复核）
+    policy = judge_policy.effective()
 
     # 服务端已存 plan（不接受可更换的 Round2 query_plan，S13-4）
     plan = store.get_plan(sid) or {}
-    # 计算（事务外）：raw 深搜 → 候选卡 → 同层 Jev → selection
+    # 计算（事务外）：raw 深搜 → 候选卡 → 判断层（按政策）→ selection
     raw_limit = max(20, config.RECALL_DELIVERY_LIMIT * 4)
     raw_out = _pl.raw_deep_search(
         principal, plan, limit=raw_limit, offset=offset)
-    # RA-002：昂贵调用后、Jev 外发前校验租约归属——TTL 过期被接管的
+    # RA-002：昂贵调用后、外发前校验租约归属——TTL 过期被接管的
     # 原持有者在此中止（接管者已获得新租约）
     if lease_token is not None and not _raw_lease_owned(
             sid, session["current_revision"],
@@ -443,20 +503,42 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                 "raw_verbatim", "raw_messages", h.get("excerpt") or "",
                 h["resource_ref"])],
         })
-    # Jev 一层出站+对账——拆出至 _round2_judge_cards（1005B 重构）
+    # 判断层出站+对账（政策分形）——_round2_judge_cards
     raw_has_more = bool(raw_out.get("has_more"))
     judge_candidates, coverage, degraded = _round2_judge_cards(
-        sid, session, plan, raw_cards, raw_has_more)
+        sid, session, plan, raw_cards, raw_has_more, policy=policy)
     sel = selection.select(judge_candidates, plan,
-                           store.rejected_resource_refs(sid))
-    cards = _finalize_cards(sel["delivered"])
+                           store.rejected_resource_refs(sid),
+                           judge_required=policy["judge_required"])
+    if policy["mode"] == "off":
+        # 关闭模式（§4.4/R05）：本批候选全集冻结为分页结果集——上游
+        # raw 游标推进以"本批全部可交付"（已冻结可逐页取）为前提；
+        # 交付分页游标与上游 raw_search 续页分槽（R06）
+        from . import paging as _paging
+        frozen_cards = [_paging.project_card(c)
+                        for c in sel["delivered"]]
+        page_extra = {
+            "judge_mode": "off",
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": "bypassed_by_user",
+            "judged_count": 0,
+            "retrieval_coverage": dict(coverage),
+        }
+        first_page = _paging.assemble_page(frozen_cards, (0, 0),
+                                           page_extra)
+        cards = first_page["candidates"]
+    else:
+        frozen_cards = None
+        cards = _finalize_cards(sel["delivered"])
     packet = {
         "recall_session_id": sid,
         "revision": session["current_revision"],
         "round": 2,
         "status": session["status"],
         "search_status": "FOUND" if cards else "NO_MATCH_OBSERVED",
-        "delivery_action": sel["delivery_action"],
+        "delivery_action": ("needs_validation"
+                            if policy["mode"] == "off"
+                            else sel["delivery_action"]),
         "instruction_authority": "none",
         "content_role": "retrieved_memory",
         "coverage": coverage,
@@ -471,9 +553,28 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
         "budget": budget.snapshot(
             _with_round_preview(session) if not cont_token else session),
         "token_count": config.RECALL_TOKENIZER,
+        # §4.2/§4.4 合同字段（两模式同形；关闭=分页、开启=有界交付）
+        "judge_mode": policy["mode"],
+        "judge_policy_revision": int(policy.get("revision") or 0),
+        "judgement_status": coverage.get("judge"),
+        "judged_count": 0,
     }
-    packet = _enforce_output_budget(packet)
+    if policy["mode"] == "off":
+        packet["pagination"] = first_page["pagination"]
+        packet["retrieval_coverage"] = first_page["retrieval_coverage"]
+    else:
+        packet = _enforce_output_budget(packet)
     op_key = op_ctx["operation_key"] if op_ctx else None
+    # §3.2：结果交付前复核当前政策——计算期间被人类切换则拒绝交付
+    # （RECALL_POLICY_CHANGED），不在同一结果集混入另一种模式
+    _cur_pol = judge_policy.effective()
+    if _cur_pol["mode"] != policy["mode"]:
+        raise _F(
+            f"召回判断政策已切换（计算时 {policy['mode']}，交付时 "
+            f"{_cur_pol['mode']}）：Round2 拒绝提交",
+            code="RECALL_POLICY_CHANGED",
+            compute_mode=policy["mode"], current_mode=_cur_pol["mode"],
+            session_id=sid)
     with _db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -492,6 +593,17 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                 if owned is None or owned["lease_token"] != lease_token:
                     raise _F("Raw 租约已被接管；本执行者拒绝提交",
                              code="RAW_LEASE_LOST", session_id=sid)
+            # 关闭模式（§4.4/R05）：本批结果集冻结落库+首页续页游标
+            # ——先于 operation 行（保存结果包含最终 result_set_id 与
+            # next_cursor，同 op 重放回同一首页）
+            if frozen_cards is not None:
+                from .service import _persist_page_set_in_tx
+                _persist_page_set_in_tx(
+                    conn, packet,
+                    {"page_set": {"cards": frozen_cards,
+                                  "policy": policy},
+                     "coverage": coverage},
+                    session, plan)
             # 游标先行：翻尽清除、未翻尽签发/重签（单活跃），packet 的
             # continuation 在 operation 行落库前定型。自审（2026-10-01）：
             # 翻页签发走 CAS——校验与最终事务之间无锁，并发双花恰一
@@ -577,6 +689,10 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
             conn.execute("ROLLBACK")
             raise
     # P3（2026-10-05 审计）：continuation 在预算执行后注入——补一次
-    # 终检，S16 的 24KB 上限对最终出站包（含游标）同样成立
+    # 终检，S16 的 24KB 上限对最终出站包（含游标）同样成立。
+    # 关闭模式例外（§4.3/§4.4）：分页装配器自管字节预算，不经旧
+    # 裁剪器（不得 pop 本批候选）
+    if packet.get("judge_mode") == "off":
+        return packet
     return _enforce_output_budget(packet)
 
