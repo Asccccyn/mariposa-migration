@@ -769,6 +769,16 @@ def purge_expired(limit: int = 200) -> int:
                     conn.execute(
                         f"DELETE FROM {child} WHERE session_id=?",
                         (sid,))
+                # MANUAL_HANDOFF_JUDGE_SWITCH_V1（M06）：关闭模式分页资产
+                # 随 session 整链清理——先游标（无 session 列，按集合删）
+                # 再结果集，无孤儿
+                conn.execute(
+                    "DELETE FROM recall_page_cursors WHERE"
+                    " result_set_id IN (SELECT result_set_id FROM"
+                    " recall_page_sets WHERE session_id=?)", (sid,))
+                conn.execute(
+                    "DELETE FROM recall_page_sets WHERE session_id=?",
+                    (sid,))
                 conn.execute(
                     "DELETE FROM recall_sessions WHERE session_id=?",
                     (sid,))
@@ -788,7 +798,9 @@ def reset_for_tests() -> None:
               "recall_query_revisions", "recall_sessions",
               # F-J-04：与 purge_expired 同步（漏清=跨测试残留）
               "recall_continue_refs", "recall_raw_continuations",
-              "recall_raw_leases")
+              "recall_raw_leases",
+              # M06：关闭模式分页资产同源清理
+              "recall_page_cursors", "recall_page_sets")
     with db.recall_runtime() as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         for t in tables:

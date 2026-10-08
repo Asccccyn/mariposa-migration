@@ -164,6 +164,12 @@ def _register() -> dict[str, Capability]:
     add("memory.recall.round2", _recall_round2, _owners(), True,
         description="v1.7 Round 2 原文深搜：同 session+revision、"
                     "ROUND1_COMPLETE 回执、judge 完成且 reason 属闭集")
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：关闭判断模式的
+    # 结果集续页——只读冻结集合，不修改查询（refine 才改查询）
+    add("memory.recall.page", _recall_page, _owners(), False,
+        description="判断关闭模式：按服务端游标读取冻结结果集下一页"
+                    "（零检索/零判断/零 COUNT；政策切换拒绝混页；"
+                    "游标与 refine/Raw 续页引用分槽不互换）")
     add("memory.words.get", _words_get, _owners(), False,
         description="按 word_id 读单条话语（当前表示校验；遗忘=disabled）")
     add("memory.context.validate", _context_validate, _owners(), False,
@@ -330,6 +336,18 @@ def _register() -> dict[str, Capability]:
         description="维护任务状态总览")
     add("maintenance.settings.get", _settings_get, _maintainers(), False,
         description="只读配置快照（时区/开窗/遗忘/provider 状态）")
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：召回判断总开关——
+    # 持久正本在正式库；仅人类网页登录（qiaosheng）可写，模型/worker
+    # 无切换权（update 不发放给 jiaming/worker 的任何 profile）
+    add("maintenance.recall_policy.get", _judge_policy_get, _owners(),
+        False,
+        description="召回判断政策只读（模式/provider/model/revision/"
+                    "就绪探针；零模型调用——刷新不触发推理）")
+    add("maintenance.recall_policy.update", _judge_policy_update,
+        {"qiaosheng"}, True,
+        description="召回判断政策写入（expected_revision CAS + 幂等键；"
+                    "开启=所选 provider 判断，关闭=零判断调用+候选全集"
+                    "分页；仅 qiaosheng）")
     add("emotion.context.get", _emotion_reserved, _owners(), False,
         description="情绪补充召回（reserved，默认禁用）")
     add("listening.status", _listening_reserved, _owners(), False,
@@ -803,6 +821,37 @@ def _recall_round2(principal: Principal, a: dict) -> dict:
     commit-at-end 单事务；operation_id 幂等（runtime 集，不走 formal
     响应缓存）。"""
     return _with_operation_id(principal, a, recall_service.round2)
+
+
+def _recall_page(principal: Principal, a: dict) -> dict:
+    """关闭判断模式的冻结结果集续页（§4.2/§4.3）：只读，零检索/零
+    判断/零 COUNT；政策切换后旧 revision 续页 RECALL_POLICY_CHANGED。"""
+    from ..recall import paging as _paging
+    return _paging.serve_page(principal, a)
+
+
+def _judge_policy_get(principal: Principal, a: dict) -> dict:
+    from ..recall import judge_policy as _jp
+    out = _jp.get_policy()
+    out["provider_readiness"] = _jp.provider_readiness(out.get("provider"))
+    out["known_providers"] = list(_jp.KNOWN_PROVIDERS)
+    return out
+
+
+def _judge_policy_update(principal: Principal, a: dict) -> dict:
+    from ..recall import judge_policy as _jp
+    if "enabled" not in a:
+        raise Forbidden("enabled 必填（true=开启判断/false=关闭直出"
+                        "需显式确认）", code="INVALID_ARGUMENT")
+    out = _jp.update_policy(
+        principal.principal_id,
+        expected_revision=_int_arg(a, "expected_revision", 0, 0, 1 << 30),
+        enabled=bool(a.get("enabled")),
+        provider=a.get("provider"),
+        model_id=a.get("model_id"),
+        idempotency_key=a.get("idempotency_key"))
+    out["provider_readiness"] = _jp.provider_readiness(out.get("provider"))
+    return out
 
 
 def _keep_revoke(principal: Principal, a: dict) -> dict:

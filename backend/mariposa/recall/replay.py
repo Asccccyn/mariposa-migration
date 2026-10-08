@@ -57,6 +57,29 @@ def revalidate_replayed(fn_name: str, saved: dict,
         raise StaleOperation(
             "Words 通道当前已关闭，旧响应拒绝重放",
             operation=fn_name)
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08，J08）：政策切换后
+    # 旧包重放拒绝——不在同一结果集混入另一种模式。旧格式包（无
+    # judge_mode 字段=判断路径产物）在当前政策为关闭时同样拒绝，
+    # 不把判断路径缓存正文在关闭模式下继续释放
+    from . import judge_policy as _jpol
+    _cur_pol = _jpol.effective()
+    _saved_mode = saved.get("judge_mode")
+    if _saved_mode is not None and _saved_mode != _cur_pol["mode"]:
+        raise StaleOperation(
+            f"召回判断政策已切换（保存时 {_saved_mode}，当前 "
+            f"{_cur_pol['mode']}）：旧 operation 响应拒绝重放",
+            code="RECALL_POLICY_CHANGED",
+            operation=fn_name,
+            saved_mode=_saved_mode, current_mode=_cur_pol["mode"],
+            saved_policy_revision=saved.get("judge_policy_revision"),
+            current_policy_revision=_cur_pol.get("revision"))
+    if _saved_mode is None and _cur_pol["mode"] == "off":
+        raise StaleOperation(
+            "召回判断政策已切换为关闭：旧判断路径响应拒绝重放",
+            code="RECALL_POLICY_CHANGED",
+            operation=fn_name,
+            current_mode="off",
+            current_policy_revision=_cur_pol.get("revision"))
     # RECALL-03 + CR-01（2026-10-04 全量审计 P1）：Judge 不可用或
     # 原文许可撤回后，旧 operation 不释放正文——request_ref 幂等的
     # 是结果身份，不是缓存正文的出站许可。与 fresh/continuation 共用

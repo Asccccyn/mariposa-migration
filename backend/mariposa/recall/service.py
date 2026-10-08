@@ -340,25 +340,45 @@ def _words_dense_fuse(conn, plan, words_hits, coverage):
 
 
 def _judge_pass(session, plan, event_fused, words_hits, raw_pre,
-                coverage, degraded):
-    """Jev 精排+基数对账+unjudged 计数（1005B 重构：从
-    _run_round_compute 逐字拆出，行为零变更。返回 (judge_result,
-    judge_candidates, judge_items, unjudged)。"""
+                coverage, degraded, policy=None):
+    """判断层精排+基数对账+unjudged 计数（1005B 拆出；2026-10-08
+    MANUAL_HANDOFF_JUDGE_SWITCH_V1 政策化）。返回 (judge_result,
+    judge_candidates, judge_items, unjudged)。
+
+    - 政策 off（明确人类关闭）：不构造/不调用任何 provider、不读其
+      分数缓存（零判断调用），coverage.judge=bypassed_by_user；
+    - 政策 on：构造**所选** provider（get_provider_by_name）——Jev 与
+      Codex 等实现同接口同材料，不串联接力；
+    - 未配置（缺行/无 provider/未知名）：保留旧 S10 阻断语义
+      （not_configured，正文不直出）——不是关闭。
+    """
+    from . import judge_policy
+    policy = policy or judge_policy.effective()
     sid = session["session_id"]
-    # Jev 精排（可关闭/可替换；只评价被交付的候选）。
-    # S10/WP01：words 与 raw-fallback 候选同样过一层 Jev——未判断
+    if policy["mode"] == "off":
+        # 关闭模式：候选全集走冻结分页（_run_round_compute 组装），
+        # 这里必须零 provider 构造/调用（J01：构造器/缓存/网络/进程
+        # 计数为零）
+        coverage["judge"] = "bypassed_by_user"
+        return None, [], [], 0
+    # on / unconfigured：走判断门（unconfigured 用 DisabledJudge 表达
+    # not_configured，交付被 S10 硬门拦下）
+    provider = judge_base.get_provider_by_name(
+        policy.get("provider") if policy["mode"] == "on" else None)
+    # Jev 精排（可替换；只评价被交付的候选）。
+    # S10/WP01：words 与 raw-fallback 候选同样过一层判断——未判断
     # 候选不得出站（完整 mixed 各 20/cap40 与 RRF 合序送判归
     # WP02/WP04/WP05 精化）
     judge_result = None
     judge_items: list = []   # 对账后的可用判断项（P1-02 复审）
     judge_candidates = (event_fused + words_hits + raw_pre)[
         :config.RECALL_JUDGE_CANDIDATE_CAP]
-    provider = judge_base.get_provider()
     if isinstance(provider, judge_base.DisabledJudge):
         coverage["judge"] = "not_configured"
     else:
         ctx = {"session_id": sid, "revision": session["current_revision"],
-               "policy_version": config.RECALL_POLICY_VERSION}
+               "policy_version": config.RECALL_POLICY_VERSION,
+               "judge_policy_revision": policy.get("revision")}
         judge_result = provider.judge(plan, judge_candidates, ctx)
         coverage["judge"] = judge_result.provider_status
         coverage["judge_cache"] = {
@@ -411,6 +431,9 @@ def _run_round_compute(session: dict, plan: dict,
     """
     sid = session["session_id"]
     from . import pipeline as _pl
+    from . import judge_policy
+    # 每次查询固定 policy_revision 与模式（§3.2）：续页/重放核对同一快照
+    policy = judge_policy.effective()
     rejected = store.rejected_resource_refs(sid)
     coverage: dict = {"truncated": False}
     degraded: list[str] = []
@@ -458,14 +481,37 @@ def _run_round_compute(session: dict, plan: dict,
     raw_pre = raw_result["hits"] if raw_result else []
     judge_result, judge_candidates, judge_items, unjudged = _judge_pass(
         session, plan, event_fused, words_hits, raw_pre,
-        coverage, degraded)
+        coverage, degraded, policy=policy)
 
     # 候选合流：event RRF 序 + words 独立序（通道间不比较未校准原始分数）
     all_candidates = fusion.dedupe_by_resource(event_fused + words_hits +
                                                (raw_result["hits"] if
                                                 raw_result else []))
     sel = selection.select(all_candidates, plan, rejected,
-                           unjudged_count=unjudged)
+                           unjudged_count=unjudged,
+                           judge_required=policy["judge_required"])
+    if policy["mode"] == "off":
+        # 关闭模式（§4.1）：冻结候选全集=合法去重后的本次检索全集
+        #（不套 JUDGE_CAP/DELIVERY_LIMIT/多样性淘汰/分数排序——这些
+        # 已由 selection(judge_required=False) 跳过）；正文载体换全量
+        # 获授权投影（不 600/4000 截断），首页由冻结集装配分页。
+        from . import paging as _paging
+        for c in sel["delivered"]:
+            _expand_full_text(c)
+        frozen_cards = [_paging.project_card(c)
+                        for c in sel["delivered"]]
+        page_extra = {
+            "judge_mode": "off",
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": "bypassed_by_user",
+            "judged_count": 0,
+            "retrieval_coverage": _scope_coverage(coverage),
+        }
+        first_page = _paging.assemble_page(frozen_cards, (0, 0),
+                                           page_extra)
+    else:
+        frozen_cards = None
+        first_page = None
 
     # 检索结果主状态（§12）
     if sel["delivered"]:
@@ -493,57 +539,129 @@ def _run_round_compute(session: dict, plan: dict,
          "scores": {"rrf": c.get("rrf_score"),
                     "judge": c.get("judge", {}).get("relevance_signal")}}
         for c in all_candidates]
-    receipts = [{"receipt_id": f"rc_{uuid.uuid4().hex[:10]}",
-                 "resource_ref": c["resource_ref"],
-                 "content_version": c.get("content_version"),
-                 "representation_version": c.get("representation_version"),
-                 "permission_version": "owner_binding_v1"}
-                for c in sel["delivered"]]
-    by_receipt = {r["receipt_id"]: r["resource_ref"] for r in receipts}
-    for c in sel["delivered"]:
-        c["version_receipt"] = next(
-            (k for k, v in by_receipt.items() if v == c["resource_ref"]), None)
+    if policy["mode"] == "off":
+        # 回执只绑真实出站的首页条目（整卡与片段都以资源为单位一次）
+        _page_refs: list[str] = []
+        for e in first_page["candidates"]:
+            ref = e.get("resource_ref")
+            if ref and ref not in _page_refs:
+                _page_refs.append(ref)
+        receipts = [{"receipt_id": f"rc_{uuid.uuid4().hex[:10]}",
+                     "resource_ref": ref,
+                     "content_version": next(
+                         (c.get("content_version")
+                          for c in frozen_cards
+                          if c.get("resource_ref") == ref), None),
+                     "representation_version": next(
+                         (c.get("representation_version")
+                          for c in frozen_cards
+                          if c.get("resource_ref") == ref), None),
+                     "permission_version": "owner_binding_v1"}
+                    for ref in _page_refs]
+        by_receipt = {r["receipt_id"]: r["resource_ref"] for r in receipts}
+        for c in frozen_cards:
+            if c.get("resource_ref") in by_receipt.values():
+                c["version_receipt"] = next(
+                    (k for k, v in by_receipt.items()
+                     if v == c["resource_ref"]), None)
+    else:
+        receipts = [{"receipt_id": f"rc_{uuid.uuid4().hex[:10]}",
+                     "resource_ref": c["resource_ref"],
+                     "content_version": c.get("content_version"),
+                     "representation_version":
+                         c.get("representation_version"),
+                     "permission_version": "owner_binding_v1"}
+                    for c in sel["delivered"]]
+        by_receipt = {r["receipt_id"]: r["resource_ref"] for r in receipts}
+        for c in sel["delivered"]:
+            c["version_receipt"] = next(
+                (k for k, v in by_receipt.items()
+                 if v == c["resource_ref"]), None)
 
     status = state_machine.derive_status(search_status,
                                          len(sel["delivered"]),
                                          bool(sel["conflicts"]))
-    # S10：Jev 不可用/未配置时正文不直出——交付为空必须是显式结构化
-    # 状态，不是静默空结果
-    if not sel["delivered"] and coverage.get("judge") in (
-            "not_configured", "unavailable"):
+    # S10：判断不可用/未配置时正文不直出——交付为空必须是显式结构化
+    # 状态，不是静默空结果（关闭模式无此抑制：bypassed 不等于故障）
+    if (not sel["delivered"] and policy["judge_required"]
+            and coverage.get("judge") in ("not_configured", "unavailable")):
         sel["missing"].append(
-            "Jev 判断不可用（not_configured/unavailable）：候选正文"
-            "不直出（S10）；可配置 judge 后重试")
+            "判断层不可用（not_configured/unavailable）：候选正文"
+            "不直出（S10）；可在网页配置判断 provider 或经人工关闭后"
+            "以全集分页交付")
     continuation = None
     if ("words" in channels and _words_evidence_insufficient(
             plan, words_hits or [])):
         continuation = {"available": True, "action": "round2_raw",
                         "via": "memory.recall.round2"}
 
-    packet = {
-        "recall_session_id": sid,
-        "revision": session["current_revision"],
-        # 复审#5：重放按同 intent 重校验——专项 words 不套 event phase
-        "intent": plan.get("intent")
-        or ("find_words" if (plan.get("channels") or []) == ["words"]
-            else "recall_event"),
-        "status": status,
-        "search_status": search_status,
-        "delivery_action": sel["delivery_action"],
-        "instruction_authority": "none",
-        "content_role": "retrieved_memory",
-        "coverage": coverage,
-        "candidates": _finalize_cards(sel["delivered"]),
-        "missing": sel["missing"],
-        "conflicts": sel["conflicts"],
-        "degraded_reasons": sorted(set(degraded)),
-        "continuation": continuation,
-        # 本轮尚未落库：预算快照按"含本轮成功"预览（rounds_used+1），
-        # 最终事务成功后该预览即为事实
-        "budget": budget.snapshot(_with_round_preview(session)),
-        "token_count": config.RECALL_TOKENIZER,
-    }
-    packet = _enforce_output_budget(packet)
+    if policy["mode"] == "off":
+        packet = {
+            "recall_session_id": sid,
+            "revision": session["current_revision"],
+            "intent": plan.get("intent")
+            or ("find_words" if (plan.get("channels") or []) == ["words"]
+                else "recall_event"),
+            "status": status,
+            "search_status": search_status,
+            "delivery_action": "needs_validation",
+            "instruction_authority": "none",
+            "content_role": "retrieved_memory",
+            "coverage": coverage,
+            "missing": sel["missing"],
+            "conflicts": sel["conflicts"],
+            "degraded_reasons": sorted(set(degraded)),
+            "continuation": continuation,
+            "budget": budget.snapshot(_with_round_preview(session)),
+            "token_count": config.RECALL_TOKENIZER,
+            # 关闭模式分页合同（§4.2/§4.3）：不经 _enforce_output_budget
+            #（分页装配器自管 24576 字节预算，且不得 pop 候选）
+            "candidates": first_page["candidates"],
+            "judge_mode": "off",
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": "bypassed_by_user",
+            "judged_count": 0,
+            "retrieval_coverage": first_page["retrieval_coverage"],
+            "pagination": first_page["pagination"],
+        }
+    else:
+        packet = {
+            "recall_session_id": sid,
+            "revision": session["current_revision"],
+            # 复审#5：重放按同 intent 重校验——专项 words 不套 event phase
+            "intent": plan.get("intent")
+            or ("find_words" if (plan.get("channels") or []) == ["words"]
+                else "recall_event"),
+            "status": status,
+            "search_status": search_status,
+            "delivery_action": sel["delivery_action"],
+            "instruction_authority": "none",
+            "content_role": "retrieved_memory",
+            "coverage": coverage,
+            "candidates": _finalize_cards(sel["delivered"]),
+            "missing": sel["missing"],
+            "conflicts": sel["conflicts"],
+            "degraded_reasons": sorted(set(degraded)),
+            "continuation": continuation,
+            # 本轮尚未落库：预算快照按"含本轮成功"预览（rounds_used+1），
+            # 最终事务成功后该预览即为事实
+            "budget": budget.snapshot(_with_round_preview(session)),
+            "token_count": config.RECALL_TOKENIZER,
+            # 判断开启路径的合同字段（§4.2；有界交付即全部交付）
+            "judge_mode": policy["mode"],
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": coverage.get("judge") or "not_configured",
+            "judged_count": 0,  # 下方按 judge_stats 回填
+            "retrieval_coverage": _scope_coverage(coverage),
+            "pagination": {
+                "result_set_id": None,
+                "returned_count": len(sel["delivered"]),
+                "candidate_total": len(all_candidates),
+                "has_more": False,
+                "next_cursor": None,
+            },
+        }
+        packet = _enforce_output_budget(packet)
     # S13：judge 统计（Round1 回执依据——attempts 的 completed 不算）
     # CB-012（2026-10-02 审计 P1）：judged 必须是"有效判断"——
     # evaluated、ref 属于送判集、candidate_version 与卡实际版本一致
@@ -576,6 +694,8 @@ def _run_round_compute(session: dict, plan: dict,
     # 消失），receipt/gate 不再被"送 5 回 1"骗过
     unavailable_n = (max(0, len(judge_candidates) - judged_n)
                      if judge_result is not None else 0)
+    if policy["mode"] != "off":
+        packet["judged_count"] = judged_n
     effects = {
         "candidates": candidate_rows,
         "receipts": receipts,
@@ -595,6 +715,10 @@ def _run_round_compute(session: dict, plan: dict,
             "UNAVAILABLE", "ERROR", "DEGRADED"),
         "delivery_action": sel["delivery_action"],
         "coverage": coverage,
+        # 关闭模式：冻结结果集随最终事务持久化（policy 一并冻结；
+        # start/refine 的提交事务调用 paging.freeze_set 落库）
+        **({"page_set": {"cards": frozen_cards, "policy": policy}}
+           if policy["mode"] == "off" else {}),
         # 闭环复审 P1-3：Round2 事实源——真实证据状态而非通用
         # needs_validation 标签（rank_only 下一切正常交付都是
         # needs_validation，不能当"证据不足"）
@@ -607,6 +731,44 @@ def _run_round_compute(session: dict, plan: dict,
         },
     }
     return packet, effects
+
+
+def _expand_full_text(card: dict) -> None:
+    """关闭模式全量投影（§4.3）：事件正文换完整获授权文本。
+
+    旧 600 字 excerpt 是判断开启路径的有界交付裁剪；关闭模式的候选
+    全集分页要求"每条获授权内容全部可取得"——authored_event 证据的
+    snippet 换成完整 whitelist_body，truncated=False。words 卡的
+    word 文本本身即全文。legacy forgotten_summary 保持证据缺口语义
+    （无正文可展开，LEGACY_CONTENT_GAP 不冒充）。
+    """
+    if card.get("channel") != "event":
+        return
+    row = card.get("_row") or {}
+    body = row.get("whitelist_body")
+    if not body or card.get("representation") == "forgotten_summary":
+        return
+    for ev in card.get("evidence") or []:
+        if ev.get("evidence_kind") == "authored_event":
+            ev["snippet"] = body
+            ev["truncated"] = False
+            return
+
+
+def _scope_coverage(coverage: dict) -> dict:
+    """retrieval_coverage 出站投影（§4.1）：如实披露穷尽性。
+
+    只有所有实际执行通道都签 complete_within_scope 才标
+    retrieval_scope_exhaustive=true；任何 Top-K/partial/unavailable
+    都保持 false——"结果集翻完"不冒称"数据库穷尽"（P09）。
+    """
+    out = dict(coverage)
+    statuses = [coverage[k] for k in ("event", "dense_event",
+                                      "words_lexical", "words_dense")
+                if k in coverage]
+    out["retrieval_scope_exhaustive"] = bool(statuses) and all(
+        s == "complete_within_scope" for s in statuses)
+    return out
 
 
 
@@ -640,6 +802,26 @@ def _record_op_in_tx(conn, op_ctx: dict | None, result: dict) -> None:
 
 
 
+
+
+
+def _persist_page_set_in_tx(conn, packet: dict, effects: dict,
+                            session: dict, plan: dict) -> None:
+    """off 模式最终事务内：冻结结果集落库 + 首页续页游标签发。
+
+    必须先于 operation 行记录调用——保存的 operation 结果要包含最终
+    result_set_id 与 next_cursor（同 key 重放回同一首页与同一游标）。
+    """
+    from . import paging as _paging
+    ps = effects["page_set"]
+    rsid = _paging.freeze_set(
+        conn, session=session, plan=plan, policy=ps["policy"],
+        cards=ps["cards"], coverage=effects["coverage"])
+    packet["pagination"]["result_set_id"] = rsid
+    _np = packet["pagination"].pop("next_position", None)
+    if _np is not None:
+        packet["pagination"]["next_cursor"] = _paging.get_or_issue_cursor(
+            conn, rsid, tuple(_np))
 
 
 
@@ -734,11 +916,17 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
                               "continue_request_ref": _cref,
                               "for_revision": 1}
     # P3（2026-10-05 审计）：continuation 在预算执行后注入——补一次
-    # 终检，存储的 operation 回执与首次响应同一份受控包
-    packet = _enforce_output_budget(packet)
+    # 终检，存储的 operation 回执与首次响应同一份受控包。
+    # 关闭模式例外（§4.3）：分页装配器自管字节预算，不经旧裁剪器
+    #（旧 600/4000/pop 路径会把全集候选直接丢掉）
+    if packet.get("judge_mode") != "off":
+        packet = _enforce_output_budget(packet)
     with db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if effects.get("page_set"):
+                _persist_page_set_in_tx(conn, packet, effects, draft,
+                                        plan)
             if op_ctx:
                 store.record_operation_row(
                     conn, op_ctx["principal_id"], op_ctx["operation_key"],
@@ -818,6 +1006,9 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     # continue_ref 消费同事务；旧 ref 重发在此 stale
                     store.consume_continue_ref(conn, sid, cont_ref,
                                                expected_revision)
+                if effects.get("page_set"):
+                    _persist_page_set_in_tx(conn, packet, effects,
+                                            vsession, plan)
                 if op_ctx:
                     store.record_operation_row(
                         conn, op_ctx["principal_id"], op_ctx["operation_key"],

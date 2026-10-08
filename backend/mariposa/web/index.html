@@ -99,6 +99,7 @@
   <button data-page="planSec">计划</button>
   <button data-page="srcSec">原文</button>
   <button data-page="delSec">删除申请</button>
+  <button data-page="judgeSec">召回判断</button>
 </nav>
 
 <main>
@@ -182,6 +183,36 @@
     <p class="empty">规则与旧系统一致：理由必填；每日 10 条上限；同一资源 5 次上限；仅周家明审批。审批通过前内容不变。</p>
     <div id="delList"></div>
   </section>
+
+  <!-- 召回判断总开关（MANUAL_HANDOFF_JUDGE_SWITCH_V1，2026-10-08） -->
+  <section class="page" id="judgeSec">
+    <div class="row">
+      <span class="empty">当前状态：</span>
+      <span id="judgeMode" style="font-weight:700"></span>
+      <span id="judgeMeta" class="empty"></span>
+    </div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="judgeEnabled" /> 启用判断
+      </label>
+      <select id="judgeProvider">
+        <option value="">（未选择 provider）</option>
+        <option value="typesafe_jev">typesafe_jev（Jev）</option>
+        <option value="codex_sdk">codex_sdk（Codex SDK）</option>
+      </select>
+      <input id="judgeModel" placeholder="明确 model ID（可留空沿用 provider 配置）" style="flex:1" />
+      <button id="judgeSave" class="primary">保存政策</button>
+      <button id="judgeReload">刷新</button>
+    </div>
+    <p class="empty" id="judgeNote">
+      开启：所选 provider 单独判断后按原有上限（送判 40 / 交付 3）有界交付。
+      关闭：完全不调用 Jev/Codex 等判断模型，本次检索产生的合法候选全集
+      按页全部交给周家明自行判断。关闭判断只跳过判分，不放开原文权限，
+      也不改变检索范围。政策由你本人（qiaosheng）在这里控制；周家明和
+      其他模型没有切换权。打开/刷新本页不调用任何模型。
+    </p>
+    <div id="judgeHistory"></div>
+  </section>
 </main>
 
 <script>
@@ -238,6 +269,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (btn.dataset.page === 'planSec') loadPlans();
     if (btn.dataset.page === 'srcSec') loadSourceConvs();
     if (btn.dataset.page === 'delSec') loadDeletions();
+    if (btn.dataset.page === 'judgeSec') loadJudgePolicy();
   };
 });
 
@@ -539,6 +571,74 @@ $('delList').addEventListener('click', async (e) => {
 });
 
 function refreshAll() { searchMemories(''); loadMoodVocab(); }
+
+// ---------- 召回判断总开关（2026-10-08）----------
+// 只读 GET 不触发任何模型调用；保存 = maintenance.recall_policy.update
+//（expected_revision CAS + 幂等键；仅 qiaosheng 有写权，服务端强校验）
+const judgeState = { revision: 0 };
+
+async function loadJudgePolicy() {
+  try {
+    const d = await api('maintenance.recall_policy.get', {});
+    judgeState.revision = d.revision || 0;
+    const modeText = {
+      on: '判断开启（' + (d.provider || '?') + '）',
+      off: '判断关闭（候选全集分页交付）',
+      unconfigured: '未配置（判断通道阻断：候选正文不直出）',
+    }[d.mode] || d.mode;
+    $('judgeMode').textContent = modeText;
+    $('judgeMode').style.color =
+      d.mode === 'off' ? 'var(--warn)' : 'var(--accent)';
+    const ready = d.provider_readiness || {};
+    const bits = ['政策 revision ' + d.revision];
+    if (d.provider) bits.push('provider ' + d.provider
+      + (ready.ready ? '（就绪）' : '（未就绪：' + (ready.blocked_reason || '?') + '）'));
+    if (d.model_id) bits.push('model ' + d.model_id);
+    if (d.updated_at) bits.push('更新于 ' + d.updated_at.slice(0, 19));
+    $('judgeMeta').textContent = bits.join(' · ');
+    $('judgeEnabled').checked = d.enabled === true;
+    $('judgeProvider').value = d.provider || '';
+    $('judgeModel').value = d.model_id || '';
+    const writable = state.principal === 'qiaosheng';
+    $('judgeSave').disabled = !writable;
+    $('judgeProvider').disabled = !writable;
+    $('judgeEnabled').disabled = !writable;
+    $('judgeModel').disabled = !writable;
+    $('judgeHistory').innerHTML = d.mode === 'unconfigured'
+      ? '<p class="empty">尚未选择判断模式：这不等于"关闭"。配置前候选正文不直出'
+        + (d.degraded_reasons && d.degraded_reasons.length
+           ? '（' + esc(d.degraded_reasons.join('、')) + '）' : '') + '。</p>'
+      : '';
+  } catch (e) { setStatus(e.message, true); }
+}
+
+$('judgeReload').onclick = () => loadJudgePolicy();
+$('judgeSave').onclick = async () => {
+  const enabled = $('judgeEnabled').checked;
+  const provider = $('judgeProvider').value || null;
+  if (enabled && !provider) {
+    setStatus('开启判断必须选择 provider（先选 provider 再开，或保持关闭）', true);
+    return;
+  }
+  if (!enabled && !confirm('确认关闭判断？关闭后不调用任何判断模型，'
+    + '本次检索的合法候选全集将按页全部交给周家明自行判断。')) return;
+  const idem = 'judge-policy-' + Date.now() + '-'
+    + Math.random().toString(36).slice(2, 8);
+  try {
+    await api('maintenance.recall_policy.update', {
+      expected_revision: judgeState.revision,
+      enabled, provider,
+      model_id: $('judgeModel').value.trim() || null,
+      idempotency_key: idem,
+    }, idem);
+    setStatus('召回判断政策已保存');
+    loadJudgePolicy();
+  } catch (e) {
+    setStatus(e.message, true);
+    loadJudgePolicy();  // 冲突时重读最新 revision 供再次提交
+  }
+};
+
 if (state.token) refreshAll();// ---------- 原文 Source Layer ----------
 const srcState = { conv: null, nextSeq: null, hasMore: false };
 

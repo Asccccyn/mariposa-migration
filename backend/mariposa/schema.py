@@ -1151,6 +1151,35 @@ CREATE TABLE IF NOT EXISTS episode_scope_grants(
   PRIMARY KEY(scope_id, principal_id)
 );
 """),
+    # 35（MANUAL_HANDOFF_JUDGE_SWITCH_V1，2026-10-08 她裁定）：召回判断
+    # 总开关持久正本（部署级单行）。estómago 不存副本；env 只作首次导入。
+    # 缺行/坏行/未知 provider=未配置（阻断正文）≠ 关闭；enabled=0 是唯一
+    # "人工关闭"形态（零判断调用+候选全集分页）。
+    (35, """
+CREATE TABLE IF NOT EXISTS recall_judge_policy(
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  revision INTEGER NOT NULL CHECK(revision >= 1),
+  enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+  provider TEXT,
+  model_id TEXT,
+  allowed_data TEXT NOT NULL DEFAULT '{}',
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recall_judge_policy_history(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  revision INTEGER NOT NULL,
+  enabled INTEGER NOT NULL,
+  provider TEXT,
+  model_id TEXT,
+  changed_by TEXT NOT NULL,
+  idempotency_key TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_judge_policy_history_idem
+  ON recall_judge_policy_history(idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+"""),
 ]
 
 
@@ -1543,6 +1572,36 @@ ALTER TABLE recall_receipts ADD COLUMN revision INTEGER;
 -- RECALL-02（2026-10-04 二批）：continue_request_ref 改为服务端签发
 -- +绑定交付轮——签发（未消费）与消费态区分
 ALTER TABLE recall_continue_refs ADD COLUMN consumed_at TEXT;
+"""),
+    # 14（MANUAL_HANDOFF_JUDGE_SWITCH_V1，2026-10-08）：关闭判断模式的
+    # 冻结结果集快照 + 服务端游标。只存获授权出站投影（不含 _row/私密
+    # 内部字段）；随 session 到期由 purge_expired 整链清理（M06）。
+    (14, """
+CREATE TABLE IF NOT EXISTS recall_page_sets(
+  result_set_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  principal_id TEXT NOT NULL,
+  conversation_scope TEXT NOT NULL DEFAULT '',
+  query_fingerprint TEXT NOT NULL,
+  policy_revision INTEGER NOT NULL,
+  judge_mode TEXT NOT NULL,
+  candidate_total INTEGER NOT NULL,
+  candidates_json TEXT NOT NULL,
+  coverage_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recall_page_sets_session
+  ON recall_page_sets(session_id);
+CREATE TABLE IF NOT EXISTS recall_page_cursors(
+  token TEXT PRIMARY KEY,
+  result_set_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recall_page_cursors_set
+  ON recall_page_cursors(result_set_id);
 """),
 ]
 

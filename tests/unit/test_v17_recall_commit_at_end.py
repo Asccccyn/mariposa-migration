@@ -126,8 +126,10 @@ class TestAComputeFailureZeroTrace:
             def judge(self, *a, **kw):
                 raise RuntimeError("jev exploded")
 
-        monkeypatch.setattr(judge_base, "get_provider",
-                            lambda: ExplodingJudge())
+        # MANUAL_HANDOFF_JUDGE_SWITCH_V1：judge 构造入口按政策 provider
+        # 名走 get_provider_by_name（旧 get_provider 仅剩 env 兼容）
+        monkeypatch.setattr(judge_base, "get_provider_by_name",
+                            lambda name: ExplodingJudge())
         with pytest.raises(RuntimeError):
             start_op(actors, op="op-b1")
         c = runtime_counts()
@@ -324,14 +326,16 @@ def _child_crash(root: str, crash_at: str, op_id: str, q):
             os._exit(73)
         recall_svc._event_candidates = hook
     elif crash_at == "after_jev":
+        # MANUAL_HANDOFF_JUDGE_SWITCH_V1：构造入口=按政策 provider 名
         from mariposa.retrieval.judges import base as jb
-        real = jb.get_provider
+        real = jb.get_provider_by_name
 
         class Wrap:
             def judge(self, *a, **kw):
-                r = real().judge(*a, **kw)
+                p = real(None)
+                r = p.judge(*a, **kw)
                 os._exit(73)
-        jb.get_provider = lambda: Wrap()
+        jb.get_provider_by_name = lambda name: Wrap()
     elif crash_at == "in_final_transaction":
         real = recall_st.insert_session
 
