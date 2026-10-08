@@ -1,9 +1,10 @@
 # Mariposa 记忆运行时·当前语义（CURRENT）
 
 **性质：仓库内唯一现行语义正本入口（v1.7 §0：不保留多套并列有效语义）**
-生效：2026-10-04｜基线 commit：`f734a81`（2026-10-04 裁定批）｜
+生效：2026-10-04｜现行修订：2026-10-08（`MANUAL_HANDOFF_JUDGE_SWITCH_V1`，江乔生裁定：人工判断总开关、关闭模式全候选分页、Round2 通用 provider 门禁、Codex SDK provider 槽位）｜基线 commit：`f734a81`（2026-10-04 裁定批）｜
 历史版本（v1.3/v1.4/v2.0.1 及一切旧报告）只作代码定位与证据，
 **凡与本文件及"域→现行正本清单"所列文件冲突的旧句一律作废**。
+2026-10-08 修订直接改写 §1/§4/§7/§11 相关条款并新增 §4.1；修订所涉新结构（recall_judge_policy 政策表、结果集快照、memory.recall.page、codex_sdk provider）由本轮施工落地，落地前不得宣称已实现。
 
 ## 0. 正本地位声明（审计入口条款）
 
@@ -28,8 +29,9 @@
 不遗忘、不压缩、不生成摘要；记忆按九分类整数周期在 WIDE→MID→CORE
 间**现算**淡出（可检索字段逐层收窄，不是删除）；找话是全量 our_words
 专项（scope 内 BM25 评分）；原文（Source 层）是二轮深搜与证据展开层，
-永不进第一轮普通召回；所有候选正文出站前必经一层 Jev（必要证据角色
-在场才判）。
+永不进第一轮普通召回；**判断层由人工总开关政策（§4.1）管辖：开启＝
+所选 provider（Jev 或 Codex）判断后有界交付，关闭＝零判断调用、本次
+检索候选全集分页交付由周家明自行判断**；provider 之间不串联接力。
 
 ## 2. 分层规则（现行）
 
@@ -61,13 +63,22 @@
 
 - **Round 1**：结构过滤前置 → 每桶按当前事实现算阶段 → AllowedFields
   内在分字段索引执行词法检索；dense 路同 where 前置；RRF 融合 →
-  一层 Jev（默认关闭，`DisabledJudge` 显式 unavailable）→ 代码门控
-  0-3 卡。首轮真实执行完成自动签发 `ROUND1_COMPLETE` 回执。
-- **Round 2**（`memory.recall.round2`）：gate 八条件全部服务端事实
-  （同 session/revision、ROUND1_COMPLETE 回执、judge 完成、raw 授权
+  判断层按 §4.1 政策执行（开启＝所选 provider 判断 + 代码门控 0-3 卡
+  有界交付；关闭＝不构造/不调用任何 provider，冻结候选全集走 §4.1
+  分页交付）→ 首轮真实执行完成自动签发 `ROUND1_COMPLETE` 回执。
+  旧"`DisabledJudge` 显式 unavailable"语义保留给**未配置 provider**，
+  不再承担"人工关闭直出"的语义——关闭只能来自明确的人类政策记录。
+- **Round 2**（`memory.recall.round2`）：gate 全部服务端事实
+  （同 session/revision、ROUND1_COMPLETE 回执、raw 授权
   = RECALL_RUNTIME+RAW_FALLBACK 开关且 owners、预算、理由属五值闭集）；
+  判断条件按 §4.1 政策分形：**开启**＝当前所选 provider 自身的
+  source_excerpt 外发许可（provider 无关接口，不再 isinstance
+  TypeSafeJevJudge）；**关闭**＝无外发故不要求任何 provider 许可、
+  `judge_required=false`，但首轮完成事实与覆盖披露仍必须真实。
   通过后在 Source 层（published=1，human/assistant）深搜，候选标
-  `raw_verbatim`，仍经同一层 Jev 出站。
+  `raw_verbatim`；出站按当前模式（开启＝判断后有界交付，关闭＝
+  本批候选全集分页）。Raw 每批命中先保证本批全部可交付再推进上游
+  游标；交付续页与 Raw 检索续页两类游标分槽。
   - **delivery 的正式定义（2026-10-04 裁定）**：
     `EXPLICIT_REJECT_AFTER_DELIVERY` 里的"交付" = 候选真实进入过
     模型侧可见的**出站交付包**（有交付回执且绑定出站轮
@@ -120,9 +131,54 @@
   `lexical_terms`（词法目标变化构成新判断）；HTTP 中途断流
   （IncompleteRead 等）结构化降级 `JudgeUnavailable`。
 - 生产开关默认全关：`MARIPOSA_RECALL_ENABLED` /
-  `MARIPOSA_WORDS_RECALL_ENABLED` / `MARIPOSA_RAW_FALLBACK_ENABLED` /
-  judge——**无例外**（fresh/continuation/operation replay 同权执行
-  当前开关）。
+  `MARIPOSA_WORDS_RECALL_ENABLED` / `MARIPOSA_RAW_FALLBACK_ENABLED`
+  ——**无例外**（fresh/continuation/operation replay 同权执行
+  当前开关）。judge 通道自 2026-10-08 起改为 §4.1 的持久政策记录：
+  **政策缺失/损坏/未知 provider＝未配置（阻断正文），不等于关闭**；
+  旧部署升级时有效 Jev 配置保留开启、旧 disabled 保留阻断语义
+  （显示 enabled=true/provider=null），不得升级时偷偷放宽；env 只作
+  首次导入/凭据引用，不与数据库形成两套运行时优先级。
+
+### 4.1 判断总开关与关闭模式全量分页（2026-10-08 裁定，`MANUAL_HANDOFF_JUDGE_SWITCH_V1`）
+
+**政策正本**：正式库 `recall_judge_policy`（revision、enabled、provider、
+model_id、allowed_data、updated_by、updated_at），部署级单记录、两位主体
+共用政策但查询权限不合并。estómago 不存副本。
+
+| 有效政策 | 实际执行 |
+| --- | --- |
+| enabled=true，provider 就绪 | 所选 provider 单独判断 → 原有有界交付（JUDGE_CAP=40 送判、DELIVERY_LIMIT=3） |
+| enabled=true，provider 缺失/超时/非法输出/无许可 | 结构化 unavailable/partial；不暗切 provider、不暗改关闭、不假报"没有相关记忆" |
+| enabled=false（明确人类记录） | 零判断构造/调用/缓存读取/网络/子进程；本次候选全集分页交付，`judgement_status=bypassed_by_user` |
+
+- 人类网页登录才可写（`maintenance.recall_policy.get/update`，
+  expected_revision + 幂等键）；主模型与 judge MCP 白名单**无更新权**。
+  GET/刷新不调用模型；关开关不销毁所选 provider 配置。
+- 每次查询冻结 policy_revision/模式/provider 版本；切换后旧 revision
+  续页/重放返回 `RECALL_POLICY_CHANGED`，不混模式、不自动另起查询。
+  关闭时取消排队判断任务、尽力中止已发任务；已发消耗照实留账。
+- **全量分母**＝本次查询经既有检索范围/阶段/结构过滤/显式 rejected/
+  合法去重后的候选全集；不是前 3/20/40，也不是整库无条件输出。上游
+  Top-K/partial 必须披露 `retrieval_coverage`（`scope_exhaustive=false`
+  +实际窗口），"结果集翻完"≠"数据库穷尽"。BM25/Dense 宽度、UNION_CAP、
+  WIDE/MID/CORE 不因关闭而擅改。
+- **`memory.recall.page`**：首页由 start/refine/words_recall/round2 各自
+  现有入口生成并冻结结果集；续页以服务端签名的非透明 cursor 读取，
+  不重新检索、不重新判断、不加 COUNT 轮、不重发副作用；重复同页在
+  版本/权限/政策未变时结果稳定。快照存运行库（随 session 到期清理、
+  纳入 purge/reset，无孤儿），绑定主体/scope/session/查询与政策
+  revision/候选身份与顺序/获授权投影/游标状态。
+- **页合同**：每页 ≤10 条目、完整响应 ≤24576 UTF-8 字节（含元数据与
+  信封）；按实际字节装页；放不下的候选顺延下页，不得从全集 pop。
+  单条超长按码点分片（start/end_char、content_complete），拼回与获授权
+  投影逐字一致；片段数不得充当候选数。未经完整交付 has_more 不得为
+  false。出站新增 `judge_mode`/`judge_policy_revision`/
+  `judgement_status`/`pagination`/`retrieval_coverage`，加入白名单与
+  宿主解包校验。关闭路径**不经过** `_enforce_output_budget` 旧裁剪器
+  （600/4000/24576-pop 仅保留给判断开启的有界路径）。
+- 关闭模式每卡不伪造 judge 分值：judged_count=0、confidence 省略、
+  delivery_action=needs_validation；不自动开 AUTO_TOP1。宿主不替周家明
+  一次翻尽全部页；未读页不得标成已审阅。
 
 ## 5. 「留」keep（v1.7 §5.5）
 
@@ -188,8 +244,9 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   provider/会话 id 页级上提（小列表保持原形）。
 - **不裁剪**：正文/证据链/ID/版本/receipt/budget/continuation/
   snapshot/分页游标/gap/truncated/false-null 语义；安全信封逐页
-  保留。不做短键缩写/位置数组/正文改写/机械删 null。实测首包
-  Recall −32%、Bootstrap −40%（合成小样本）。
+  保留。§4.1 新增出站字段（judge_mode/judgement_status/pagination/
+  retrieval_coverage）同样不裁剪。不做短键缩写/位置数组/正文改写/
+  机械删 null。实测首包 Recall −32%、Bootstrap −40%（合成小样本）。
 
 ## 8. 读侧安全语义（2026-10-04 裁定）
 
@@ -282,10 +339,20 @@ word_verbatim/word_paraphrase/word_unverified/raw_verbatim/
 relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审计
 继续有效；其遗忘续期、retention 表、摘要通道、"raw 非直接通道"段已
 由本文件覆盖。`POLICY_VERSION="mariposa_v1_7"`、
-`RECALL_POLICY_VERSION="recall-v1.7"`。
+`RECALL_POLICY_VERSION="recall-v1.8"`（2026-10-08 起，§4.1 判断总开关
+批；v1.7 及更早的 recall 政策版本为历史）。
 
 ## 12. 变更记录
 
+- 2026-10-08（`MANUAL_HANDOFF_JUDGE_SWITCH_V1`，江乔生裁定）：新增 §4.1
+  判断总开关（持久政策正本、三态语义、关闭≠未配置、人类网页独占写权）；
+  关闭模式全候选分页合同（memory.recall.page、冻结结果集、24576 字节/
+  10 条页限、码点分片、retrieval_coverage 披露、旧裁剪器仅留判断开启
+  路径）；Round2 gate 改 provider 无关外发许可判断（关闭时不要求任何
+  provider 许可）；Codex SDK provider 槽位（开放接口进 JudgeProvider，
+  与 Jev 同材料不串联、许可分立、缓存键分立）；RECALL_POLICY_VERSION
+  → recall-v1.8。实施分批 WP0-WP7（联合审计包
+  joint-audit-20261006/GLM_EXECUTION_PLAN_20261008.md）。
 - 2026-09-28：v1.7 初版（删除链退役、明开回温、阶段现算）。
 - 2026-10-03：并入周家明全量审计修复（票据内容版本绑定、开关重放
   无例外、锁内终态校验、心情留底、Jev 必要角色、批次清场、备份恢复
