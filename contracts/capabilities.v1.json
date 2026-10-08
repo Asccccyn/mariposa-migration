@@ -607,6 +607,27 @@
       "description": "按当前版本重建全部派生索引（旧投影+分字段+words+source）"
     },
     {
+      "canonical_name": "maintenance.recall_policy.get",
+      "transport_name": "mariposa_maintenance_recall_policy_get",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "召回判断政策只读（模式/provider/model/revision/就绪探针；零模型调用——刷新不触发推理）"
+    },
+    {
+      "canonical_name": "maintenance.recall_policy.update",
+      "transport_name": "mariposa_maintenance_recall_policy_update",
+      "allowed_principals": [
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "召回判断政策写入（expected_revision CAS + 幂等键；开启=所选 provider 判断，关闭=零判断调用+候选全集分页；仅 qiaosheng）"
+    },
+    {
       "canonical_name": "maintenance.semantic.warmup",
       "transport_name": "mariposa_maintenance_semantic_warmup",
       "allowed_principals": [
@@ -1023,6 +1044,17 @@
       "write": true,
       "idempotent": false,
       "description": "沿 temporal_axis 导航前后候选（earlier/later）"
+    },
+    {
+      "canonical_name": "memory.recall.page",
+      "transport_name": "mariposa_memory_recall_page",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "判断关闭模式：按服务端游标读取冻结结果集下一页（零检索/零判断/零 COUNT；政策切换拒绝混页；游标与 refine/Raw 续页引用分槽不互换）"
     },
     {
       "canonical_name": "memory.recall.refine",
