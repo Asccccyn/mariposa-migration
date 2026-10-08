@@ -1191,6 +1191,37 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "operation_id": {"type": "string", "minLength": 1},
             "request_ref": {"type": "string", "minLength": 1}},
     },
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：关闭模式续页——
+    # 游标由服务端签发；result_set_id 必填防"猜集合"枚举
+    "memory.recall.page": {
+        "type": "object", "required": ["result_set_id"],
+        "additionalProperties": False,
+        "properties": {
+            "result_set_id": {"type": "string", "minLength": 1},
+            "session_id": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string"},
+            "cursor": {"type": "string", "minLength": 1}},
+    },
+    "maintenance.recall_policy.get": {
+        "type": "object", "additionalProperties": False,
+        "properties": {},
+    },
+    "maintenance.recall_policy.update": {
+        "type": "object",
+        "required": ["expected_revision", "enabled"],
+        "additionalProperties": False,
+        "properties": {
+            "expected_revision": {"type": "integer", "minimum": 0},
+            "enabled": {"type": "boolean"},
+            # null = 未选择 provider（关闭态保留配置的清空写法）
+            "provider": {"anyOf": [
+                {"type": "string", "enum": ["typesafe_jev",
+                                            "codex_sdk", ""]},
+                {"type": "null"}]},
+            "model_id": {"anyOf": [{"type": "string"},
+                                   {"type": "null"}]},
+            "idempotency_key": {"type": "string", "minLength": 1}},
+    },
     "memory.recall.refine": {
         "type": "object",
         "required": ["session_id", "query_plan"],

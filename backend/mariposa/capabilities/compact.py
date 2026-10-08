@@ -31,6 +31,10 @@ _COMPACT_CAPS = frozenset({
     "memory.recall.status", "memory.recall.navigate",
     "memory.recall.round2", "memory.words.recall",
     "memory.find_words",
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1：分页包同样只删诊断字段；
+    # pagination/judge_mode/judgement_status/retrieval_coverage/
+    # invalidated 不在删除清单——页合同字段必须到达主模型
+    "memory.recall.page",
     "source.search",
 })
 

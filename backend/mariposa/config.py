@@ -109,7 +109,7 @@ RECALL_RAW_FALLBACK_ENABLED = _flag("MARIPOSA_RAW_FALLBACK_ENABLED")
 WORDS_FORGOTTEN_RECALL = "disabled"
 WORDS_FORGOTTEN_DECISION_STATE = "PENDING_OWNER_DECISION"
 
-RECALL_POLICY_VERSION = "recall-v1.7"
+RECALL_POLICY_VERSION = "recall-v1.8"
 WORDS_PROJECTION_VERSION = "words-projection-v1"
 RECALL_SESSION_TTL_HOURS = int(
     os.environ.get("MARIPOSA_RECALL_SESSION_TTL_HOURS", "24"))
@@ -136,6 +136,10 @@ RECALL_PACKET_BYTES_MAX = 24576
 RECALL_RRF_K = 60
 RECALL_TOKENIZER = "unavailable"        # 主模型 tokenizer 接入后替换
 
+# MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：判断层运行时正本=
+# 正式库 recall_judge_policy（recall/judge_policy.py）。本 env 只在政策
+# 表为空时作首次导入（旧部署兼容），不与数据库形成两套优先级；
+# credentials（key/model）仍经 env 引用。
 RECALL_JUDGE_PROVIDER = os.environ.get(
     "MARIPOSA_RECALL_JUDGE_PROVIDER", "disabled")  # disabled | typesafe_jev
 RECALL_JUDGE_MODEL_ID = (

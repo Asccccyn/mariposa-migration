@@ -168,6 +168,10 @@ FORMAL_TABLES = [
     "memory_tags", "bootstrap_snapshots",
     "memory_relations", "media_objects", "import_jobs",
     "memory_reengagements", "migration_id_map",
+    # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：判断政策每测试清零
+    # ——清零后首个 effective() 按当测 config 属性重新导入，保留
+    # 旧测试"改 config.RECALL_JUDGE_PROVIDER + 注入 fake"的模式
+    "recall_judge_policy_history", "recall_judge_policy",
     # Source Layer（子表在前；FTS 虚表与普通表同样可 DELETE）
     "source_fts", "source_search_docs", "memory_source_bindings",
     "source_messages", "source_conversations", "source_import_batches",
