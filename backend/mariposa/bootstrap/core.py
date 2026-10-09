@@ -157,10 +157,29 @@ def _section_body(item: dict, memory_id: str, field: str,
                              "offset": width}
 
 
+def _word_entry_bytes(speaker: str, text: str,
+                      truncated: bool = False,
+                      total_chars: int | None = None) -> int:
+    """单条 word **出站对象**的真实序列化字节（+1 数组逗号）。
+
+    RRA-006（三次回访 2026-10-10 根因收口）：预算此前只累计正文字符串
+    字节——每条对象还携带 speaker 键名/引号/括号 ≈34B 结构开销，合法
+    "多而短"输入（700 条单字，正文共 2100B）结构费漏账 ~24KB，首包
+    26064B 击穿 24576。计量单位=完整出站条目（与 E 侧 pushEntry 的
+    jsonBytes(entry) 同口径）。"""
+    import json as _json
+    entry = {"speaker": speaker, "text": text}
+    if truncated:
+        entry["text_truncated"] = True
+        entry["text_total_chars"] = total_chars
+    return len(_json.dumps(entry, ensure_ascii=False).encode("utf-8")) + 1
+
+
 def _section_words(rows, start_item: int = 0, start_char: int = 0):
-    """RRA-006（回访+二次回访）：our_words 装页——条目数组形状保持，
-    条目间断页；**单条超宽按字节折半分片**、条目累计也按字节（码点
-    定宽在控制字符下击穿整包预算）。返回 (kept, next_item,
+    """RRA-006（回访+二次/三次回访）：our_words 装页——条目数组形状
+    保持，条目间断页；**单条超宽按字节折半分片**；条目累计按**完整
+    出站条目对象的序列化字节**（含 speaker/键名/括号——三次回访收口：
+    只计正文时"多而短"合法输入的结构费漏账）。返回 (kept, next_item,
     next_char)：next_item=None=全部装完；否则续取游标位（next_char=
     条内码点偏移）。"""
     kept: list[dict] = []
@@ -172,23 +191,23 @@ def _section_words(rows, start_item: int = 0, start_char: int = 0):
         i += 1
         char_off = 0
     while i < len(rows):
+        speaker = rows[i]["speaker"]
         text = rows[i]["text"] or ""
         remain = text[char_off:]
         w = _byte_width(remain)
-        if kept and used + _esc_bytes(remain[:w]) \
-                > BOOT_MEMITEM_SECTION_BYTES:
-            return kept, i, char_off
         if len(remain) > w:
-            kept.append({"speaker": rows[i]["speaker"],
-                         "text": remain[:w],
+            b = _word_entry_bytes(speaker, remain[:w], True, len(text))
+            if kept and used + b > BOOT_MEMITEM_SECTION_BYTES:
+                return kept, i, char_off
+            kept.append({"speaker": speaker, "text": remain[:w],
                          "text_truncated": True,
                          "text_total_chars": len(text)})
             return kept, i, char_off + w
-        if kept and used + _esc_bytes(remain) \
-                > BOOT_MEMITEM_SECTION_BYTES:
+        b = _word_entry_bytes(speaker, remain)
+        if kept and used + b > BOOT_MEMITEM_SECTION_BYTES:
             return kept, i, char_off
-        kept.append({"speaker": rows[i]["speaker"], "text": remain})
-        used += _esc_bytes(remain)
+        kept.append({"speaker": speaker, "text": remain})
+        used += b
         i += 1
         char_off = 0
     return kept, None, 0

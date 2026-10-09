@@ -406,3 +406,57 @@ class TestRRAThirdFollowUpControlEscape:
             wcur = pg.get("next_cursor")
         assert wcur is None, "words 续取链收敛"
         assert "".join(w_parts) == word, "words 分节续取精确拼回"
+
+
+class TestRRAThirdFollowUpManyShortWords:
+    """三次回访（2026-10-10 run-230814）RRA-006 根因收口：word 预算
+    计量改**完整出站条目对象字节**——"多而短"合法输入（结构费主导）
+    的每页信封 ≤24576 且逐字拼回。旧计量只算正文字节时 700 条单字
+    首包 26064B。"""
+
+    def test_many_short_words_shapes_within_budget_and_exact(
+            self, jiaming):
+        import json as _json
+        from tests.conftest import reset_all as _reset
+        for n in (700, 1400, 2800):
+            _reset()
+            words = [{"speaker": "qiaosheng", "text": str(i % 10),
+                      "expression_kind": "paraphrase"}
+                     for i in range(n)]
+            expected = "".join(w["text"] for w in words)
+            self._hold("small event", words)
+            pack = bootstrap.get("jiaming", "estomago", "estomago")
+            pages = [len(_json.dumps(
+                {"ok": True, "data": pack}, ensure_ascii=False,
+                separators=(",", ":")).encode("utf-8"))]
+            assert pages[0] <= 24576, \
+                f"{n} 条首包 {pages[0]}B 超 24576（结构费残因）"
+            it = pack["memory_days"]["items"][0]
+            texts = [w["text"] for w in it["our_words"]]
+            cur = it.get("our_words_next")
+            guard = 0
+            while cur and guard < 80:
+                guard += 1
+                pg = bootstrap.next_page("jiaming", "estomago",
+                                         pack["snapshot_id"], cur,
+                                         "memory_item")
+                b = len(_json.dumps(
+                    {"ok": True, "data": pg}, ensure_ascii=False,
+                    separators=(",", ":")).encode("utf-8"))
+                assert b <= 24576, \
+                    f"{n} 条第 {guard} 续页 {b}B 超 24576"
+                pages.append(b)
+                texts += [w["text"] for w in pg["items"]]
+                cur = pg.get("next_cursor")
+            assert cur is None, f"{n} 条续取链收敛（{guard} 页后）"
+            assert "".join(texts) == expected, \
+                f"{n} 条逐字拼回完整"
+            assert len(pages) >= 2 or n <= 700, "规模合理性自检"
+
+    def _hold(self, text, words):
+        return memory.hold(
+            identity.Principal("jiaming", "周家明", "agent",
+                               "estomago", "bj"),
+            text=text, original_title="many", categories=["daily"],
+            creation_mode="contemporaneous", our_words=words,
+            raw_pending=False)
