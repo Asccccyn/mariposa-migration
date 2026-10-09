@@ -224,28 +224,33 @@ class TestRequestRefIdentityNotBypassable:
         assert ei.value.code == "REF_REUSE_MISMATCH"
 
 
-class TestJudgeDisabledBlocksReplayBodies:
-    """RECALL-03（2026-10-04 二批 P1）：Judge 关闭时旧 operation 重放
-    不释放正文——返回同一 operation 的 unavailable/空正文，保留结果
-    身份元数据，不标当前可用。"""
+class TestPolicySwitchBlocksReplayBodies:
+    """JFA-003 / D-1=A（2026-10-09）：人类政策把判断从开切关后，
+    同 request_ref 的旧 operation 重放不再走「同 operation 空正文」
+    形态，而是 fail-closed 结构化拒绝（RECALL_POLICY_CHANGED）——
+    保存时模式 on、当前模式 off，判断路径缓存的正文任何路径都拿不到。"""
 
-    def test_replay_suppresses_bodies_when_judge_off(self, actors):
-        from mariposa import config as cfg
-        _hold(actors, "Judge关闭重放的窗帘正文")
+    def test_policy_switch_off_replay_rejected_with_no_bodies(self, actors):
+        from mariposa.recall import judge_policy
+        _hold(actors, "政策切换重放的窗帘正文")
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": PLAN_A}, None)["data"]
-        assert r1["candidates"], "前置：Judge 开启时有交付"
-        old_provider = cfg.RECALL_JUDGE_PROVIDER
-        cfg.RECALL_JUDGE_PROVIDER = "disabled"
-        try:
-            r2 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                                 {"query_plan": dict(PLAN_A)}, None
-                                 )["data"]
-        finally:
-            cfg.RECALL_JUDGE_PROVIDER = old_provider
-        assert r2["candidates"] == [], "Judge 关闭后重放不得释放旧正文"
-        assert r2["recall_session_id"] == r1["recall_session_id"], \
-            "结果身份不变（同一 operation）"
-        assert "judge_disabled_replay_body_suppressed" in \
-            (r2.get("degraded_reasons") or []), "必须结构化标注降级原因"
-        assert r2.get("coverage", {}).get("judge") == "unavailable"
+        assert r1["candidates"], "前置：政策开启（judge on）时有交付"
+        assert r1["judge_mode"] == "on"
+        cur = judge_policy.get_policy()
+        assert cur["mode"] == "on"
+        # 人类把判断切关（保留 provider 配置——关开关不销毁配置）
+        judge_policy.update_policy(
+            "qiaosheng", expected_revision=cur["revision"], enabled=False,
+            provider=cur["provider"], idempotency_key="rr-switch-off-1")
+        now = judge_policy.effective()
+        assert now["mode"] == "off"
+        assert now["provider"] == cur["provider"]
+        # 同 request_ref 重放（transport 实际入口）：抛 StaleOperation，
+        # 旧判断路径正文零出站
+        with pytest.raises(StaleOperation) as ei:
+            registry.invoke(actors["jiaming"], "memory.recall.start",
+                            {"query_plan": dict(PLAN_A)}, None)
+        assert ei.value.code == "RECALL_POLICY_CHANGED"
+        assert ei.value.detail["saved_mode"] == "on"
+        assert ei.value.detail["current_mode"] == "off"
