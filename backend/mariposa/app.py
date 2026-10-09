@@ -331,7 +331,12 @@ async def oauth_token(request: Request):
                 "error": "invalid_grant",
                 "error_description": "密码不正确"})
         gate.note_auth_success(ip)
-        return _oauth.issue_access_token(principal_id)
+        # RRA-001（2026-10-09 复审）：password grant=人类网页会话——
+        # 签 entry_source="web"（政策写权「人类网页独占」的可信标记）；
+        # authorization_code/refresh（第三方客户端绑定流）保持 "oauth"，
+        # 不随网页通道放行
+        return _oauth.issue_access_token(principal_id,
+                                         entry_source="web")
     if grant == "authorization_code":
         try:
             return _oauth.exchange_code(

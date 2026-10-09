@@ -45,6 +45,11 @@ def _anniv_rows(conn, horizon, today, days: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+#: RRA-006：memory_days 段单页字节预算（UTF-8；给 plans/i/纪念日等
+#: 其余段与信封骨架留约 12KB——整包 ≤24576）
+_MEMORY_DAY_PAGE_BUDGET_BYTES = 12000
+
+
 def _memory_section(conn, three_days: list[str],
                     profile: str = "claude_chat") -> dict:
     """三天桶段：标题+心情标签+心情文字+分类；不默认展开事件正文。"""
@@ -52,13 +57,27 @@ def _memory_section(conn, three_days: list[str],
         "SELECT memory_id, memory_date FROM memories WHERE visibility='active'"
         " AND memory_date IN (?,?,?) ORDER BY memory_date DESC, memory_id"
         " LIMIT ?", tuple(three_days) + (BOOT_SECTION_LIMIT,)).fetchall()
-    items = [_memory_slim(conn, r["memory_id"], profile=profile)
-             for r in mem_rows]
+    # RRA-006（2026-10-09 复审）：按**实际序列化字节**装桶（estomago
+    # 桶带分节后的正文首节，比旧标题+心情大得多——按条数装页曾把
+    # 整包顶到 43KB 击穿 24576 信封预算）；装不下整桶顺延下页不 pop，
+    # 单桶超预算时其自身已分节（首节有界），不会卡死
+    import json as _json
+    items, served, budget = [], 0, _MEMORY_DAY_PAGE_BUDGET_BYTES
+    overflow_to_page = None
+    for r in mem_rows:
+        it = _memory_slim(conn, r["memory_id"], profile=profile)
+        b = len(_json.dumps(it, ensure_ascii=False).encode("utf-8"))
+        if items and served + b > budget:
+            overflow_to_page = r
+            break
+        items.append(it)
+        served += b
     total = conn.execute(
         "SELECT COUNT(*) AS c FROM memories WHERE visibility='active'"
         " AND memory_date IN (?,?,?)", tuple(three_days)).fetchone()["c"]
-    if total > len(items):
-        last = mem_rows[-1]
+    if overflow_to_page is not None or total > len(items):
+        last = overflow_to_page if overflow_to_page is not None \
+            else mem_rows[-1]
         next_cursor = {"memory_before_date": last["memory_date"],
                        "memory_last_id": last["memory_id"],
                        "remaining": total - len(items)}

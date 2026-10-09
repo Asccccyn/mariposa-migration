@@ -289,3 +289,69 @@ class TestPolicyModelId:
         # 未注入（env 回落语义保留）
         p2 = jb.get_provider_by_name("codex_sdk")
         assert p2._model_id == "env-model-x", "无政策值时回落 env"
+
+
+class TestFieldGrantReconciliation:
+    """RRA-024/025（2026-10-09 复审）：同卡字段级许可投影+对账集=实际
+    送判集合。"""
+
+    def test_024_same_card_unlicensed_fields_not_in_prompt(self):
+        prompts = []
+
+        def transport(spec):
+            prompts.append(spec["prompt"])
+            refs = [c["candidate_ref"] for c in
+                    json.loads(spec["prompt"])["candidates"]]
+            return {"status": "ok", "text": json.dumps({
+                "items": [{"candidate_ref": r, "relevant": "relevant",
+                           "confidence": "high", "reason": "r"}
+                          for r in refs]})}
+
+        codex_sdk.set_transport_for_tests(transport)
+        # 单许可 event_excerpt：同卡含 event 正文 + word 证据 + 标题
+        judge = codex_sdk.CodexSdkJudge(allowed_data=["event_excerpt"])
+        card = {
+            "candidate_ref": "memory:m1", "resource_ref": "memory:m1",
+            "channel": "event", "content_version": "1",
+            "_row": {"title": "DENIED_TITLE"},
+            "evidence": [
+                {"evidence_kind": "authored_event", "field": "text",
+                 "snippet": "ALLOWED_EVENT"},
+                {"evidence_kind": "word_excerpt", "field": "our_words",
+                 "snippet": "DENIED_WORD"}]}
+        out = judge.judge({"original_request": "x",
+                           "lexical_terms": ["x"]}, [card], {})
+        assert out.provider_status == "evaluated"
+        p0 = prompts[0]
+        assert "ALLOWED_EVENT" in p0
+        assert "DENIED_TITLE" not in p0, "无 title_cue 许可的标题不外发"
+        assert "DENIED_WORD" not in p0, "无 word_excerpt 许可的同卡证据不外发"
+
+    def test_025_unsent_ref_rejected_not_evaluated(self):
+        """回包返回未送判的 ref（被许可过滤）→ 陌生 ref 整批作废。"""
+
+        def transport(spec):
+            refs = [c["candidate_ref"] for c in
+                    json.loads(spec["prompt"])["candidates"]]
+            # 恶意/错位回包：送判 memory:m1，回 our_word:never-sent
+            return {"status": "ok", "text": json.dumps({
+                "items": [
+                    {"candidate_ref": refs[0], "relevant": "relevant",
+                     "confidence": "high", "reason": "r"},
+                    {"candidate_ref": "our_word:never-sent",
+                     "relevant": "relevant", "confidence": "high",
+                     "reason": "r"}]})}
+
+        codex_sdk.set_transport_for_tests(transport)
+        judge = codex_sdk.CodexSdkJudge(
+            allowed_data=["event_excerpt", "title_cue",
+                          "word_excerpt", "source_excerpt"])
+        card = {
+            "candidate_ref": "memory:m1", "resource_ref": "memory:m1",
+            "channel": "event", "content_version": "1",
+            "evidence": [{"evidence_kind": "authored_event",
+                          "field": "text", "snippet": "body"}]}
+        out = judge.judge({"original_request": "x",
+                           "lexical_terms": ["x"]}, [card], {})
+        assert out.provider_status == "unavailable", \
+            "未送判 ref 出现在回包=整批作废（不得伪标 evaluated）"

@@ -113,7 +113,10 @@ class TestCR01R2TitleOnlyRole:
                                  None)["data"]
             assert len(r1["candidates"]) == 1
 
-            cfg.RECALL_JUDGE_PROVIDER = "r2_title"
+            # RRA-008 后语义：换 provider 名=新纪元（重放按
+            # RECALL_POLICY_CHANGED 拒）。许可矩阵语义=同 provider 换
+            # 许可面：同名 r2_full 重注册，env 不动（纪元不变）
+            self._register("r2_full", {"title_cue", "structured_metadata"})
             fresh_t = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
                 {**plan, "operation_id": "r2-f1"}, None)["data"]
@@ -124,7 +127,8 @@ class TestCR01R2TitleOnlyRole:
             assert len(replay_t["candidates"]) == 0, \
                 "title_cue-only：标题命中不得让旧 operation 重放事件正文"
 
-            cfg.RECALL_JUDGE_PROVIDER = "r2_event"
+            self._register("r2_full", {"event_excerpt",
+                                       "structured_metadata"})
             fresh_e = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
                 {**plan, "operation_id": "r2-f2"}, None)["data"]
@@ -549,9 +553,9 @@ class TestCR01R3FullProfileMatrix:
             for n in range(1, len(self.ALL_ROLES) + 1):
                 for combo in itertools.combinations(self.ALL_ROLES, n):
                     key = ",".join(combo)
-                    pname = f"mx_{tag}_{n}_{abs(hash(key)) % 10**8}"
-                    self._register(pname, set(combo))
-                    cfg.RECALL_JUDGE_PROVIDER = pname
+                    # 同名重注册（RRA-008：换名=新纪元会拒重放，
+                    # 矩阵要测的是许可面变化本身）
+                    self._register(f"mx_{tag}_full", set(combo))
                     fresh = registry.invoke(
                         seeded, "memory.recall.start",
                         {**plan, "operation_id": f"mx-{tag}-{n}-"

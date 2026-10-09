@@ -153,12 +153,17 @@ def readiness() -> dict:
     return out
 
 
-def _judge_prompt(query_plan: dict, candidates: list) -> str:
+def _judge_prompt(query_plan: dict, candidates: list,
+                  grants: frozenset | None = None) -> str:
     """出站判断请求（共享事实材料语义——与 Jev 同源投影，非 Jev 筛后集合）。
 
     只含：查询语义目标（anchors/original_request）与各候选的获准证据
     （candidate_ref/content_version/channel/证据角色+片段）。不含密钥、
     系统身份全文、UI CoT、无关聊天。
+    RRA-024（2026-10-09 复审）：grants 给出时按**字段角色**过滤——同卡
+    证据元素只在其 evidence_kind 对应许可内时外发；title_cue 仅在
+    title_cue 许可下携带（此前只做卡级必要角色准入，同卡未许可证据/
+    标题仍被无条件序列化）。
     """
     anchors = [t for t in ((query_plan.get("lexical_terms") or [])
                            + (query_plan.get("exact_phrases") or []))
@@ -173,21 +178,38 @@ def _judge_prompt(query_plan: dict, candidates: list) -> str:
         },
         "candidates": [],
     }
+    def _ev_allowed(ev: dict) -> bool:
+        if grants is None:
+            return True
+        if not ev.get("snippet"):
+            return True  # 结构事实（无正文）恒可发
+        kind = ev.get("evidence_kind") or ""
+        role = {"authored_event": "event_excerpt",
+                "event_excerpt": "event_excerpt",
+                "word_excerpt": "word_excerpt",
+                "raw_verbatim": "source_excerpt",
+                "source_excerpt": "source_excerpt"}.get(kind)
+        return role is None or role in grants
+
     for c in candidates:
         evs = []
         for ev in (c.get("evidence") or [])[:4]:
+            if not _ev_allowed(ev):
+                continue
             evs.append({
                 "kind": ev.get("evidence_kind", ""),
                 "field": ev.get("field", ""),
                 "snippet": (ev.get("snippet") or "")[:600],
             })
         row = c.get("_row") or {}
+        title_ok = (grants is None or "title_cue" in grants)
         payload["candidates"].append({
             "candidate_ref": c.get("candidate_ref") or c["resource_ref"],
             "candidate_version": c.get("content_version"),
             "channel": c.get("channel", "event"),
-            "title_cue": (row.get("title") or "")[:80] if isinstance(
-                row.get("title"), str) else "",
+            "title_cue": ((row.get("title") or "")[:80]
+                          if title_ok and isinstance(
+                              row.get("title"), str) else ""),
             "evidence": evs,
         })
     return json.dumps(payload, ensure_ascii=False)
@@ -310,15 +332,28 @@ class CodexSdkJudge(base.JudgeProvider):
             return base.JudgeBatchResult(
                 provider_status="unavailable",
                 degraded_reason="no_authorized_candidates")
-        prompt = _judge_prompt(query_plan, authorized)
+        prompt = _judge_prompt(query_plan, authorized,
+                               grants=self._grants)
+        # RRA-025：对账身份从**实际送判集合**（authorized）派生——被
+        # 许可过滤的候选不在送判集，provider 返回其 ref=陌生 ref 整批
+        # 作废（此前 sent_refs 取过滤前全集，未送判 ref 被伪标 evaluated）
         sent_refs = [c.get("candidate_ref") or c["resource_ref"]
-                     for c in candidates]
+                     for c in authorized]
         sent_versions = {c.get("candidate_ref") or c["resource_ref"]:
                          (str(c["content_version"])
                           if c.get("content_version") is not None else None)
-                         for c in candidates}
-        with _CODEX_LOCK:  # 并发 1（§5.1）
-            raw, err = self._call_model(prompt)
+                         for c in authorized}
+        # RRA-013：锁等待有界（排队不超 CODEX_TIMEOUT_MS；拿不到锁=
+        # unavailable，不无限挂——run 自身无界如实声明）
+        _deadline = time.monotonic() + CODEX_TIMEOUT_MS / 1000
+        if not _CODEX_LOCK.acquire(timeout=max(0.1, CODEX_TIMEOUT_MS / 1000)):
+            return base.JudgeBatchResult(
+                provider_status="unavailable",
+                degraded_reason="codex_lock_timeout")
+        try:
+            raw, err = self._call_model(prompt, _deadline)
+        finally:
+            _CODEX_LOCK.release()
         if err is not None:
             return base.JudgeBatchResult(
                 provider_status="unavailable", degraded_reason=err)
@@ -332,7 +367,7 @@ class CodexSdkJudge(base.JudgeProvider):
                                      degraded_reason=None,
                                      request_count=1)
 
-    def _call_model(self, prompt: str):
+    def _call_model(self, prompt: str, deadline: float | None = None):
         """一次判断请求（临时 thread；有界 deadline；受控关闭）。
 
         离线：fake transport（测试注入）。live：thread_start(ephemeral=
@@ -368,6 +403,8 @@ class CodexSdkJudge(base.JudgeProvider):
                                        TextInput)
         except ImportError:
             return None, "sdk_not_installed"
+        if deadline is not None and time.monotonic() >= deadline:
+            return None, "codex_deadline_before_run"
         import shutil
         import tempfile
         client = Codex(CodexConfig())
@@ -377,14 +414,17 @@ class CodexSdkJudge(base.JudgeProvider):
                 model=self._model_id, sandbox=Sandbox.read_only,
                 cwd=tmpdir, ephemeral=True,
                 developer_instructions=_DEV_INSTRUCTIONS)
-            # WP-02（E05/CX-15）：deadline 贯通（CODEX_TIMEOUT_MS→秒）；
-            # 超时 SDK 抛出即 unavailable（不无限挂）——timeout 参数按
-            # 锁定版 0.161.0 文档形态，live 实测待她授权（G-1）
+            # RRA-013（2026-10-09 复审）：锁定版 0.161.0 的 Thread.run
+            # **无 timeout 参数**（inspect.signature 实证）——此前发明的
+            # timeout kwarg 在真实 SDK 会 TypeError（fake 自行接受掩盖了
+            # 不匹配）。调用按真实签名；deadline 语义如实降级：锁等待
+            # （acquire timeout）+ run 前剩余时间检查有界，run 自身无
+            # 中断机制（真实超时/隔离未兑现——live 前保持 readiness
+            # blocked，RRA-018 如实声明）
             result = thread.run(
                 [TextInput(text=prompt)],
                 output_schema=_OUTPUT_SCHEMA,
-                model=self._model_id,
-                timeout=CODEX_TIMEOUT_MS / 1000)
+                model=self._model_id)
             turn = getattr(result, "turn", result)
             texts = []
             for item in (getattr(turn, "items", None) or []):
