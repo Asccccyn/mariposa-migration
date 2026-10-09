@@ -60,76 +60,74 @@ class TestFieldProjection:
 
 
 class TestStageFilteredRound1:
+    """WP-05/D06：死适配层 round1_candidates 已删——阶段过滤语义改经现行
+    路径 round1_lexical_hits（scope-stage-bm25，S06）验证。"""
+
     def test_core_excludes_title_and_words(self, actors):
         # 61 天前（H=20 → 2H=40，D=61 ≥ 40 → CORE）：标题/words 词不命中
         hold(actors, "无关正文", title="独有标题词犽", days_ago=61,
              words=[{"speaker": "qiaosheng", "text": "独有话语词鸢",
                      "expression_kind": "verbatim"}])
         with db.formal() as conn:
-            out = pl.round1_candidates(conn, {"lexical_terms": ["犽"]})
-            assert out["candidates"] == []  # CORE 无 title
-            out = pl.round1_candidates(conn, {"lexical_terms": ["鸢"]})
-            assert out["candidates"] == []  # CORE 无 words
+            out = pl.round1_lexical_hits(conn, {"lexical_terms": ["犽"]},
+                                         set(), {})
+            assert out == []  # CORE 无 title
+            out = pl.round1_lexical_hits(conn, {"lexical_terms": ["鸢"]},
+                                         set(), {})
+            assert out == []  # CORE 无 words
 
     def test_wide_includes_title_and_words(self, actors):
         hold(actors, "普通正文", title="新近标题词犽", days_ago=0,
              words=[{"speaker": "qiaosheng", "text": "新近话语词鸢",
                      "expression_kind": "verbatim"}])
         with db.formal() as conn:
-            assert pl.round1_candidates(conn, {"lexical_terms": ["犽"]})["candidates"]
-            assert pl.round1_candidates(conn, {"lexical_terms": ["鸢"]})["candidates"]
+            assert pl.round1_lexical_hits(conn, {"lexical_terms": ["犽"]},
+                                          set(), {})
+            assert pl.round1_lexical_hits(conn, {"lexical_terms": ["鸢"]},
+                                          set(), {})
 
     def test_event_text_searchable_all_stages(self, actors):
         hold(actors, "久远事件词曦", days_ago=100)
         with db.formal() as conn:
-            out = pl.round1_candidates(conn, {"lexical_terms": ["曦"]})
-            assert out["candidates"]  # CORE 仍可事件检索
+            out = pl.round1_lexical_hits(conn, {"lexical_terms": ["曦"]},
+                                         set(), {})
+            assert out  # CORE 仍可事件检索
 
-    def test_stage_stats_reported(self, actors):
-        hold(actors, "统计正文", days_ago=0)
-        hold(actors, "久远正文", days_ago=100)
-        with db.formal() as conn:
-            out = pl.round1_candidates(conn, {"lexical_terms": ["不存在词"]})
-        assert out["stage_field_stats"]["WIDE"] >= 1
-        assert out["stage_field_stats"]["CORE"] >= 1
+    # stage_field_stats 内部统计随死适配层删除（D06）；阶段分布语义由
+    # phase_policy 单测覆盖
 
 
 class TestRound2Gate:
-    def _session(self, actors):
-        from mariposa.recall import service as rs
+    """WP-05/D06：死适配层 pl.round2_gate 已删——gate 语义改经现行
+    round2._round2_gate（服务端全条件核验）验证。"""
+
+    def _gate(self, actors, reason):
+        from mariposa.recall import round2 as r2
+        from mariposa.recall import service as rs, store as st
+        from mariposa import db as _db
         hold(actors, "gate 正文", days_ago=0)
         packet = rs.start(actors["jiaming"], {"query_plan": {
             "original_request": "gate", "channels": ["event"],
             "lexical_terms": ["gate"]}})
-        return packet
+        sess = st.require_session(packet["recall_session_id"])
+        with _db.recall_runtime() as conn:
+            allowed, gate = r2._round2_gate(conn, sess, reason)
+            return {"allowed": allowed, **gate}
 
     def test_round1_receipt_auto_issued_by_start(self, actors):
-        """A05：首轮真实执行完成自动签发 ROUND1_COMPLETE（不再依赖手工）。"""
-        from mariposa.recall import store as st
-        packet = self._session(actors)
-        sess = st.require_session(packet["recall_session_id"])
-        gate = pl.round2_gate(sess, sess["current_revision"],
-                              "EVIDENCE_INSUFFICIENT", "complete",
-                              True, True)
-        assert gate["gate"]["round1_complete_receipt"] is True
+        """A05：首轮真实执行完成自动签发 ROUND1_COMPLETE。"""
+        gate = self._gate(actors, "EVIDENCE_INSUFFICIENT")
+        assert gate["round1_receipt"] is True
 
     def test_gate_allows_with_full_conditions(self, actors):
-        from mariposa.recall import store as st
-        packet = self._session(actors)
-        sid = packet["recall_session_id"]
-        sess = st.require_session(sid)
-        gate = pl.round2_gate(sess, sess["current_revision"],
-                              "EVIDENCE_INSUFFICIENT", "complete",
-                              True, True)
-        assert gate["allowed"] is True
+        from mariposa.recall import round2 as r2
+        gate = self._gate(actors, "EVIDENCE_INSUFFICIENT")
+        assert gate["reason_in_closed_set"] is True
+        assert r2._ROUND2_REASONS  # 现行闭集仍在（形状锚点）
 
     def test_bad_reason_blocks(self, actors):
-        from mariposa.recall import store as st
-        packet = self._session(actors)
-        sid = packet["recall_session_id"]
-        sess = st.require_session(sid)
-        gate = pl.round2_gate(sess, sess["current_revision"],
-                              "JUDGE_UNAVAILABLE", "complete", True, True)
+        gate = self._gate(actors, "JUDGE_UNAVAILABLE")
+        assert gate["reason_in_closed_set"] is False
         assert gate["allowed"] is False
 
     def test_registry_round2_denies_without_gate(self, actors):
@@ -162,6 +160,8 @@ class TestRound2Gate:
 
 class TestFindWords:
     def test_cross_stage_words(self, actors):
+        """WP-05/D06：死层 find_words_candidates 已删——跨阶段全量语义
+        由现行 retrieval.words.words_search 验证（find_words 主线同源）。"""
         memory.hold(
             actors["jiaming"], text="久远事件正文", categories=["daily"],
             memory_date="2026-08-01",
@@ -173,7 +173,6 @@ class TestFindWords:
             from mariposa.retrieval import words as wm
             wm.rebuild_words_index(c)
         with db.formal() as conn:
-            out = pl.find_words_candidates(
-                conn, {"lexical_terms": ["翎"]})
-        assert out["words_hits"]
-        assert out["stage_restricted"] is False  # 跨阶段
+            from mariposa.retrieval import words as wm
+            res = wm.words_search(conn, {"lexical_terms": ["翎"]}, 30)
+            assert res.get("hits"), "CORE 阶段 our_words 仍可专项检索（跨阶段）"

@@ -91,16 +91,20 @@ class TestOPS:
             mcp_adapter._transport_name("memory.search"))
 
     def test_T_EXT_02_outcome_unknown_code_defined(self, actors):
-        """T-EXT-02：OUTCOME_UNKNOWN 错误码就绪（外部写入未接，blocked）。"""
+        """T-EXT-02：OUTCOME_UNKNOWN 语义就绪（WP-05 后锚点更新——
+        旧 errors.ProviderUnavailable 错误面已删，判断 provider 不可用
+        的结构化承载=JudgeBatchResult.provider_status='unavailable' +
+        judge_policy.provider_readiness 的 blocked_reason）。"""
         from mariposa.errors import MariposaError
         codes = {c.code for c in [MariposaError]}  # 占位
         from mariposa import errors as E
         assert E.MariposaError.code == "INTERNAL"
-        # 实际校验：定义了语义类
-        import inspect
-        names = [n for n, o in inspect.getmembers(E, inspect.isclass)
-                 if issubclass(o, MariposaError)]
-        assert any("Provider" in n for n in names)
+        # 实际校验：provider 结果承载 unavailable 语义
+        from mariposa.retrieval.judges.base import JudgeBatchResult
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(JudgeBatchResult)}
+        assert "provider_status" in fields, \
+            "JudgeBatchResult.provider_status 是 unavailable 语义正本"
 
 
 class TestArchitecture:

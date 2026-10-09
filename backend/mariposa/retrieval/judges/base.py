@@ -115,18 +115,6 @@ def clear_injected() -> None:
     _INJECTED.clear()
 
 
-def get_provider():
-    """按配置构造 provider；disabled/未配置 → DisabledJudge（无副作用）。
-
-    MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）后本函数只服务
-    env 兼容路径与旧测试；生产判断层入口是 recall.judge_policy
-    政策表（get_provider_by_name）——政策 enabled=false 时上层根本
-    不构造任何 provider（零判断调用）。
-    """
-    from ... import config
-    configured = config.RECALL_JUDGE_PROVIDER
-    return get_provider_by_name(configured)
-
 
 def get_provider_by_name(name: str | None):
     """按政策所选 provider 名构造（未配置/未安装 → DisabledJudge）。

@@ -794,14 +794,6 @@ def _scope_coverage(coverage: dict) -> dict:
 
 
 
-# F12：主体经参数传递为主；此全局仅作未知调用方的最后兜底，
-# 不再是常规路径（并发串主体窗口已消除）
-_CURRENT = {"principal": None}
-
-
-def _current_principal():
-    """检索层内 raw scope 解析用当前主体（invoke 时设置）。"""
-    return _CURRENT["principal"]
 
 
 
@@ -1512,16 +1504,6 @@ def validate_context(principal, a: dict) -> dict:
 
 
 
-def _check_conversation_scope(session: dict, a: dict) -> None:
-    """跨 conversation 的 session 引用不自动泄漏隐藏窗口上下文（RUNTIME-09）。"""
-    # session 未声明 scope 时，显式携带其他 scope 的调用同样拒绝
-    # （保守：不做"空=全局可见"的解释）。
-    scope = a.get("conversation_scope")
-    if scope and scope != session["conversation_scope"]:
-        raise Forbidden(
-            "conversation_scope 与 session 绑定范围不一致；同主体不自动"
-            "获得另一会话的隐藏上下文", code="SCOPE_MISMATCH",
-            session_id=session["session_id"])
 
 
 def words_recall(principal, a: dict, op_ctx: dict | None = None) -> dict:
