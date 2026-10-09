@@ -67,8 +67,8 @@ class TestEstomagoProfile:
         b = next(it for it in items if it["original_title"] == "话语窗")
         assert b.get("event_text") == "带话语的开窗事件"
         words = b.get("our_words") or []
-        assert any(w["text"] == "我们的原话canary" for w in words), \
-            "我们的话进桶"
+        assert "我们的原话canary" in _flat_words(words), \
+            "我们的话进桶（分组形状展平后可达）"
 
     def test_cc_unchanged_matrix(self, jiaming):
         """非 estomago profile 字段矩阵不变（不带 event_text/our_words），
@@ -245,12 +245,12 @@ class TestRRA006BudgetAndSectioning:
         # word≈4.5KB 超 4KB 节预算会跨 chunk，同一 word 可多 entry；
         # 断言按拼接重构：跨页收集的全部词文本按序拼接=原文）
         wcur = it.get("our_words_next")
-        wtexts = [w["text"] for w in it["our_words"]]
+        wtexts = _flat_words(it["our_words"])
         while wcur:
             pg = bootstrap.next_page("jiaming", "estomago",
                                      pack["snapshot_id"], wcur,
                                      "memory_item")
-            wtexts += [w["text"] for w in pg["items"]]
+            wtexts += _flat_words(pg["items"])
             wcur = pg.get("next_cursor")
         assert "".join(wtexts) == "话" * 3000, \
             "words 续取按序拼回逐字完整（两条 1500 字 word）"
@@ -271,6 +271,18 @@ def _env_bytes(obj) -> int:
     import json as _json
     return len(_json.dumps({"ok": True, "data": obj}, ensure_ascii=False,
                            separators=(",", ":")).encode("utf-8"))
+
+
+def _flat_words(items) -> list[str]:
+    """our_words 分组形状展平（组序+组内序）——拼回语义与旧逐条形状
+    逐字等价（B 批 JSON 瘦身）。"""
+    out: list[str] = []
+    for g in items or []:
+        if isinstance(g, dict) and isinstance(g.get("texts"), list):
+            out += [t for t in g["texts"] if isinstance(t, str)]
+        elif isinstance(g, dict) and isinstance(g.get("text"), str):
+            out.append(g["text"])
+    return out
 
 
 class TestRRA006FollowUp:
@@ -344,14 +356,14 @@ class TestRRA006FollowUp:
         it = next(x for x in pack["memory_days"]["items"]
                   if x["memory_id"] == mid)
         assert it["our_words_truncated"] is True
-        chunks = [w["text"] for w in it["our_words"]]
+        chunks = _flat_words(it["our_words"])
         cur = it["our_words_next"]
         assert cur.get("char_offset", 0) > 0, "单条超宽走条内字符游标"
         while cur:
             pg = bootstrap.next_page("jiaming", "estomago",
                                      pack["snapshot_id"], cur,
                                      "memory_item")
-            chunks += [w["text"] for w in pg["items"]]
+            chunks += _flat_words(pg["items"])
             cur = pg.get("next_cursor")
         assert "".join(chunks) == full, "条内分节拼回逐字完整"
 
@@ -394,7 +406,7 @@ class TestRRAThirdFollowUpControlEscape:
             cur = pg.get("next_cursor")
         assert cur is None, "event 续取链收敛"
         assert "".join(ev_parts) == event, "event 分节续取精确拼回"
-        w_parts = [w["text"] for w in it["our_words"]]
+        w_parts = _flat_words(it["our_words"])
         wcur = it["our_words_next"]
         guard = 0
         while wcur and guard < 64:
@@ -402,7 +414,7 @@ class TestRRAThirdFollowUpControlEscape:
             pg = bootstrap.next_page("jiaming", "estomago",
                                      pack["snapshot_id"], wcur,
                                      "memory_item")
-            w_parts += [w["text"] for w in pg["items"]]
+            w_parts += _flat_words(pg["items"])
             wcur = pg.get("next_cursor")
         assert wcur is None, "words 续取链收敛"
         assert "".join(w_parts) == word, "words 分节续取精确拼回"
@@ -432,7 +444,7 @@ class TestRRAThirdFollowUpManyShortWords:
             assert pages[0] <= 24576, \
                 f"{n} 条首包 {pages[0]}B 超 24576（结构费残因）"
             it = pack["memory_days"]["items"][0]
-            texts = [w["text"] for w in it["our_words"]]
+            texts = _flat_words(it["our_words"])
             cur = it.get("our_words_next")
             guard = 0
             while cur and guard < 80:
@@ -446,7 +458,7 @@ class TestRRAThirdFollowUpManyShortWords:
                 assert b <= 24576, \
                     f"{n} 条第 {guard} 续页 {b}B 超 24576"
                 pages.append(b)
-                texts += [w["text"] for w in pg["items"]]
+                texts += _flat_words(pg["items"])
                 cur = pg.get("next_cursor")
             assert cur is None, f"{n} 条续取链收敛（{guard} 页后）"
             assert "".join(texts) == expected, \
