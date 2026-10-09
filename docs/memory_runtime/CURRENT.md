@@ -359,6 +359,16 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-09（WP-01+WP-02 行为收口，联合审计返修 run-160858）：
+  §4.1 政策纪元定义扩为 **mode+revision**（同 mode 下 provider/
+  allowed_data 变更=切换；replay/续页/Round2 gate/交付前复核四处
+  同口径，save 无 revision 的旧格式仅 mode 差异拒）；replay 的
+  outbound_grants 空集语义对齐 base 契约（零许可 fail-closed）；
+  off 同模式重放原样返回（不清空不降级）；装页预算骨架与最终出站
+  packet 同源（24576 信封不再被出口追加字段击穿）；多载体超限卡
+  逐载体续取；judge 在途切政策 start/refine 提交拒绝（fencing）；
+  get_provider_by_name 接通 codex_sdk 构造（readiness 同源；live
+  实测待授权，openai-codex 0.161.0 已锁 requirements.lock）。
 - 2026-10-09（WP-06 裁定施工，五项她已裁）：D-2 选 A——off 模式全集
   交付载体改当前 revision 的 version_body 正本（原文格式，X16 保真，
   §4.3）；D-3 选 A——maintenance 写面收敛 {qiaosheng,worker}（jiaming
