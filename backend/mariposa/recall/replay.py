@@ -60,19 +60,30 @@ def revalidate_replayed(fn_name: str, saved: dict,
     # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08，J08）：政策切换后
     # 旧包重放拒绝——不在同一结果集混入另一种模式。旧格式包（无
     # judge_mode 字段=判断路径产物）在当前政策为关闭时同样拒绝，
-    # 不把判断路径缓存正文在关闭模式下继续释放
+    # 不把判断路径缓存正文在关闭模式下继续释放。
+    # WP-01 A03（2026-10-09）：纪元=mode+revision——同 mode 下
+    # provider/allowed_data 变更（revision 前进）同样是切换；saved
+    # 无 revision 字段的旧格式按现行逻辑只在 mode 差异时拒。
     from . import judge_policy as _jpol
     _cur_pol = _jpol.effective()
     _saved_mode = saved.get("judge_mode")
-    if _saved_mode is not None and _saved_mode != _cur_pol["mode"]:
+    _saved_rev = saved.get("judge_policy_revision")
+    if _saved_mode is not None and (
+            _saved_mode != _cur_pol["mode"]
+            or (_saved_rev is not None
+                and int(_saved_rev) != int(_cur_pol.get("revision")
+                                           or 0))):
         raise StaleOperation(
-            f"召回判断政策已切换（保存时 {_saved_mode}，当前 "
-            f"{_cur_pol['mode']}）：旧 operation 响应拒绝重放",
+            f"召回判断政策已切换（保存时 {_saved_mode}@rev{_saved_rev}，"
+            f"当前 {_cur_pol['mode']}@rev{_cur_pol.get('revision')}"
+            f"（provider={_cur_pol.get('provider')}））：旧 operation "
+            "响应拒绝重放",
             code="RECALL_POLICY_CHANGED",
             operation=fn_name,
             saved_mode=_saved_mode, current_mode=_cur_pol["mode"],
-            saved_policy_revision=saved.get("judge_policy_revision"),
-            current_policy_revision=_cur_pol.get("revision"))
+            saved_policy_revision=_saved_rev,
+            current_policy_revision=_cur_pol.get("revision"),
+            current_provider=_cur_pol.get("provider"))
     if _saved_mode is None and _cur_pol["mode"] == "off":
         raise StaleOperation(
             "召回判断政策已切换为关闭：旧判断路径响应拒绝重放",
@@ -80,6 +91,13 @@ def revalidate_replayed(fn_name: str, saved: dict,
             operation=fn_name,
             current_mode="off",
             current_policy_revision=_cur_pol.get("revision"))
+    if _cur_pol["mode"] == "off":
+        # WP-01 A7（CX-02）：off 同模式重放——off 零 provider/零许可
+        # （§4.1），provider 可用性与许可抑制段只属于 on/unconfigured
+        # 语义；直接按原 off 结果重放（同 operation/result identity），
+        # 下方的 session/资源/版本逐卡重校验照常执行
+        return _revalidate_replayed_resources(fn_name, saved,
+                                              request_args)
     # RECALL-03 + CR-01（2026-10-04 全量审计 P1）：Judge 不可用或
     # 原文许可撤回后，旧 operation 不释放正文——request_ref 幂等的
     # 是结果身份，不是缓存正文的出站许可。与 fresh/continuation 共用
@@ -88,26 +106,27 @@ def revalidate_replayed(fn_name: str, saved: dict,
     # 还须当前 profile 仍含 source_excerpt。
     # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：可用性判定按**政策所选
     # provider**（不再走 env 兼容入口——政策为正本）；关闭模式已在上方
-    # RECALL_POLICY_CHANGED 早退，到这里的必为 on/unconfigured。许可核对
+    # RECALL_POLICY_CHANGED/A7 早退，到这里的必为 on/unconfigured。许可核对
     # 用 provider 无关接口 outbound_grants（Jev/Codex 同一入口）。
     from ..retrieval.judges import base as _jb
     _pol = _cur_pol
     _provider = _jb.get_provider_by_name(
         _pol.get("provider") if _pol["mode"] == "on" else None)
     _judge_down = isinstance(_provider, _jb.DisabledJudge)
-    # 许可集语义：provider **显式声明**了非空 outbound_grants 才参与
-    # 逐卡角色过滤（Jev profile 即许可；Codex 同接口）。基类默认空集
-    # （含测试注入 fake）=该 provider 未声明许可面——不过滤（与旧
-    # 非 TypeSafeJevJudge 行为一致），就绪性由 provider_readiness 判定。
-    _grants = _provider.outbound_grants() if not _judge_down else None
-    _profile = _grants if _grants else None
-    # provider 自身就绪性（缺 key/非法 profile 等，按 provider 各自口径；
-    # 测试注入的 fake 不走 HTTP 不受 key 缺失影响）——与网页就绪探针同源
+    # WP-01 A02（2026-10-09）：outbound_grants 空集=零许可（base.py
+    # 契约 fail-closed）——不再把空集当"未声明不过滤"（那会让未来
+    # provider 接入即 fail-open）。ready 探针照常先行。
+    _down_reason = "judge_disabled_replay_body_suppressed"
     if not _judge_down:
         from . import judge_policy as _jp
         _rd = _jp.provider_readiness(_pol.get("provider"))
         if not _rd.get("ready"):
             _judge_down = True
+        else:
+            _grants = _provider.outbound_grants()
+            if not _grants:
+                _judge_down = True
+                _down_reason = "allowed_data_empty"
     if _judge_down and isinstance(saved.get("candidates"), list) \
             and saved["candidates"]:
         # CR-NAV-01（2026-10-05 四轮复审）：judge 不可用时抑制的是
@@ -122,14 +141,14 @@ def revalidate_replayed(fn_name: str, saved: dict,
         degraded["candidates"] = _nav_kept
         if len(_nav_kept) != len(saved["candidates"]):
             degraded["degraded_reasons"] = list(
-                saved.get("degraded_reasons") or []) + [
-                    "judge_disabled_replay_body_suppressed"]
+                saved.get("degraded_reasons") or []) + [_down_reason]
             degraded["coverage"] = dict(saved.get("coverage") or {})
             degraded["coverage"]["judge"] = "unavailable"
             degraded["delivery_action"] = "no_candidates"
         saved = degraded
-    elif (_profile is not None
+    elif (not _judge_down
             and isinstance(saved.get("candidates"), list)):
+        _profile = _provider.outbound_grants()
         # 原文许可缩权（CR-01-R1/R2/R3）：必要证据角色按**通道**单一
         # 真源判定（required_excerpt_roles，与 fresh 的实测交付矩阵
         # 一致：event 卡——含 our_words 命中/双命中——恒 event_excerpt；
@@ -160,6 +179,15 @@ def revalidate_replayed(fn_name: str, saved: dict,
                 degraded["coverage"][_ch if _ch != "word" else "words"] = \
                     "unavailable_profile"
             saved = degraded
+    return _revalidate_replayed_resources(fn_name, saved, request_args)
+
+
+def _revalidate_replayed_resources(fn_name: str, saved: dict,
+                                   request_args: dict | None) -> dict:
+    """重放的资源逐卡当前状态校验（session/版本/可见性/phase）——
+    从 revalidate_replayed 拆出（WP-01 A7：off 同模式重放跳过
+    provider 段后从这里继续，资源语义不变）。"""
+    from .models import ACTIVE_STATUSES
     sid = saved.get("recall_session_id")
     has_candidates = isinstance(saved.get("candidates"), list)
     if not sid:

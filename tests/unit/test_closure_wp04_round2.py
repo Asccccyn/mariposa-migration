@@ -207,10 +207,37 @@ class TestRound2FullChain:
     def test_no_source_excerpt_grant_blocks_raw_start(self, actors):
         """S15：无 source_excerpt 外发许可 → raw 不开始（授权门在
         判据前，不产生任何 round）。"""
-        r1 = _start(actors)
-        sid = r1["data"]["recall_session_id"]
-        with pytest.raises(Forbidden) as ei:
-            _round2(actors, sid)
+        # WP-01 A02（2026-10-09）：conftest fake 已声明全许可面——本测
+        # 显式注入零许可 provider（前提自持，不依赖全局默认的副作用）
+        from mariposa.retrieval.judges import base as jb
+        from mariposa import config as cfg
+
+        class NoGrantJudge(jb.JudgeProvider):
+            name = "no_grant_test"
+
+            def judge(self, plan, candidates, ctx):
+                return jb.JudgeBatchResult(
+                    items=[jb.JudgeItem(
+                        candidate_ref=c.get("candidate_ref")
+                        or c["resource_ref"],
+                        candidate_version=str(
+                            c.get("content_version") or ""),
+                        relevance_signal=0.8,
+                        evaluation_status="evaluated",
+                        model_id=self.name, prompt_version="t")
+                        for c in candidates],
+                    provider_status="evaluated")
+
+        jb.register_for_tests("no_grant_test", NoGrantJudge())
+        old = cfg.RECALL_JUDGE_PROVIDER
+        cfg.RECALL_JUDGE_PROVIDER = "no_grant_test"
+        try:
+            r1 = _start(actors)
+            sid = r1["data"]["recall_session_id"]
+            with pytest.raises(Forbidden) as ei:
+                _round2(actors, sid)
+        finally:
+            cfg.RECALL_JUDGE_PROVIDER = old
         gate = ei.value.detail["gate"]
         assert gate["judge_outbound_authorized"] is False
 

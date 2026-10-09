@@ -108,16 +108,25 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
                               and receipt.get("completed") == 1)
     gate["round1_completed"] = gate["round1_receipt"]
     if receipt is not None:
-        # §3.2 政策冻结核对：首轮执行时的政策模式与当前一致才放行
-        # ——切换后旧 revision 的 Round2 拒绝（RECALL_POLICY_CHANGED，
-        # 不混模式、不自动另起查询）
+        # §3.2 政策纪元核对（WP-01 A03：mode+revision——同 mode 下
+        # provider/allowed_data 变更同样拒绝）：首轮执行时的政策与
+        # 当前一致才放行——切换后旧 revision 的 Round2 拒绝
+        # （RECALL_POLICY_CHANGED，不混纪元、不自动另起查询）
         r1_pol = (receipt["coverage"] or {}).get("_judge_policy") or {}
-        if r1_pol.get("mode") and r1_pol["mode"] != policy["mode"]:
+        if r1_pol.get("mode") and (
+                r1_pol["mode"] != policy["mode"]
+                or (r1_pol.get("revision") is not None
+                    and int(r1_pol["revision"])
+                    != int(policy.get("revision") or 0))):
             raise Forbidden(
-                f"召回判断政策已切换（首轮回执 {r1_pol['mode']}，当前 "
-                f"{policy['mode']}）：Round2 拒绝，请基于新政策重新查询",
+                f"召回判断政策已切换（首轮回执 {r1_pol['mode']}"
+                f"@rev{r1_pol.get('revision')}，当前 {policy['mode']}"
+                f"@rev{policy.get('revision')}）：Round2 拒绝，请基于"
+                "新政策重新查询",
                 code="RECALL_POLICY_CHANGED",
                 receipt_mode=r1_pol["mode"], current_mode=policy["mode"],
+                receipt_policy_revision=r1_pol.get("revision"),
+                current_policy_revision=policy.get("revision"),
                 session_id=sid)
         # 复审#3 + 三轮复审#1：本轮请求过的每个 retrieval family 都必须
         # complete_within_scope——unavailable/partial/pending/truncated
@@ -513,67 +522,92 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
     if policy["mode"] == "off":
         # 关闭模式（§4.4/R05）：本批候选全集冻结为分页结果集——上游
         # raw 游标推进以"本批全部可交付"（已冻结可逐页取）为前提；
-        # 交付分页游标与上游 raw_search 续页分槽（R06）
+        # 交付分页游标与上游 raw_search 续页分槽（R06）。
+        # WP-01 A6（CX-06）：装页骨架=最终 packet 形状（终态字段全部
+        # 前置，出口不再追加新键）
         from . import paging as _paging
         frozen_cards = [_paging.project_card(c)
                         for c in sel["delivered"]]
         page_extra = {
-            "judge_mode": "off",
+            "recall_session_id": sid,
+            "revision": session["current_revision"],
+            "round": 2,
+            "status": session["status"],
+            "search_status": ("FOUND" if sel["delivered"]
+                              else "NO_MATCH_OBSERVED"),
+            "delivery_action": "needs_validation",
+            "instruction_authority": "none",
+            "content_role": "retrieved_memory",
+            "coverage": coverage,
+            "missing": sel["missing"],
+            "conflicts": sel["conflicts"],
+            "degraded_reasons": sorted(set(degraded)),
+            "query_fingerprint": _query_fp(plan),
+            "continuation": None,  # 事务内签发（三轮复审#2）
+            "budget": budget.snapshot(
+                _with_round_preview(session) if not cont_token
+                else session),
+            "token_count": config.RECALL_TOKENIZER,
+            "judge_mode": policy["mode"],
             "judge_policy_revision": int(policy.get("revision") or 0),
-            "judgement_status": "bypassed_by_user",
+            "judgement_status": coverage.get("judge"),
             "judged_count": 0,
             "retrieval_coverage": dict(coverage),
         }
-        first_page = _paging.assemble_page(frozen_cards, (0, 0),
+        first_page = _paging.assemble_page(frozen_cards, (0, 0, 0),
                                            page_extra)
         cards = first_page["candidates"]
     else:
         frozen_cards = None
         cards = _finalize_cards(sel["delivered"])
-    packet = {
-        "recall_session_id": sid,
-        "revision": session["current_revision"],
-        "round": 2,
-        "status": session["status"],
-        "search_status": "FOUND" if cards else "NO_MATCH_OBSERVED",
-        "delivery_action": ("needs_validation"
-                            if policy["mode"] == "off"
-                            else sel["delivery_action"]),
-        "instruction_authority": "none",
-        "content_role": "retrieved_memory",
-        "coverage": coverage,
-        "candidates": cards,
-        "missing": sel["missing"],
-        "conflicts": sel["conflicts"],
-        "degraded_reasons": sorted(set(degraded)),
-        "query_fingerprint": _query_fp(plan),
-        "continuation": None,  # 事务内签发（三轮复审#2：服务端游标）
-        # 全量审计 P2-03：首页按"本轮已成功"预览（与 Round1 同口径，
-        # 不再少算一轮）；翻页不消耗轮次，用当前快照
-        "budget": budget.snapshot(
-            _with_round_preview(session) if not cont_token else session),
-        "token_count": config.RECALL_TOKENIZER,
-        # §4.2/§4.4 合同字段（两模式同形；关闭=分页、开启=有界交付）
-        "judge_mode": policy["mode"],
-        "judge_policy_revision": int(policy.get("revision") or 0),
-        "judgement_status": coverage.get("judge"),
-        "judged_count": 0,
-    }
     if policy["mode"] == "off":
-        packet["pagination"] = first_page["pagination"]
-        packet["retrieval_coverage"] = first_page["retrieval_coverage"]
+        packet = first_page  # 装页器产出即最终 packet（骨架=出口同源）
     else:
+        packet = {
+            "recall_session_id": sid,
+            "revision": session["current_revision"],
+            "round": 2,
+            "status": session["status"],
+            "search_status": "FOUND" if cards else "NO_MATCH_OBSERVED",
+            "delivery_action": sel["delivery_action"],
+            "instruction_authority": "none",
+            "content_role": "retrieved_memory",
+            "coverage": coverage,
+            "candidates": cards,
+            "missing": sel["missing"],
+            "conflicts": sel["conflicts"],
+            "degraded_reasons": sorted(set(degraded)),
+            "query_fingerprint": _query_fp(plan),
+            "continuation": None,  # 事务内签发（三轮复审#2：服务端游标）
+            # 全量审计 P2-03：首页按"本轮已成功"预览（与 Round1 同口径，
+            # 不再少算一轮）；翻页不消耗轮次，用当前快照
+            "budget": budget.snapshot(
+                _with_round_preview(session) if not cont_token else session),
+            "token_count": config.RECALL_TOKENIZER,
+            # §4.2/§4.4 合同字段（两模式同形；关闭=分页、开启=有界交付）
+            "judge_mode": policy["mode"],
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": coverage.get("judge"),
+            "judged_count": 0,
+            "retrieval_coverage": dict(coverage),
+        }
         packet = _enforce_output_budget(packet)
     op_key = op_ctx["operation_key"] if op_ctx else None
-    # §3.2：结果交付前复核当前政策——计算期间被人类切换则拒绝交付
-    # （RECALL_POLICY_CHANGED），不在同一结果集混入另一种模式
+    # §3.2：结果交付前复核当前政策纪元（WP-01 A03：mode+revision）——
+    # 计算期间被人类切换（含同 mode 换 provider/allowed_data）则拒绝
+    # 交付（RECALL_POLICY_CHANGED），不在同一结果集混入另一种纪元
     _cur_pol = judge_policy.effective()
-    if _cur_pol["mode"] != policy["mode"]:
+    if _cur_pol["mode"] != policy["mode"] or \
+            int(_cur_pol.get("revision") or 0) != \
+            int(policy.get("revision") or 0):
         raise _F(
-            f"召回判断政策已切换（计算时 {policy['mode']}，交付时 "
-            f"{_cur_pol['mode']}）：Round2 拒绝提交",
+            f"召回判断政策已切换（计算时 {policy['mode']}"
+            f"@rev{policy.get('revision')}，交付时 {_cur_pol['mode']}"
+            f"@rev{_cur_pol.get('revision')}）：Round2 拒绝提交",
             code="RECALL_POLICY_CHANGED",
             compute_mode=policy["mode"], current_mode=_cur_pol["mode"],
+            compute_policy_revision=policy.get("revision"),
+            current_policy_revision=_cur_pol.get("revision"),
             session_id=sid)
     with _db.recall_runtime() as conn:
         conn.execute("BEGIN IMMEDIATE")

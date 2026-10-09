@@ -100,11 +100,14 @@ def load_set(result_set_id: str) -> dict | None:
 def get_or_issue_cursor(conn, result_set_id: str, position: int) -> str:
     """同位置复用既有游标（重复读页零膨胀）；无则签发新随机令牌。
 
-    在调用方事务/小事务内执行：position = (candidate_index, fragment_index)
-    打包为整数 position = candidate_index * 10_000 + fragment_index
-    （分片数天然远小于 10k；服务端解码，不接受任意 offset）。
+    在调用方事务/小事务内执行：position = (candidate_index,
+    carrier_index, fragment_index) 打包为整数
+    position = candidate_index*100_000_000 + carrier_index*10_000
+    + fragment_index（各维天然远小于上限；服务端解码，不接受任意
+    offset）。三元组自 CX-01（多载体逐载体续取）起启用。
     """
-    packed = int(position[0]) * 10_000 + int(position[1])
+    packed = (int(position[0]) * 100_000_000
+              + int(position[1]) * 10_000 + int(position[2]))
     row = conn.execute(
         "SELECT token FROM recall_page_cursors WHERE result_set_id=?"
         " AND position=?", (result_set_id, packed)).fetchone()
@@ -118,8 +121,10 @@ def get_or_issue_cursor(conn, result_set_id: str, position: int) -> str:
     return token
 
 
-def _resolve_cursor(result_set_id: str, token: str) -> tuple[int, int]:
-    """游标 → (candidate_index, fragment_index)；陌生/跨集游标拒绝。"""
+def _resolve_cursor(result_set_id: str,
+                    token: str) -> tuple[int, int, int]:
+    """游标 → (candidate_index, carrier_index, fragment_index)；
+    陌生/跨集游标拒绝。"""
     with db.recall_runtime() as conn:
         row = conn.execute(
             "SELECT result_set_id, position FROM recall_page_cursors"
@@ -130,7 +135,8 @@ def _resolve_cursor(result_set_id: str, token: str) -> tuple[int, int]:
             "任意 offset", code="PAGINATION_CURSOR_INVALID",
             result_set_id=result_set_id)
     packed = int(row["position"])
-    return packed // 10_000, packed % 10_000
+    return (packed // 100_000_000,
+            (packed // 10_000) % 10_000, packed % 10_000)
 
 
 def _text_carriers(card: dict) -> list[tuple[dict, str]]:
@@ -200,19 +206,38 @@ def _fragment_chars_for(page: dict, card: dict, holder: dict,
     return 1
 
 
-def assemble_page(cards: list[dict], start_pos: tuple[int, int],
-                  extra_page_fields: dict) -> dict:
+def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
+                  extra_page_fields: dict,
+                  skip_flags: list[str | None] | None = None) -> dict:
     """确定性页装配（同位置+同冻结集 → 同页；P05/P06）。
 
+    - skip_flags[i] 非空的卡跳过（页间失效/通道关闭——JFA-007/A04）：
+      不产出条目、不占条目数，坐标仍按**冻结全集**前进（装配循环吃
+      冻结全集+跳过标记，绝不收缩子集——收缩坐标会静默丢卡）；
     - 按序装整卡；整卡放不下且本页已有条目 → 整卡（或其下一片）顺延
       下页（不 pop、不丢）；
-    - 本页尚空且单卡超限 → 对该卡最长载体按码点分片（固定片宽，见
-      _fragment_chars_for），保证严格前进（无空页活锁）；
-    - 每页 ≤PAGE_MAX_ENTRIES 条目。
+    - 本页尚空且单卡超限 → 逐载体按码点分片（载体顺序=evidence 序
+      +excerpt；固定片宽；(carrier_index, fragment_index) 双维续取，
+      一个载体的片段耗尽才进下一载体，**全部载体耗尽才进下一卡**——
+      多载体超限卡不再只取最长载体丢第二载体，CX-01）；
+    - 每页 ≤PAGE_MAX_ENTRIES 条目；被跳过卡不占条目数；
+    - 字节预算按**最终出站信封形状**估算：骨架预置 pagination 终态键
+      占位（next_cursor/result_set_id 与真值等长、returned_count 取
+      两位上限），出口不再追加新键——预算与出口同源（CX-06）。
     """
     page = dict(extra_page_fields)
     page["candidates"] = []
     entries: list[dict] = page["candidates"]
+    # CX-06：出口最终键的等长占位（估算用；最终 pagination 重建时
+    # 占位被真值替换，真值恒 ≤ 占位字节——不是二次裁剪）
+    page["pagination"] = {
+        "returned_count": PAGE_MAX_ENTRIES,
+        "candidate_total": len(cards),
+        "has_more": True,
+        "next_cursor": _new_cursor_token(),
+        "result_set_id": str(extra_page_fields.get("result_set_id")
+                             or _new_set_id()),
+    }
 
     def _bytes_with(extra: dict | None = None) -> int:
         probe = dict(page)
@@ -220,14 +245,21 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int],
             probe["candidates"] = entries + [extra]
         return _envelope_bytes(probe)
 
-    idx, fidx = start_pos
+    idx, car, fidx = start_pos
     n = len(cards)
     while idx < n and len(entries) < PAGE_MAX_ENTRIES:
+        if skip_flags is not None and idx < len(skip_flags) \
+                and skip_flags[idx]:
+            idx += 1
+            car = 0
+            fidx = 0
+            continue
         card = cards[idx]
         whole = dict(card)
         if _bytes_with(whole) <= PAGE_ENVELOPE_MAX_BYTES:
             entries.append(whole)
             idx += 1
+            car = 0
             fidx = 0
             continue
         if entries:
@@ -241,32 +273,42 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int],
                             "resource_ref": card.get("resource_ref"),
                             "reason": "metadata_exceeds_page_budget"})
             idx += 1
+            car = 0
             fidx = 0
             continue
-        holder, field = max(
-            carriers, key=lambda hf: len(hf[0].get(hf[1]) or ""))
-        text = holder.get(field) or ""
-        total = len(text)
-        frag_chars = _fragment_chars_for(page, card, holder, field)
-        served = fidx * frag_chars
-        if served >= total:
-            # fidx 已越过末片（上游不该签发）：防活锁，整卡收尾
+        if car >= len(carriers):
+            # 游标越过载体总数（上游不该签发）：防活锁，整卡收尾
             entries.append({"invalid": True,
                             "resource_ref": card.get("resource_ref"),
                             "reason": "cursor_beyond_fragments"})
             idx += 1
+            car = 0
+            fidx = 0
+            continue
+        holder, field = carriers[car]
+        text = holder.get(field) or ""
+        if not text:
+            car += 1
+            fidx = 0
+            continue
+        total = len(text)
+        frag_chars = _fragment_chars_for(page, card, holder, field)
+        served = fidx * frag_chars
+        if served >= total:
+            # 该载体片段耗尽 → 下一载体（不进下一卡——CX-01）
+            car += 1
             fidx = 0
             continue
         end = min(total, served + frag_chars)
         frag = _fragment_card(card, holder, field, served, end)
         entries.append(frag)
         if end >= total:
-            idx += 1
+            car += 1
             fidx = 0
         else:
             fidx += 1
-    next_pos = (idx, fidx)
-    has_more = next_pos != (n, 0)
+    next_pos = (idx, car, fidx)
+    has_more = next_pos != (n, 0, 0)
     page["pagination"] = {
         "returned_count": len(entries),
         "candidate_total": n,
@@ -276,22 +318,36 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int],
     return page
 
 
-def revalidate_page_cards(cards: list[dict]) -> tuple[list[dict], list[dict]]:
-    """逐页重校验当前权限与版本（P08）：失效卡剔除并显式列出。
+def revalidate_page_cards(cards: list[dict]) -> tuple[list[str | None],
+                                                      list[dict]]:
+    """逐页重校验当前权限与版本（P08+A04）：失效卡标记并显式列出。
+
+    返回 (flags, invalidated)：flags 与 cards 原序等长，第 i 项为
+    失效原因或 None——**不返回收缩子集**（JFA-007 根因：装配坐标
+    必须吃冻结全集，收缩子集坐标会静默丢卡）。
 
     与 revalidate_receipts 同口径：memory 要求仍 active 且版本一致；
-    our_word 要求桶仍 active+full。不静默补入相似记录、不拼旧正文。
+    our_word 要求桶仍 active+full；通道开关（A04）对翻页同权执行
+    （words/raw 关闭 → 对应前缀卡失效披露，与 replay.py 的通道拒绝
+    同一开关源）。不静默补入相似记录、不拼旧正文。
     """
-    kept: list[dict] = []
+    flags: list[str | None] = []
     invalidated: list[dict] = []
     with db.formal() as conn:
         for c in cards:
             ref = c.get("resource_ref") or ""
             bad = None
-            if ref.startswith("memory:"):
+            if ref.startswith("our_word:") \
+                    and not config.RECALL_WORDS_ENABLED:
+                bad = "channel_words_disabled"
+            elif ref.startswith("source_msg:") \
+                    and not config.RECALL_RAW_FALLBACK_ENABLED:
+                bad = "channel_raw_disabled"
+            elif ref.startswith("memory:"):
                 row = conn.execute(
                     "SELECT visibility, current_version_no FROM memories"
-                    " WHERE memory_id=?", (ref[len("memory:"):],)).fetchone()
+                    " WHERE memory_id=?",
+                    (ref[len("memory:"):],)).fetchone()
                 if row is None or row["visibility"] != "active":
                     bad = "resource_inactive_or_missing"
                 elif str(row["current_version_no"]) != \
@@ -314,11 +370,10 @@ def revalidate_page_cards(cards: list[dict]) -> tuple[list[dict], list[dict]]:
                     bad = "resource_inactive_or_missing"
             else:
                 bad = "resource_unverifiable"
+            flags.append(bad)
             if bad:
                 invalidated.append({"resource_ref": ref, "reason": bad})
-            else:
-                kept.append(c)
-    return kept, invalidated
+    return flags, invalidated
 
 
 def serve_page(principal, a: dict) -> dict:
@@ -348,21 +403,26 @@ def serve_page(principal, a: dict) -> dict:
     if a.get("session_id") and a["session_id"] != pset["session_id"]:
         raise Forbidden("session_id 与结果集绑定不一致",
                         code="INVALID_ARGUMENT", result_set_id=rsid)
-    # 政策切换：模式混用拒绝（J08——人类切换（如 off→on）后，旧
-    # off 结果集的续页 RECALL_POLICY_CHANGED；不自动另起查询）
+    # 政策纪元：模式混用或 revision 前进（同 mode 下 provider/
+    # allowed_data 变更）都拒绝（J08+A03——不混纪元、不自动另起查询）
     policy = judge_policy.effective()
-    if policy.get("mode") != pset["judge_mode"]:
+    if policy.get("mode") != pset["judge_mode"] or \
+            int(policy.get("revision") or 0) != \
+            int(pset["policy_revision"]):
         raise Forbidden(
             "召回判断政策已切换：旧结果集的续页拒绝（RECALL_POLICY_"
             "CHANGED）；请基于新政策重新发起查询",
             code="RECALL_POLICY_CHANGED",
             set_policy_revision=int(pset["policy_revision"]),
             current_policy_revision=int(policy.get("revision") or 0),
-            set_mode=pset["judge_mode"], current_mode=policy.get("mode"))
+            set_mode=pset["judge_mode"], current_mode=policy.get("mode"),
+            current_provider=policy.get("provider"))
     cursor = a.get("cursor")
-    start_pos = ((0, 0) if not cursor
+    start_pos = ((0, 0, 0) if not cursor
                  else _resolve_cursor(rsid, str(cursor)))
-    cards, invalidated = revalidate_page_cards(pset["candidates"])
+    # JFA-007：重校验返回原序失效标记（不收缩）——装配吃冻结全集，
+    # 坐标与游标同一坐标系，任何页间失效不得静默丢失未交付候选
+    flags, invalidated = revalidate_page_cards(pset["candidates"])
     extra = {
         "recall_session_id": pset["session_id"],
         "revision": int(pset["revision"]),
@@ -379,7 +439,8 @@ def serve_page(principal, a: dict) -> dict:
         "budget": budget_mod.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
-    page = assemble_page(cards, start_pos, extra)
+    page = assemble_page(pset["candidates"], start_pos, extra,
+                         skip_flags=flags)
     # 游标（同位置复用；新位置签发）——小事务，不计轮次、无副作用
     pagination = page["pagination"]
     if pagination["has_more"]:

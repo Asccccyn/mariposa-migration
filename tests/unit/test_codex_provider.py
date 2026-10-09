@@ -336,7 +336,10 @@ class TestJ11Permissions:
 
     def test_round2_own_grant_passes(self, actors, monkeypatch):
         """R04 补充：Codex 开启且有其自身 source_excerpt 许可 → Round2 门
-        不因类型不是 TypeSafeJevJudge 被拒（outbound_grants 接口）。"""
+        不因类型不是 TypeSafeJevJudge 被拒（outbound_grants 接口）。
+        WP-01 A03：政策纪元=mode+revision——先切 codex 再 start，
+        Round1/Round2 同纪元（旧夹具 start 后切政策现按
+        RECALL_POLICY_CHANGED 拒绝，须重新发起查询）。"""
         from mariposa.source import importer
         import tempfile, pathlib
         tmp = pathlib.Path(tempfile.mkdtemp())
@@ -352,16 +355,6 @@ class TestJ11Permissions:
         hold(actors, "崧蓝事件正文",
      our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝",
                  "expression_kind": "paraphrase"}])
-        from mariposa.capabilities import registry
-        r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
-                             {"query_plan": {
-                                 "original_request": "原话",
-                                 "channels": ["words"],
-                                 "lexical_terms": ["崧蓝"],
-                                 "evidence_requirement":
-                                     "verbatim_required"},
-                              "operation_id": "wp6-r1"}, None)
-        sid = r1["data"]["recall_session_id"]
 
         def transport(spec):
             payload = json.loads(spec["prompt"])
@@ -372,6 +365,16 @@ class TestJ11Permissions:
 
         codex_sdk.set_transport_for_tests(transport)
         enable_codex(monkeypatch)
+        from mariposa.capabilities import registry
+        r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
+                             {"query_plan": {
+                                 "original_request": "原话",
+                                 "channels": ["words"],
+                                 "lexical_terms": ["崧蓝"],
+                                 "evidence_requirement":
+                                     "verbatim_required"},
+                              "operation_id": "wp6-r1"}, None)
+        sid = r1["data"]["recall_session_id"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.round2",
                              {"session_id": sid,
                               "reason": "VERBATIM_REQUIRED_NOT_MET",
