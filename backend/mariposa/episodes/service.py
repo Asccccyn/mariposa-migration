@@ -166,6 +166,15 @@ def _verify_segments_tx(conn, raw) -> list[dict]:
                     f"segment[{i}].{label} 超出成员文本范围（码点半开区间）",
                     code="EPISODE_SOURCE_OFFSET", value=repr(off),
                     text_len=len(text))
+        # WP-08（CX-05/C-011）：同段 start<end（Source 绑定码点半开区间
+        # 不变量同式）——start≥end 是反向/空片段，不得受理成 revision
+        s_off = seg.get("start_char_offset")
+        e_off = seg.get("end_char_offset")
+        if s_off is not None and e_off is not None and not (s_off < e_off):
+            raise Forbidden(
+                f"segment[{i}] start_char_offset 必须 < "
+                "end_char_offset（码点半开区间）", code="INVALID_RANGE",
+                start=s_off, end=e_off)
         item = {"conversation_id": conv, "members": members}
         for k in ("start_char_offset", "end_char_offset"):
             if seg.get(k) is not None:
@@ -229,6 +238,15 @@ def _validate_segments(raw) -> list[dict]:
                 raise Forbidden(
                     f"segment[{i}] member 缺 source_message_id/content_hash",
                     code="INVALID_ARGUMENT")
+        # WP-08（CX-05/C-011）：同段 start<end（Source 绑定码点半开区间
+        # 不变量同式）——start≥end 是反向/空片段，不得受理成 revision
+        s_off = seg.get("start_char_offset")
+        e_off = seg.get("end_char_offset")
+        if s_off is not None and e_off is not None and not (s_off < e_off):
+            raise Forbidden(
+                f"segment[{i}] start_char_offset 必须 < "
+                "end_char_offset（码点半开区间）", code="INVALID_RANGE",
+                start=s_off, end=e_off)
         item = {"conversation_id": conv, "members": members}
         for k in ("start_char_offset", "end_char_offset"):
             if seg.get(k) is not None:
