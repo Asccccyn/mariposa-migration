@@ -157,35 +157,31 @@ def _section_body(item: dict, memory_id: str, field: str,
                              "offset": width}
 
 
-def _word_entry_bytes(speaker: str, text: str,
-                      truncated: bool = False,
-                      total_chars: int | None = None) -> int:
-    """单条 word **出站对象**的真实序列化字节（+1 数组逗号）。
-
-    RRA-006（三次回访 2026-10-10 根因收口）：预算此前只累计正文字符串
-    字节——每条对象还携带 speaker 键名/引号/括号 ≈34B 结构开销，合法
-    "多而短"输入（700 条单字，正文共 2100B）结构费漏账 ~24KB，首包
-    26064B 击穿 24576。计量单位=完整出站条目（与 E 侧 pushEntry 的
-    jsonBytes(entry) 同口径）。"""
-    import json as _json
-    entry = {"speaker": speaker, "text": text}
-    if truncated:
-        entry["text_truncated"] = True
-        entry["text_total_chars"] = total_chars
-    return len(_json.dumps(entry, ensure_ascii=False).encode("utf-8")) + 1
-
-
 def _section_words(rows, start_item: int = 0, start_char: int = 0):
-    """RRA-006（回访+二次/三次回访）：our_words 装页——条目数组形状
-    保持，条目间断页；**单条超宽按字节折半分片**；条目累计按**完整
-    出站条目对象的序列化字节**（含 speaker/键名/括号——三次回访收口：
-    只计正文时"多而短"合法输入的结构费漏账）。返回 (kept, next_item,
-    next_char)：next_item=None=全部装完；否则续取游标位（next_char=
-    条内码点偏移）。"""
-    kept: list[dict] = []
+    """our_words 装页（RRA-006 三次回访 A+B 批）。
+
+    出站形状=**说话人分组**：`[{"speaker": s, "texts": [t1, t2, ...]},
+    ...]`——连续同 speaker 行归一组，speaker/键名/括号开销按组摊销
+    （单字条 ~34B→~4-6B；她 2026-10-10 批的 JSON 瘦身）。**游标坐标
+    系不变**：item_offset=展平行索引、char_offset=条内码点偏移——
+    消费端按序展平（组序+组内序）即与旧逐条形状逐字等价。计量=分组
+    后真实序列化字节（A 批口径：含结构开销）。单条超宽仍按字节折半
+    分片，chunk 作为组内一个字符串，续取链语义不变。返回 (groups,
+    next_item, next_char)：next_item=None=全部装完。"""
+    import json as _json
+    groups: list[dict] = []
     used = 0
     i = start_item
     char_off = start_char
+
+    def _tbytes(t: str) -> int:
+        return len(_json.dumps(t, ensure_ascii=False)
+                   .encode("utf-8")) + 1  # +数组逗号
+
+    def _gbytes(speaker: str) -> int:
+        return len(_json.dumps({"speaker": speaker, "texts": []},
+                               ensure_ascii=False).encode("utf-8")) + 2
+
     # 越过已耗尽的条目起点（char_off 抵达条尾 → 下一条）
     while i < len(rows) and char_off >= len(rows[i]["text"] or ""):
         i += 1
@@ -195,22 +191,35 @@ def _section_words(rows, start_item: int = 0, start_char: int = 0):
         text = rows[i]["text"] or ""
         remain = text[char_off:]
         w = _byte_width(remain)
+        cur = groups[-1] if groups and groups[-1]["speaker"] == speaker \
+            else None
         if len(remain) > w:
-            b = _word_entry_bytes(speaker, remain[:w], True, len(text))
-            if kept and used + b > BOOT_MEMITEM_SECTION_BYTES:
-                return kept, i, char_off
-            kept.append({"speaker": speaker, "text": remain[:w],
-                         "text_truncated": True,
-                         "text_total_chars": len(text)})
-            return kept, i, char_off + w
-        b = _word_entry_bytes(speaker, remain)
-        if kept and used + b > BOOT_MEMITEM_SECTION_BYTES:
-            return kept, i, char_off
-        kept.append({"speaker": speaker, "text": remain})
-        used += b
+            # 单条超宽 → 本页以该 chunk 收尾（页终止，同 A 批语义）
+            need = _tbytes(remain[:w]) + (_gbytes(speaker)
+                                          if cur is None else 0)
+            if groups and used + need > BOOT_MEMITEM_SECTION_BYTES:
+                return groups, i, char_off
+            if cur is None:
+                groups.append({"speaker": speaker,
+                               "texts": [remain[:w]]})
+                used += _gbytes(speaker)
+            else:
+                cur["texts"].append(remain[:w])
+            used += _tbytes(remain[:w])
+            return groups, i, char_off + w
+        need = _tbytes(remain) + (_gbytes(speaker)
+                                  if cur is None else 0)
+        if groups and used + need > BOOT_MEMITEM_SECTION_BYTES:
+            return groups, i, char_off
+        if cur is None:
+            groups.append({"speaker": speaker, "texts": [remain]})
+            used += _gbytes(speaker)
+        else:
+            cur["texts"].append(remain)
+        used += _tbytes(remain)
         i += 1
         char_off = 0
-    return kept, None, 0
+    return groups, None, 0
 
 
 def _pack_memory_rows(conn, rows, profile: str = "claude_chat"):
@@ -287,9 +296,10 @@ def _memory_slim(conn, memory_id: str,
             " WHERE w.memory_id=? AND mm.visibility='active'",
             (memory_id,)).fetchall()
         if _words:
-            # RRA-006（回访 2026-10-09）：话语按**条目**分节（保持数组
-            # 形状——消费端 w.speaker/w.text 不变）；单条超宽按码点分节
-            # （续取 section=memory_item 返回剩余条目/条内剩余字符）
+            # RRA-006（三次回访 A+B 批）：话语按**分组形状**分节——
+            # [{"speaker": s, "texts": [...]}] 连续同说话人一组（JSON
+            # 瘦身：结构开销按组摊销）；单条超宽按字节折半分片；续取
+            # section=memory_item，游标坐标系不变（展平行索引+条内偏移）
             _kept, _nxt_i, _nxt_c = _section_words(_words)
             item["our_words"] = _kept
             if _nxt_i is not None:
