@@ -47,7 +47,9 @@ def main() -> int:
 
     # 开关默认值（生产默认关闭；JEV 不联网）
     from mariposa.retrieval.judges import base as jb
-    judge = jb.get_provider()
+    # WP-05（D13）：env 兼容入口已删——按政策所选 provider 名构造
+    from mariposa import config as _cfg
+    judge = jb.get_provider_by_name(_cfg.RECALL_JUDGE_PROVIDER)
     checks.append(("judge 默认 disabled", isinstance(judge, jb.DisabledJudge),
                    type(judge).__name__))
 

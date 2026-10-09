@@ -1,15 +1,10 @@
-"""v1.7 召回管线（§6）：Round 1 阶段过滤检索 / Round 2 raw 深搜 / find_words。
-
-模块边界（不改动既有 session 状态机）：
-- round1_candidates：按每桶当前阶段（phase_policy 现算）得到 AllowedFields，
-  在分字段索引（field_fts）+ 结构过滤内产生候选；raw 永不进 Round 1。
-- round2_gate / raw_deep_search：Round 2 是**状态**不是第二次调用——
-  全部服务端 gate（phase_policy.allow_raw_round2）成立才在获准 source/raw
-  索引深搜；结果仍走同一层 Jev。
-- find_words_candidates：独立 intent，全量可见 our_words（words_fts），
-  不受 WIDE/MID/CORE 限制；verbatim 不足时按 §6.5/§5.6B 允许证据升级。
-- Jev 唯一出站由调用方（recall/service._run_round）既有的 judge 流程承担；
-  本模块不旁路直出正文。
+"""召回检索管线（现行架构，WP-05/D06 死适配层已删）：
+- round1_lexical_hits：阶段过滤 scope BM25（S06）——主线 Round 1 候选；
+- raw_deep_search：Round 2 原文深搜（gate 由 round2._round2_gate 服务端
+  核验——旧 pipeline.round2_gate 死适配层的 judge_status=='complete'
+  恒假、伪回执行查询，误接线即 Round2 永拒，2026-10-09 删除排雷）；
+- mark_round1_complete_tx：Round1 完成回执（最终事务内）。
+判断层出站由 recall/service 的 judge 流程承担；本模块不旁路直出正文。
 """
 from __future__ import annotations
 
@@ -21,47 +16,6 @@ from ..retrieval import projection
 
 
 # ---------------------------------------------------------------- Round 1
-
-def round1_candidates(conn, plan: dict, *, limit: int = None) -> dict:
-    """阶段过滤后的普通事件候选（BM25 分字段 + 结构条件）。
-
-    返回 {"candidates": [resource_ref...], "stage_field_stats": {...}}；
-    每桶阶段按当前事实现算（不读持久 stage 列）。
-    """
-    limit = limit or config.RECALL_LEXICAL_K
-    from ..retrieval import query_plan as qp
-    phrase = qp.compile_plan_lexical(plan)
-    if not phrase:
-        phrase = "''"  # 空表达式 = 浏览（全部桶按阶段给出）
-    ec = (plan.get("explicit_constraints") or {})
-    where, params = _structure_filters(ec)
-
-    # 桶集合：结构过滤后的 memories（S19：keyset 分页取尽 + 安全阀）
-    pool_ids, _pool_truncated = _scope_pool_ids(conn, where, params)
-    refs, stats = [], {"WIDE": 0, "MID": 0, "CORE": 0, "skipped_gap": 0}
-    from datetime import datetime as _dt, timezone as _tz
-    _now = _dt.now(_tz.utc)
-    all_facts = pp.facts_for_many(conn, pool_ids)
-    for mid in pool_ids:
-        try:
-            phase = pp.phase_from_facts(all_facts.get(mid, {}), now=_now)
-        except (pp.DataGap, pp.PolicyError, KeyError):
-            stats["skipped_gap"] += 1
-            continue
-        stats[phase.stage] += 1
-        kinds = tuple(pp.eligible_fields(phase))
-        # 该桶在允许字段上命中（field_fts + field_kind 过滤）
-        hit = conn.execute(
-            "SELECT 1 FROM field_fts WHERE field_fts MATCH ? AND"
-            " memory_id=? AND field_kind IN (%s) LIMIT 1"
-            % ",".join("?" * len(_kinds_of(kinds))),
-            (phrase, mid, *_kinds_of(kinds))).fetchone() if phrase else True
-        if hit:
-            refs.append(f"memory:{mid}")
-            if len(refs) >= limit:
-                break
-    return {"candidates": refs, "stage_field_stats": stats}
-
 
 def _scope_pool_ids(conn, where: list[str], params: list,
                     batch: int = 500) -> tuple[list[str], bool]:
@@ -101,72 +55,7 @@ def _scope_pool_ids(conn, where: list[str], params: list,
     return ids, truncated
 
 
-def _kinds_of(stage_fields) -> list[str]:
-    from ..retrieval import field_projection as fp
-    return fp.stage_filter_kinds(stage_fields)
-
-
-def _structure_filters(ec: dict) -> tuple[list[str], list]:
-    where, params = ["m.visibility='active'"], []
-    cats = ec.get("categories")
-    if cats:
-        where.append(
-            "m.memory_id IN (SELECT memory_id FROM memory_categories WHERE"
-            " category IN (%s))" % ",".join("?" * len(cats)))
-        params += list(cats)
-    dr = ec.get("event_date") or {}
-    if dr.get("from"):
-        where.append("m.memory_date>=?")
-        params.append(dr["from"])
-    if dr.get("to"):
-        where.append("m.memory_date<=?")
-        params.append(dr["to"])
-    return where, params
-
-
 # ---------------------------------------------------------------- Round 2
-
-def round2_gate(session: dict, plan_revision: int, reason: str,
-                judge_status: str, raw_authorized: bool,
-                budget_left: bool) -> dict:
-    """§6.4 gate：全部服务端条件核验（session/revision/receipt/judge/授权/预算/理由闭集）。"""
-    ok = pp.allow_raw_round2(
-        same_session=True,  # 调用方保证同一 session
-        same_query_revision=plan_revision == session.get("current_revision"),
-        same_scope=True,
-        round1_complete_receipt=_has_round1_receipt(session),
-        judge_complete=(judge_status == "complete"),
-        raw_search_authorized=bool(raw_authorized),
-        budget_available=bool(budget_left),
-        reason=reason)
-    return {"allowed": ok,
-            "reason": reason,
-            "gate": {"same_query_revision": plan_revision ==
-                     session.get("current_revision"),
-                     "round1_complete_receipt": _has_round1_receipt(session),
-                     "judge_complete": judge_status == "complete",
-                     "raw_authorized": bool(raw_authorized),
-                     "budget_left": bool(budget_left),
-                     "reason_in_closed_set": reason in pp.ROUND2_REASONS}}
-
-
-def _has_round1_receipt(session: dict) -> bool:
-    with db.recall_runtime() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM recall_receipts WHERE session_id=? AND"
-            " resource_ref='round1:complete' LIMIT 1",
-            (session["session_id"],)).fetchone()
-    return bool(row)
-
-
-def mark_round1_complete(session_id: str) -> None:
-    with db.recall_runtime() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO recall_receipts(receipt_id, session_id,"
-            " resource_ref, valid_at, created_at)"
-            " VALUES(?,?,?,datetime('now'),datetime('now'))",
-            (f"rr_{session_id[:12]}_r1", session_id, "round1:complete"))
-
 
 def mark_round1_complete_tx(conn, session_id: str) -> None:
     """同语义的事务内版本（commit-at-end 最终事务调用）。"""
@@ -246,23 +135,6 @@ def raw_deep_search(principal, plan: dict, limit: int = 20,
             "next_offset": (offset + limit) if res.get("has_more")
             else None,
             "boundary": "Round 2 原文深搜；候选需经同一层 Jev 出站"}
-
-
-# ---------------------------------------------------------------- find_words
-
-def find_words_candidates(conn, plan: dict, *, limit: int = 30) -> dict:
-    """全量 our_words 专项（§6.5）：跨阶段、speaker/日期/来源条件先过滤。
-
-    words_fts 覆盖当前全部可见 words（v1.4 已建）；隐藏/撤权/来源失效
-    由表示校验（调用方 receipt 重校验）兜底。
-    """
-    from ..retrieval import words as words_mod
-    res = words_mod.words_search(conn, plan, limit)
-    verbatim_only = (plan.get("evidence_requirement") == "verbatim_required")
-    return {"words_hits": res.get("hits", []),
-            "coverage": res.get("coverage"),
-            "verbatim_required": verbatim_only,
-            "stage_restricted": pp.find_words_stage_restricted()}
 
 
 # ------------------------------------------------ 主线适配层（A04 接线）

@@ -106,14 +106,17 @@ class TestRelations:
 
 class TestMaintenance:
     def test_outbox_drain_and_activity(self, actors):
+        """WP-05（D05a）：events_outbox 停写（audit_events 单一正本）——
+        drain 显式 no_consumers_registered，审计查询照常。"""
         _hold(actors, "产生事件")
         status = maintenance.outbox_status()
-        assert status["pending"] > 0
+        assert status["pending"] == 0, "停写后无新 pending（历史行只读）"
         drained = maintenance.outbox_drain()
-        assert drained["drained"] > 0 and "memory.created" in drained["types"]
-        assert maintenance.outbox_status()["pending"] == 0
+        assert drained["drained"] == 0
+        assert drained["no_consumers_registered"] is True
         events = maintenance.activity_list(event_type="memory.created")
-        assert events and events[0]["actor_principal"]
+        assert events and events[0]["actor_principal"], \
+            "audit_events 单一正本照常可查"
 
 
 class TestMedia:

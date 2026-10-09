@@ -111,6 +111,18 @@ def _project_recall(out: dict) -> None:
         for k in list(cov.keys()):
             if k.startswith("_"):
                 cov.pop(k)
+    # WP-05（JFA-A08）：retrieval_coverage 与 coverage 同款清理——内部
+    # 统计键（stage_filter/event_pool/lexical_scorer/judge_cache/
+    # dense_pending_vectors 等 _ 前缀）随 compact 剥离；披露语义
+    # （retrieval_scope_exhaustive/实际窗口等，04_DO_NOT_CHANGE §8）
+    # 不删不缩
+    rcov = target.get("retrieval_coverage")
+    if isinstance(rcov, dict):
+        for k in _COVERAGE_DROP_KEYS:
+            rcov.pop(k, None)
+        for k in list(rcov.keys()):
+            if k.startswith("_"):
+                rcov.pop(k)
     for c in target.get("candidates") or []:
         if not isinstance(c, dict):
             continue
