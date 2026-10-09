@@ -412,11 +412,16 @@ async function renderBrowseTitleList(items, label) {
 }
 
 async function expandBrowseCard(mid, row) {
+  // 修复（2026-10-09）：旧防重复条件 ':last-of-type + .mem-detail'
+  // 恒为假——每次点击都 appendChild 一个新详情块（点一下多一行）。
+  // 改为独立类名 + toggle：已展开则收起，未展开则先清旧的再挂
+  const existing = row.querySelector('.expand-detail');
+  if (existing) { existing.remove(); return; }
   try {
     const mem = await api('memory.get', { memory_id: mid });
     const words = await api('memory.our_words.list', { memory_id: mid }).catch(() => ({ words: [] }));
     const detail = document.createElement('div');
-    detail.className = 'mem-detail';
+    detail.className = 'mem-detail expand-detail';
     detail.style.borderTop = '1px dashed var(--line)';
     detail.style.marginTop = '6px';
     detail.style.paddingTop = '6px';
@@ -425,7 +430,7 @@ async function expandBrowseCard(mid, row) {
         ? `<div class="meta">心情标签: ${mem.mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
       ((words.words || []).length
         ? `<div><em>我们的话：</em>${words.words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '');
-    if (!row.querySelector('.mem-detail:last-of-type + .mem-detail')) row.appendChild(detail);
+    row.appendChild(detail);
   } catch (e) { setStatus(e.message, true); }
 }
 
