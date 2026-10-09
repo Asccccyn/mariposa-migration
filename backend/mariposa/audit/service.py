@@ -24,7 +24,11 @@ def record(
     entry_source: str | None = None,
     correlation_id: str | None = None,
 ) -> str:
-    """在调用方事务内写 audit_events + events_outbox。返回 event_id。"""
+    """在调用方事务内写 audit_events（单一正本）。返回 event_id。
+
+    WP-05（D05a）：events_outbox 停写——无注册消费者期间双写只是
+    重复账本；历史行保留只读（maintenance.outbox.drain/status）。
+    """
     event_id = f"evt_{uuid.uuid4().hex[:16]}"
     occurred = _now()
     safe_payload = json.dumps(payload or {}, ensure_ascii=False)
@@ -38,15 +42,6 @@ def record(
             safe_payload, correlation_id,
         ),
     )
-    conn.execute(
-        "INSERT INTO events_outbox(event_id, event_type, created_at, payload)"
-        " VALUES(?,?,?,?)",
-        (event_id, event_type, occurred, json.dumps(
-            {"event_type": event_type, "resource_id": resource_id,
-             "resource_version": resource_version, **(payload or {})},
-            ensure_ascii=False,
-        )),
-    )
     return event_id
 
 
@@ -55,10 +50,9 @@ def record_isolated(event_type: str, actor_principal: str,
                     payload: dict | None = None) -> str:
     """独立事务的审计写入（GATE-06，2026-10-04 复审 P2）。
 
-    供门禁等没有外层事务的模块使用：audit_events 与 events_outbox
-    两表 INSERT 在同一 BEGIN/COMMIT 内——半途失败整体回滚，不再留
-    "已提交但无法发布"的孤立事件（db.formal 默认 autocommit，两个
-    INSERT 裸跑会各自提交）。
+    供门禁等没有外层事务的模块使用：audit_events INSERT 在显式
+    BEGIN/COMMIT 内（db.formal 默认 autocommit，裸跑 INSERT 的事务性
+    不可靠）。WP-05（D05a）后 events_outbox 已停写。
     """
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")

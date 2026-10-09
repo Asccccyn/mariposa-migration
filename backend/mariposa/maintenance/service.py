@@ -18,18 +18,16 @@ def _now() -> str:
 def outbox_drain(limit: int = 100) -> dict:
     """至少一次投递 + 幂等消费的第一版消费者：逐条标记 processed。
 
-    异步下游（embedding/日历缓存/工作区回填）接入点在此注册；
-    当前无注册消费者时仅做确认性标记并返回统计。
+    异步下游接入点在此注册。WP-05（D05a）：events_outbox 已停写且
+    无注册消费者——drain 显式返回 no_consumers_registered，历史行
+    只读不动（audit_events 是单一正本）。
     """
     with db.formal() as conn:
-        rows = conn.execute(
-            "SELECT event_id, event_type FROM events_outbox WHERE processed=0"
-            " ORDER BY created_at LIMIT ?", (limit,)).fetchall()
-        for r in rows:
-            conn.execute("UPDATE events_outbox SET processed=1 WHERE event_id=?",
-                         (r["event_id"],))
-    return {"drained": len(rows),
-            "types": sorted({r["event_type"] for r in rows})}
+        pending = conn.execute(
+            "SELECT COUNT(*) AS c FROM events_outbox WHERE processed=0"
+        ).fetchone()["c"]
+    return {"drained": 0, "no_consumers_registered": True,
+            "historical_pending_readonly": pending}
 
 
 def outbox_status() -> dict:

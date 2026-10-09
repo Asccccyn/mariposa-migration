@@ -43,14 +43,6 @@ class ProposalStale(MariposaError):
     http_status = 409
 
 
-class ProposalAlreadyResolved(MariposaError):
-    code = "PROPOSAL_ALREADY_RESOLVED"
-    http_status = 409
-
-
-class ProposalHashMismatch(MariposaError):
-    code = "PROPOSAL_HASH_MISMATCH"
-    http_status = 409
 
 
 class IdempotencyConflict(MariposaError):
@@ -83,14 +75,6 @@ class OutcomeUnknown(MariposaError):
     code = "OUTCOME_UNKNOWN"
     http_status = 409
 
-
-class ProviderUnavailable(MariposaError):
-    """外部 provider（写入/判断）不可用——T-EXT-02 合同预留
-    （acceptance test_gate_cases2 锚定其存在；外部写入面接入时启用）。
-    1005B 清扫误删后恢复：有验收锚定的预留类不是死代码。"""
-
-    code = "PROVIDER_UNAVAILABLE"
-    http_status = 503
 
 
 class ViewReceiptInvalid(MariposaError):

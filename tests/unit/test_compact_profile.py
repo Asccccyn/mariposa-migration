@@ -214,6 +214,25 @@ class TestSourceCompact:
                              None)["data"]
         assert "conversation" not in cp  # 小列表保持原形
 
+    def test_retrieval_coverage_internal_stats_dropped(self, actors):
+        """WP-05（JFA-A08）：compact 后 retrieval_coverage 无内部统计键
+        （_ 前缀/诊断键），披露语义（retrieval_scope_exhaustive 等）保留。"""
+        from mariposa.capabilities import compact as _cm
+        packet = {"retrieval_coverage": {
+            "retrieval_scope_exhaustive": False,
+            "event": "partial_topk_window",
+            "_stage_filter": {"WIDE": 3}, "_event_pool": 9,
+            "_lexical_scorer": "scoped_bm25", "_judge_cache": 2,
+            "_dense_pending_vectors": 0, "stage_filter": 1}}
+        out = dict(packet)
+        _cm._project_recall(out)
+        rc = out["retrieval_coverage"]
+        assert rc["retrieval_scope_exhaustive"] is False, "披露语义保留"
+        assert rc["event"] == "partial_topk_window", "通道状态保留"
+        for k in ("_stage_filter", "_event_pool", "_lexical_scorer",
+                  "_judge_cache", "_dense_pending_vectors", "stage_filter"):
+            assert k not in rc, f"内部统计键 {k} 应剥离"
+
 
 class TestHttpQueryParam:
     def test_http_query_param_drives_compact(self, actors):

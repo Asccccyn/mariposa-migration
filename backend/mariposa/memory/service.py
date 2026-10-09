@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .. import audit, config, db
-from ..errors import Forbidden, NotFound, ProposalAlreadyResolved, ProposalHashMismatch, ProposalStale, VersionConflict
+from ..errors import Forbidden, NotFound, ProposalStale, VersionConflict
 from ..retrieval import projection
 from . import categories as categories_mod
 from . import our_words as our_words_mod

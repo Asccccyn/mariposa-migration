@@ -1,7 +1,10 @@
-"""严格输入 Schema 接入（v1.1 contracts/core_input_schemas.json 的 12 项）。
+"""公开输入校验（V2_INPUT_SCHEMAS 单一运行时正本）。
 
-最小校验器（不引第三方依赖）：required / 类型 / additionalProperties:false /
-enum。schema 从规格文件加载（同源），tools/list 与 HTTP/MCP invoke 共用。
+WP-05（D11）口径更正：V2_INPUT_SCHEMAS 是公开输入校验的唯一运行时
+正本（schema_for 单源，2026-10-06 她/林石见批准）——历史 v1.1
+contracts/core_input_schemas.json 与 load_schemas() 仅存考古对照，
+不再参与运行时校验。最小校验器：required / 类型 /
+additionalProperties:false / enum；tools/list 与 HTTP/MCP invoke 共用。
 """
 from __future__ import annotations
 

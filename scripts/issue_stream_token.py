@@ -14,7 +14,12 @@
       --origin-conversation-id <room> [--senders user,assistant]
 
 重复运行同一 stream 会因 UNIQUE 冲突拒绝——一 stream 一凭据；换凭据
-先撤旧 grant（ingest.revoke_grant）再发新的。
+先撤旧 grant 再发新的：--revoke 子命令直接调 revoke_grant（WP-05/D14
+运维断头补齐，此前需手写 Python）。
+
+用法（撤销）：
+  MARIPOSA_ROOT=<生产根> .venv/bin/python scripts/issue_stream_token.py \
+      --revoke --stream-id <stream>
 """
 import argparse
 import json
@@ -34,8 +39,10 @@ ALLOWLIST = ["source.ingest", "source.ingest.status"]
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stream-id", required=True)
-    ap.add_argument("--origin-instance", required=True)
-    ap.add_argument("--origin-conversation-id", required=True)
+    ap.add_argument("--revoke", action="store_true",
+                    help="撤销该 stream 的活跃 grant（不再发新凭据）")
+    ap.add_argument("--origin-instance")
+    ap.add_argument("--origin-conversation-id")
     ap.add_argument("--senders", default="user,assistant")
     ap.add_argument("--scope", default="private",
                     help="owner scope（首版私聊=private）")
@@ -43,6 +50,14 @@ def main() -> int:
 
     schema.migrate()
     schema.migrate_runtime()
+    if args.revoke:
+        out = source_ingest.revoke_grant(args.stream_id, "ops:issue_stream_token")
+        print(f"[revoke] stream={args.stream_id} revoked={out.get('revoked', '?')}")
+        return 0
+    for req in ("origin_instance", "origin_conversation_id"):
+        if not getattr(args, req):
+            ap.error(f"--{req.replace('_', '-')} 必填（非 --revoke 模式）")
+
     senders = [s.strip() for s in args.senders.split(",") if s.strip()]
 
     token = secrets.token_urlsafe(32)
