@@ -359,6 +359,16 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-10（Codex 二次回访根因修复，run-073728，6 项 FAIL）：尺寸类
+  合同全面统一**真实 JSON 字节单口径**——分页分片计划 `_fragment_plan`
+  逐片按该片序列化字节折半（废首片估宽定全载体宽：变宽文本后段控制
+  字符 6B/字符曾击穿 24576）；bootstrap 分节改字节口径（`_byte_width`/
+  `BOOT_MEMITEM_SECTION_BYTES`，控制字符双正文首桶 25882B→预算内）；
+  游标解码三元组全量 fail-closed（负 position/坏时间/越界 car/frag 拒绝；
+  car==载体数且 fidx==0 为合法载体耗尽标记）。M 自查清理：删死函数
+  `_fragment_chars_for` 与 `_W` 死导入。台账纪律整改：4 条被改名 state
+  还原原字符串（改理由不改状态）、T4/T5b「取消」→「有界返回/等待」。
+  生产已重启载 65118c3。
 - 2026-10-09（Codex 回访返修，run-035424，10 项 FAIL）：政策写权
   **调用面**收口——MCP 面（含 web 令牌）不导出不执行
   maintenance.recall_policy.update（REST /api 是网页唯一正门；§4.1
