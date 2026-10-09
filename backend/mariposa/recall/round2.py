@@ -173,8 +173,11 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     #    所选 provider 自己的 source_excerpt 许可（provider 无关，
     #    不再 isinstance TypeSafeJevJudge）；关闭=无外发不要求许可；
     #    未配置=无许可（fail-closed）
-    provider = (judge_base.get_provider_by_name(policy["provider"])
-                if policy["mode"] == "on" else None)
+    provider = (judge_base.apply_policy_overrides(
+        judge_base.get_provider_by_name(policy["provider"]),
+        model_id=policy.get("model_id"),
+        allowed_data=(policy.get("allowed_data") or None))
+        if policy["mode"] == "on" else None)
     if policy["mode"] == "off":
         profile_ok = True  # 未向辅助判断模型外发原文
         gate["judge_outbound_basis"] = "bypassed_by_user"
@@ -359,7 +362,10 @@ def _round2_resolve_offset(a: dict, session: dict) -> int:
         from . import judge_policy as _jp
         _pol = _jp.effective()
         if _pol["mode"] == "on":
-            _prov = judge_base.get_provider_by_name(_pol["provider"])
+            _prov = judge_base.apply_policy_overrides(
+                judge_base.get_provider_by_name(_pol["provider"]),
+                model_id=_pol.get("model_id"),
+                allowed_data=(_pol.get("allowed_data") or None))
             if "source_excerpt" not in _prov.outbound_grants():
                 raise _F("当前判断 provider 不含 source_excerpt 外发"
                          "许可；Raw 翻页拒绝", code="RAW_PROFILE_WITHDRAWN")
@@ -409,8 +415,11 @@ def _round2_judge_cards(sid: str, session: dict, plan: dict,
     if policy["mode"] == "off":
         coverage["judge"] = "bypassed_by_user"
         return raw_cards, coverage, degraded
-    provider = judge_base.get_provider_by_name(
-        policy["provider"] if policy["mode"] == "on" else None)
+    provider = judge_base.apply_policy_overrides(
+        judge_base.get_provider_by_name(
+            policy["provider"] if policy["mode"] == "on" else None),
+        model_id=policy.get("model_id"),
+        allowed_data=(policy.get("allowed_data") or None))
     judge_candidates = raw_cards[:config.RECALL_JUDGE_CANDIDATE_CAP]
     if isinstance(provider, judge_base.DisabledJudge):
         coverage["judge"] = "not_configured"

@@ -132,6 +132,9 @@ def get_provider_by_name(name: str | None):
     """按政策所选 provider 名构造（未配置/未安装 → DisabledJudge）。
 
     调用方负责先读政策：enabled=false 时不进入本函数。
+    WP-02（JFA-002 接线）：codex_sdk 真构造（与 readiness 同源；SDK
+    未装 → DisabledJudge，细因由 provider_readiness 的 sdk_not_installed
+    披露——不静默换 provider）。
     """
     if name in _INJECTED:
         return _INJECTED[name]
@@ -140,5 +143,28 @@ def get_provider_by_name(name: str | None):
     if name == "typesafe_jev":
         from . import typesafe_jev
         return typesafe_jev.TypeSafeJevJudge()
-    # codex_sdk 在 WP6 落地前按未安装处理（blocked，不静默换 provider）
+    if name == "codex_sdk":
+        try:
+            from . import codex_sdk
+        except ImportError:
+            return DisabledJudge()
+        if not codex_sdk.sdk_available():
+            # SDK 未装 → DisabledJudge（阻断语义）；细因由
+            # provider_readiness 的 sdk_not_installed 披露
+            return DisabledJudge()
+        return codex_sdk.CodexSdkJudge()
     return DisabledJudge()
+
+
+def apply_policy_overrides(provider, *, model_id: str | None = None,
+                           allowed_data=None):
+    """WP-02（CX-03）：政策 model_id/allowed_data 注入已构造的 provider
+    （政策传入即胜出——政策唯一正本，env 仅首导/回落；未传不动）。
+
+    独立于构造器参数的注入通道：测试注入的 fake 实例（无 apply_policy）
+    原样返回不受影响。
+    """
+    ap = getattr(provider, "apply_policy", None)
+    if callable(ap):
+        ap(model_id=model_id, allowed_data=allowed_data)
+    return provider

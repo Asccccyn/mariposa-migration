@@ -363,8 +363,11 @@ def _judge_pass(session, plan, event_fused, words_hits, raw_pre,
         return None, [], [], 0
     # on / unconfigured：走判断门（unconfigured 用 DisabledJudge 表达
     # not_configured，交付被 S10 硬门拦下）
-    provider = judge_base.get_provider_by_name(
-        policy.get("provider") if policy["mode"] == "on" else None)
+    provider = judge_base.apply_policy_overrides(
+        judge_base.get_provider_by_name(
+            policy.get("provider") if policy["mode"] == "on" else None),
+        model_id=policy.get("model_id"),
+        allowed_data=(policy.get("allowed_data") or None))
     # Jev 精排（可替换；只评价被交付的候选）。
     # S10/WP01：words 与 raw-fallback 候选同样过一层判断——未判断
     # 候选不得出站（完整 mixed 各 20/cap40 与 RRF 合序送判归

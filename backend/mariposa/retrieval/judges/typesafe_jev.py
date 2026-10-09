@@ -60,7 +60,8 @@ def required_excerpt_roles(candidate: dict) -> frozenset:
 class TypeSafeJevJudge(base.JudgeProvider):
     name = "typesafe_jev"
 
-    def __init__(self):
+    def __init__(self, *, model_id: str | None = None,
+                 allowed_data=None):
         self._api_key = (
             os.environ.get("MARIPOSA_TYPESAFE_API_KEY", "").strip()
             or os.environ.get("TYPESAFE_API_KEY", "").strip()
@@ -68,6 +69,11 @@ class TypeSafeJevJudge(base.JudgeProvider):
         self._allowed_data_raw = os.environ.get(
             "MARIPOSA_RECALL_JUDGE_ALLOWED_DATA", "").strip()
         self.model_id = config.RECALL_JUDGE_MODEL_ID
+        # WP-02（CX-03）：政策传入即胜出（政策唯一正本，env 仅回落）
+        if model_id:
+            self.model_id = model_id
+        self._policy_profile = (frozenset(allowed_data)
+                                if allowed_data else None)
         base_url = (
             os.environ.get("MARIPOSA_TYPESAFE_BASE_URL", "").strip()
             or os.environ.get("TYPESAFE_BASE_URL", "").strip()
@@ -76,7 +82,11 @@ class TypeSafeJevJudge(base.JudgeProvider):
         self.endpoint = f"{base_url}/v1/systemone"
         # S15：显式 provider data profile——逐字段外发许可。
         # 未知值 fail closed（比"缺失即禁用"更强：拼错也禁）。
-        self._data_profile = self._parse_data_profile(self._allowed_data_raw)
+        # 政策 allowed_data（CX-03）优先于 env 解析。
+        self._data_profile = (self._policy_profile if
+                              self._policy_profile is not None else
+                              self._parse_data_profile(
+                                  self._allowed_data_raw))
         if self._data_profile is None:
             # 原文可交给周家明 ≠ 默认允许外发到另一供应商；
             # 且 profile 非法（未知字段）同样禁用
@@ -87,6 +97,17 @@ class TypeSafeJevJudge(base.JudgeProvider):
 
     # ------------------------------------------------------------------
     # Public provider contract
+
+    def apply_policy(self, *, model_id=None, allowed_data=None):
+        """WP-02（CX-03）：政策值注入（政策唯一正本，env 仅回落）。"""
+        if model_id:
+            self.model_id = model_id
+        if allowed_data:
+            self._data_profile = frozenset(allowed_data)
+            if getattr(self, "_disabled_reason", None) in (
+                    "allowed_data_profile_invalid",
+                    "allowed_data_policy_missing"):
+                self._disabled_reason = None
 
     def outbound_grants(self) -> frozenset:
         """Jev 自身的数据外发许可（S15 显式 profile；provider 无关接口
