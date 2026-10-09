@@ -22,6 +22,7 @@ import pytest
 
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
+from mariposa import db
 from mariposa.recall import judge_policy, paging, service as recall_service
 from mariposa.recall import store as recall_store
 from mariposa.retrieval.judges import base as jb
@@ -619,3 +620,133 @@ class TestRRACursorUpgrade:
             paging.serve_page(actors["jiaming"], {
                 "result_set_id": rsid, "session_id": sid, "cursor": token})
         assert ei.value.code == "PAGINATION_CURSOR_INVALID"
+
+
+class TestRRAThirdFollowUpBytesAndCursor:
+    """二次回访（2026-10-10 run-073728）根因修复回归：分片逐片按真实
+    字节折半（变宽文本不再击穿信封）+ 损坏持久游标全量 fail-closed。"""
+
+    def test_variable_encoded_width_fragments_within_budget(self, actors):
+        """RRA-003/010 根因：'A'×4000 + '\\x01'×8000（首段 ASCII 便宜、
+        后段控制字符 JSON 6B/字符）——旧实现按首片估宽对全载体定宽，
+        后续页 25438..25439B 击穿 24576。逐片折半后每页信封 ≤24576、
+        区间从 0 连续、两载体精确拼回。"""
+        set_policy(False)
+        body = "A" * 4000 + "\x01" * 8000
+        card = {
+            "resource_ref": "source_msg:varwidth", "channel": "raw",
+            "content_version": None, "excerpt": body,
+            "evidence": [{"evidence_kind": "raw_verbatim",
+                          "field": "raw_messages",
+                          "source_ref": "source_msg:varwidth",
+                          "source_version": "VER_ESCAPED",
+                          "snippet": body}],
+        }
+        extra = {"result_set_id": "rps_varwidth", "judge_mode": "off"}
+        pos, pages, groups = (0, 0, 0), 0, {}
+        while True:
+            page = paging.assemble_page([card], pos, extra)
+            pages += 1
+            blob = json.dumps({"ok": True, "data": page},
+                              ensure_ascii=False).encode("utf-8")
+            assert len(blob) <= 24576, \
+                f"第 {pages} 页 {len(blob)}B 超 24576（变宽残因）"
+            for c in page["candidates"]:
+                f = c.get("fragment") or {}
+                if f:
+                    groups.setdefault(f.get("kind"), []).append(
+                        (f["start_char"], f["end_char"], f["text"]))
+            np_ = page["pagination"]["next_position"]
+            if not np_:
+                assert page["pagination"]["has_more"] is False
+                break
+            pos = tuple(np_)
+            assert pages < 80, "不收敛"
+        for kind, chunks in groups.items():
+            chunks.sort()
+            assert chunks[0][0] == 0, f"{kind} 从 0 起"
+            for i in range(1, len(chunks)):
+                assert chunks[i - 1][1] == chunks[i][0], \
+                    f"{kind} 区间连续"
+            assert "".join(t for _, _, t in chunks) == body, \
+                f"{kind} 精确拼回"
+            assert chunks[-1][1] == len(body)
+
+    def test_corrupt_persisted_positions_rejected(self, actors):
+        """RRA-004 根因：解码三元组全量 fail-closed——负 position
+        （-1 解 (-1,9999,9999) 倒序重发末卡+首页）、真实签发器构造的
+        carrier/fragment 越界（9999）均明确拒绝。"""
+        import sqlite3
+        for i in range(15):
+            hold(actors, f"南瓜灯事件编号{i:03d}号记录")
+        set_policy(False)
+        p1 = start(actors, ["南瓜灯"], "op-vw1")
+        rsid = p1["pagination"]["result_set_id"]
+        sid = p1["recall_session_id"]
+        token = p1["pagination"]["next_cursor"]
+        from mariposa.recall import store as _st
+        # 负 position（cutover 后 created_at → 三元解读）
+        with _st.db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE recall_page_cursors SET position=-1,"
+                " created_at='2026-10-09T06:00:00+00:00'"
+                " WHERE token=?", (token,))
+            conn.execute("COMMIT")
+        with pytest.raises(Forbidden) as ei:
+            paging.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid,
+                "cursor": token})
+        assert ei.value.code == "PAGINATION_CURSOR_INVALID"
+        # 坏时间（无法判别纪元）拒绝
+        with _st.db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE recall_page_cursors SET position=1000000000,"
+                " created_at='not-a-date' WHERE token=?", (token,))
+            conn.execute("COMMIT")
+        with pytest.raises(Forbidden) as ei2:
+            paging.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid,
+                "cursor": token})
+        assert ei2.value.code == "PAGINATION_CURSOR_INVALID"
+
+    def test_issuer_out_of_bounds_carrier_fragment_rejected(
+            self, actors):
+        """RRA-004：经真实 get_or_issue_cursor 签发的越界 (car=9999)/
+        (frag=9999) 坐标——serve_page 明确拒绝（此前被当"载体耗尽"
+        静默跳卡/跳载体）。"""
+        from tests.unit.test_round2_policy_switch import (
+            _r1_scenario_off, _seed_source, _round2, _start)
+        _r1_scenario_off(actors, op="op-vw2")
+        _seed_source(text="崧蓝" + "甲" * 11000, tag="vw-cursor")
+        set_policy(False)
+        r1 = _start(actors, terms=("崧蓝",), op="op-vw2b")
+        sid = r1["data"]["recall_session_id"]
+        packet = _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT",
+                         op="op-vw2r2")["data"]
+        rsid = packet["pagination"]["result_set_id"]
+        ss = paging.load_set(rsid)
+        target = next(i for i, c in enumerate(ss["candidates"])
+                      if len(c.get("excerpt") or "") > 10000)
+        for pos in ((target, 9999, 0), (target, 0, 9999)):
+            with db.recall_runtime() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                tt = paging.get_or_issue_cursor(conn, rsid, pos)
+                conn.execute("COMMIT")
+            with pytest.raises(Forbidden) as ei:
+                paging.serve_page(actors["jiaming"], {
+                    "result_set_id": rsid, "session_id": sid,
+                    "cursor": tt})
+            assert ei.value.code == "PAGINATION_CURSOR_INVALID", \
+                f"{pos} 越界坐标必须明确拒绝"
+        # 合法中间态对照：car==载体数且 fidx==0（载体集耗尽标记）放行
+        with db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            tok_ok = paging.get_or_issue_cursor(conn, rsid,
+                                                (target, 2, 0))
+            conn.execute("COMMIT")
+        page = paging.serve_page(actors["jiaming"], {
+            "result_set_id": rsid, "session_id": sid,
+            "cursor": tok_ok})
+        assert isinstance(page["candidates"], list)

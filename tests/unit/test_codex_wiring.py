@@ -374,6 +374,9 @@ class TestFieldGrantReconciliation:
                           [sent_card, hidden], {})
         assert out.provider_status == "unavailable", \
             "被过滤卡的 ref 出现在回包=陌生 ref 整批作废（不得伪标 evaluated）"
+        assert out.degraded_reason == "codex_unknown_ref", \
+            "整批作废的具体理由钉住（二次回访补强：不只 unavailable）"
+        assert not out.items, "作废批次不得残留 evaluated 行"
 
 
 class TestRRAFollowUpLiveGateAndProductionKinds:

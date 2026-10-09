@@ -241,16 +241,19 @@ class TestRRA006BudgetAndSectioning:
             parts.append(pg["content"])
             cur = pg.get("next_cursor")
         assert "".join(parts) == "事" * 11000, "event 续取拼回逐字完整"
-        # our_words 条目级分节（首段+续取补齐全部条目）
+        # our_words 条目级分节（二次回访：分节按字节折半——1500 字
+        # word≈4.5KB 超 4KB 节预算会跨 chunk，同一 word 可多 entry；
+        # 断言按拼接重构：跨页收集的全部词文本按序拼接=原文）
         wcur = it.get("our_words_next")
-        witems = list(it["our_words"])
+        wtexts = [w["text"] for w in it["our_words"]]
         while wcur:
             pg = bootstrap.next_page("jiaming", "estomago",
                                      pack["snapshot_id"], wcur,
                                      "memory_item")
-            witems += pg["items"]
+            wtexts += [w["text"] for w in pg["items"]]
             wcur = pg.get("next_cursor")
-        assert len(witems) == 2, "words 续取补齐全部条目"
+        assert "".join(wtexts) == "话" * 3000, \
+            "words 续取按序拼回逐字完整（两条 1500 字 word）"
 
     def test_short_bucket_single_page_unchanged(self, jiaming):
         """短对照：正文/话语不超节宽——整带、无 truncated/next 键。"""
@@ -351,3 +354,55 @@ class TestRRA006FollowUp:
             chunks += [w["text"] for w in pg["items"]]
             cur = pg.get("next_cursor")
         assert "".join(chunks) == full, "条内分节拼回逐字完整"
+
+
+class TestRRAThirdFollowUpControlEscape:
+    """二次回访（2026-10-10 run-073728）RRA-006 根因：分节按序列化
+    字节折半——控制字符 event+word 同桶时首包不超 24576。"""
+
+    def _hold(self, text, words):
+        return memory.hold(
+            identity.Principal("jiaming", "周家明", "agent",
+                               "estomago", "bj"),
+            text=text, original_title="ctrl", categories=["daily"],
+            creation_mode="contemporaneous", our_words=words,
+            raw_pending=False)
+
+    def test_control_char_bucket_first_packet_within_budget(self, jiaming):
+        import json as _json
+        event = "EVENT-" + "\x01" * 4000
+        word = "\x02" * 10000
+        self._hold(event, [{"speaker": "jiaming", "text": word,
+                            "expression_kind": "paraphrase"}])
+        pack = bootstrap.get("jiaming", "estomago", "estomago")
+        blob = len(_json.dumps({"ok": True, "data": pack},
+                               ensure_ascii=False,
+                               separators=(",", ":")).encode("utf-8"))
+        assert blob <= 24576, \
+            f"控制字符双正文首桶整包 {blob}B 击穿 24576（码点分节残因）"
+        it = pack["memory_days"]["items"][0]
+        # 首节按字节有界；续取链精确拼回（event 与 word 都是控制字符）
+        ev_parts = [it["event_text"]]
+        cur = it["event_text_next"]
+        guard = 0
+        while cur and guard < 64:
+            guard += 1
+            pg = bootstrap.next_page("jiaming", "estomago",
+                                     pack["snapshot_id"], cur,
+                                     "memory_item")
+            ev_parts.append(pg["content"])
+            cur = pg.get("next_cursor")
+        assert cur is None, "event 续取链收敛"
+        assert "".join(ev_parts) == event, "event 分节续取精确拼回"
+        w_parts = [w["text"] for w in it["our_words"]]
+        wcur = it["our_words_next"]
+        guard = 0
+        while wcur and guard < 64:
+            guard += 1
+            pg = bootstrap.next_page("jiaming", "estomago",
+                                     pack["snapshot_id"], wcur,
+                                     "memory_item")
+            w_parts += [w["text"] for w in pg["items"]]
+            wcur = pg.get("next_cursor")
+        assert wcur is None, "words 续取链收敛"
+        assert "".join(w_parts) == word, "words 分节续取精确拼回"
