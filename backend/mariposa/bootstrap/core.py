@@ -27,6 +27,11 @@ BOOT_I_SECTION_CHARS = 2000
 BOOT_PLAN_SECTION_CHARS = BOOT_I_SECTION_CHARS
 #: RRA-006（2026-10-09 复审）：estomago 桶事件/话语正文分节宽度（码点）
 BOOT_MEMITEM_SECTION_CHARS = BOOT_I_SECTION_CHARS
+#: RRA-006（二次回访 2026-10-10）：分节**字节**预算——码点宽度只是
+#: 初值，控制字符 JSON 转义 6B/字符时按码点分节可把首包顶穿 24576
+#:（首桶无条件纳入装页）。分节宽度按"该片序列化字节 ≤ 本预算"折半；
+#: 续取游标按已交付码点偏移，链路确定性不变
+BOOT_MEMITEM_SECTION_BYTES = 4000
 
 _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
@@ -118,12 +123,30 @@ def _three_day_window(tz) -> tuple:
                    for i in range(BOOT_MEMORY_DAYS)]
 
 
+def _esc_bytes(s: str) -> int:
+    """字符串 JSON 序列化后的 UTF-8 字节数（分节字节口径的度量单位）。"""
+    import json as _json
+    return len(_json.dumps(s, ensure_ascii=False).encode("utf-8"))
+
+
+def _byte_width(full: str, *, start: int = 0) -> int:
+    """从 start 起的字节有界分节宽度（码点）：初值=节宽上限，按
+    `full[start:start+w]` 的序列化字节折半至 ≤BOOT_MEMITEM_SECTION_BYTES；
+    最少 1 字符（预算内必装得下，续取链不活锁）。"""
+    w = BOOT_MEMITEM_SECTION_CHARS
+    while w > 1 and _esc_bytes(full[start:start + w]) \
+            > BOOT_MEMITEM_SECTION_BYTES:
+        w //= 2
+    return max(w, 1)
+
+
 def _section_body(item: dict, memory_id: str, field: str,
-                   full: str) -> None:
+                  full: str) -> None:
     """RRA-006：estomago 桶正文载体分节——首节入 item，超宽给
     truncated/total_chars/next_cursor（bootstrap.next section=
-    memory_item 续取；短文整带）。"""
-    width = BOOT_MEMITEM_SECTION_CHARS
+    memory_item 续取；短文整带）。二次回访（2026-10-10）：宽度按
+    **序列化字节**折半（码点定宽在控制字符下击穿整包预算）。"""
+    width = _byte_width(full)
     if len(full) <= width:
         item[field] = full
         return
@@ -135,12 +158,11 @@ def _section_body(item: dict, memory_id: str, field: str,
 
 
 def _section_words(rows, start_item: int = 0, start_char: int = 0):
-    """RRA-006（回访 2026-10-09）：our_words 装页——条目数组形状保持，
-    条目间断页；**单条超宽时按码点分节**（此前单条 10000 字整条塞入，
-    整包 31596B 击穿 24576；首段带 text_truncated/text_total_chars，
-    续段经 item_offset+char_offset 游标续取）。返回 (kept, next_item,
-    next_char)：next_item=None=全部装完。"""
-    width = BOOT_MEMITEM_SECTION_CHARS
+    """RRA-006（回访+二次回访）：our_words 装页——条目数组形状保持，
+    条目间断页；**单条超宽按字节折半分片**、条目累计也按字节（码点
+    定宽在控制字符下击穿整包预算）。返回 (kept, next_item,
+    next_char)：next_item=None=全部装完；否则续取游标位（next_char=
+    条内码点偏移）。"""
     kept: list[dict] = []
     used = 0
     i = start_item
@@ -152,16 +174,21 @@ def _section_words(rows, start_item: int = 0, start_char: int = 0):
     while i < len(rows):
         text = rows[i]["text"] or ""
         remain = text[char_off:]
-        if kept and used + len(remain) > width:
+        w = _byte_width(remain)
+        if kept and used + _esc_bytes(remain[:w]) \
+                > BOOT_MEMITEM_SECTION_BYTES:
             return kept, i, char_off
-        if len(remain) > width:
+        if len(remain) > w:
             kept.append({"speaker": rows[i]["speaker"],
-                         "text": remain[:width],
+                         "text": remain[:w],
                          "text_truncated": True,
                          "text_total_chars": len(text)})
-            return kept, i, char_off + width
+            return kept, i, char_off + w
+        if kept and used + _esc_bytes(remain) \
+                > BOOT_MEMITEM_SECTION_BYTES:
+            return kept, i, char_off
         kept.append({"speaker": rows[i]["speaker"], "text": remain})
-        used += len(remain)
+        used += _esc_bytes(remain)
         i += 1
         char_off = 0
     return kept, None, 0

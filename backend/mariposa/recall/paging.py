@@ -160,6 +160,13 @@ def _resolve_cursor(result_set_id: str,
             "任意 offset", code="PAGINATION_CURSOR_INVALID",
             result_set_id=result_set_id)
     packed = int(row["position"])
+    # RRA-004（二次回访）：负持久 position（DB 无 CHECK）明确拒绝——
+    # 负数经整除/取模会解出 (负 idx, 9999, 9999) 类倒序坐标
+    if packed < 0:
+        raise Forbidden(
+            "游标 position 为负（损坏/不兼容的持久游标）——明确拒绝",
+            code="PAGINATION_CURSOR_INVALID",
+            result_set_id=result_set_id)
     if packed >= (1 << 40):
         # 新三元（candidate, carrier, fragment）
         v = packed - (1 << 40)
@@ -260,6 +267,51 @@ def _fragment_chars_for(page: dict, card: dict, holder: dict,
     return 1
 
 
+def _page_skeleton(extra_page_fields: dict, candidate_total: int) -> dict:
+    """装配/校验共用的页骨架（CX-06：出口最终键的等长占位——估算用；
+    最终 pagination 重建时占位被真值替换，真值恒 ≤ 占位字节）。"""
+    page = dict(extra_page_fields)
+    page["candidates"] = []
+    page["pagination"] = {
+        "returned_count": PAGE_MAX_ENTRIES,
+        "candidate_total": candidate_total,
+        "has_more": True,
+        "next_cursor": _new_cursor_token(),
+        "result_set_id": str(extra_page_fields.get("result_set_id")
+                             or _new_set_id()),
+    }
+    return page
+
+
+def _fragment_plan(page: dict, card: dict, holder: dict,
+                   field: str) -> list[tuple[int, int]]:
+    """载体全量的**确定性分片计划**（RRA-003/010 根因修复，二次回访
+    2026-10-10）：逐片按**该片真实序列化字节**从初值折半——此前
+    `_fragment_chars_for` 只测从 0 起的样片并对全载体定宽，首段
+    ASCII 便宜、后段控制字符 JSON 6B/字符时后续片击穿 24576。分片
+    只在空页发生（整卡顺延后的页首），预算=空页骨架；每片 ≥1 字符
+    （空页必装得下，杜绝空页活锁）。计划是 (骨架, 卡, 载体) 的纯
+    函数——同位置同页（P05）。"""
+    text = holder.get(field) or ""
+    total = len(text)
+    plan: list[tuple[int, int]] = []
+    start = 0
+    while start < total:
+        w = _FRAGMENT_CHARS_START
+        while w > 1:
+            end = min(total, start + w)
+            frag = _fragment_card(card, holder, field, start, end)
+            probe = dict(page)
+            probe["candidates"] = [frag]
+            if _envelope_bytes(probe) <= PAGE_ENVELOPE_MAX_BYTES:
+                break
+            w //= 2
+        end = min(total, start + max(w, 1))
+        plan.append((start, end))
+        start = end
+    return plan
+
+
 def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
                   extra_page_fields: dict,
                   skip_flags: list[str | None] | None = None) -> dict:
@@ -270,28 +322,19 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
       冻结全集+跳过标记，绝不收缩子集——收缩坐标会静默丢卡）；
     - 按序装整卡；整卡放不下且本页已有条目 → 整卡（或其下一片）顺延
       下页（不 pop、不丢）；
-    - 本页尚空且单卡超限 → 逐载体按码点分片（载体顺序=evidence 序
-      +excerpt；固定片宽；(carrier_index, fragment_index) 双维续取，
-      一个载体的片段耗尽才进下一载体，**全部载体耗尽才进下一卡**——
-      多载体超限卡不再只取最长载体丢第二载体，CX-01）；
+    - 本页尚空且单卡超限 → 逐载体分片（载体顺序=evidence 序
+      +excerpt；**每片按该片真实序列化字节折半**（_fragment_plan，
+      RRA-003/010 根因：固定码点片宽无法约束后段转义变宽）；
+      (carrier_index, fragment_index) 双维续取，一个载体的片段耗尽才
+      进下一载体，**全部载体耗尽才进下一卡**——多载体超限卡不再只取
+      最长载体丢第二载体，CX-01）；
     - 每页 ≤PAGE_MAX_ENTRIES 条目；被跳过卡不占条目数；
     - 字节预算按**最终出站信封形状**估算：骨架预置 pagination 终态键
       占位（next_cursor/result_set_id 与真值等长、returned_count 取
       两位上限），出口不再追加新键——预算与出口同源（CX-06）。
     """
-    page = dict(extra_page_fields)
-    page["candidates"] = []
+    page = _page_skeleton(extra_page_fields, len(cards))
     entries: list[dict] = page["candidates"]
-    # CX-06：出口最终键的等长占位（估算用；最终 pagination 重建时
-    # 占位被真值替换，真值恒 ≤ 占位字节——不是二次裁剪）
-    page["pagination"] = {
-        "returned_count": PAGE_MAX_ENTRIES,
-        "candidate_total": len(cards),
-        "has_more": True,
-        "next_cursor": _new_cursor_token(),
-        "result_set_id": str(extra_page_fields.get("result_set_id")
-                             or _new_set_id()),
-    }
 
     def _bytes_with(extra: dict | None = None) -> int:
         probe = dict(page)
@@ -344,18 +387,19 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
             car += 1
             fidx = 0
             continue
-        total = len(text)
-        frag_chars = _fragment_chars_for(page, card, holder, field)
-        served = fidx * frag_chars
-        if served >= total:
+        # RRA-003/010（根因修复）：分片计划逐片按真实字节折半——
+        # fidx 索引计划表（不再是 fidx×固定宽；固定宽无法约束后段
+        # 转义变宽的控制字符片）
+        plan = _fragment_plan(page, card, holder, field)
+        if fidx >= len(plan):
             # 该载体片段耗尽 → 下一载体（不进下一卡——CX-01）
             car += 1
             fidx = 0
             continue
-        end = min(total, served + frag_chars)
-        frag = _fragment_card(card, holder, field, served, end)
+        start, end = plan[fidx]
+        frag = _fragment_card(card, holder, field, start, end)
         entries.append(frag)
-        if end >= total:
+        if end >= len(text):
             car += 1
             fidx = 0
         else:
@@ -477,8 +521,9 @@ def serve_page(principal, a: dict) -> dict:
     # idx < 候选数（终态 (n,0,0) 不签游标）；越界位置照常装配会产出
     # 0 条目 + has_more=true + 同位置同令牌的空页死循环
     _n_total = len(pset["candidates"])
-    if start_pos[0] > _n_total or (start_pos[0] == _n_total
-                                   and (start_pos[1] or start_pos[2])):
+    if start_pos[0] < 0 or start_pos[0] > _n_total \
+            or (start_pos[0] == _n_total
+                and (start_pos[1] or start_pos[2])):
         raise Forbidden(
             "游标位置超出冻结全集（不兼容旧游标或损坏位置）——明确拒绝，"
             "不产出空页循环", code="PAGINATION_CURSOR_INVALID",
@@ -502,6 +547,33 @@ def serve_page(principal, a: dict) -> dict:
         "budget": budget_mod.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
+    # RRA-004（二次回访 2026-10-10）：解码三元组**全量** fail-closed——
+    # 此前只检 idx 正向上界：负 idx（position=-1 解出 (-1,9999,9999)）
+    # 会倒序重发末卡+首页；carrier/fragment 越界被当"载体耗尽"静默跳卡/
+    # 跳载体。合法签发位置恒满足：idx∈[0,n)；car<该卡载体数且 fidx<
+    # 该载体分片计划长度，或 car==载体数且 fidx==0（装配循环的"载体
+    # 集耗尽"合法中间态——下一页从下一卡起）；骨架与装配同源计算
+    if start_pos[0] < _n_total:
+        _skel = _page_skeleton(extra, _n_total)
+        _card = pset["candidates"][start_pos[0]]
+        _carriers = _text_carriers(_card)
+        _pos_ok = False
+        if 0 <= start_pos[1] < len(_carriers):
+            _holder, _field = _carriers[start_pos[1]]
+            _text = _holder.get(_field) or ""
+            if not _text:
+                _pos_ok = start_pos[2] == 0
+            else:
+                _pos_ok = 0 <= start_pos[2] < len(
+                    _fragment_plan(_skel, _card, _holder, _field))
+        elif start_pos[1] == len(_carriers):
+            _pos_ok = start_pos[2] == 0
+        if not _pos_ok:
+            raise Forbidden(
+                "游标位置超出冻结全集的合法坐标域（损坏/不兼容的持久"
+                "游标）——明确拒绝，不静默跳卡或倒序重发",
+                code="PAGINATION_CURSOR_INVALID",
+                result_set_id=rsid, position=list(start_pos))
     page = assemble_page(pset["candidates"], start_pos, extra,
                          skip_flags=flags)
     # 游标（同位置复用；新位置签发）——小事务，不计轮次、无副作用
