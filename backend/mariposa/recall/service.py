@@ -500,15 +500,6 @@ def _run_round_compute(session: dict, plan: dict,
             _expand_full_text(c)
         frozen_cards = [_paging.project_card(c)
                         for c in sel["delivered"]]
-        page_extra = {
-            "judge_mode": "off",
-            "judge_policy_revision": int(policy.get("revision") or 0),
-            "judgement_status": "bypassed_by_user",
-            "judged_count": 0,
-            "retrieval_coverage": _scope_coverage(coverage),
-        }
-        first_page = _paging.assemble_page(frozen_cards, (0, 0),
-                                           page_extra)
     else:
         frozen_cards = None
         first_page = None
@@ -524,6 +515,65 @@ def _run_round_compute(session: dict, plan: dict,
         search_status = "DEGRADED"
     else:
         search_status = "NO_MATCH_OBSERVED"
+
+    status = state_machine.derive_status(search_status,
+                                         len(sel["delivered"]),
+                                         bool(sel["conflicts"]))
+    # S10：判断不可用/未配置时正文不直出——交付为空必须是显式结构化
+    # 状态，不是静默空结果（关闭模式无此抑制：bypassed 不等于故障）
+    if (not sel["delivered"] and policy["judge_required"]
+            and coverage.get("judge") in ("not_configured", "unavailable")):
+        sel["missing"].append(
+            "判断层不可用（not_configured/unavailable）：候选正文"
+            "不直出（S10）；可在网页配置判断 provider 或经人工关闭后"
+            "以全集分页交付")
+    continuation = None
+    if ("words" in channels and _words_evidence_insufficient(
+            plan, words_hits or [])):
+        continuation = {"available": True, "action": "round2_raw",
+                        "via": "memory.recall.round2"}
+
+    first_page = None
+    if policy["mode"] == "off":
+        # WP-01 A6（CX-06）：装页预算骨架=最终出站 packet 形状——
+        # 终态字段全部前置进 extra（含 start/refine 出口追加键的
+        # 等长占位），出口不再追加新键，预算与出口同源；此前骨架
+        # 只有 5 字段、出口再补 ~15 个字段导致最终信封超 24576
+        page_extra = {
+            "recall_session_id": sid,
+            "revision": session["current_revision"],
+            "intent": plan.get("intent")
+            or ("find_words" if (plan.get("channels") or []) == ["words"]
+                else "recall_event"),
+            "status": status,
+            "search_status": search_status,
+            "delivery_action": "needs_validation",
+            "instruction_authority": "none",
+            "content_role": "retrieved_memory",
+            "coverage": coverage,
+            "missing": sel["missing"],
+            "conflicts": sel["conflicts"],
+            "degraded_reasons": sorted(set(degraded)),
+            # start()/refine() 出口合并真值（占位与真值同形：
+            # cont_+12hex / int）
+            "continuation": {**(continuation or {}),
+                             "continue_request_ref": "cont_xxxxxxxxxxxx",
+                             "for_revision": 999},
+            "budget": budget.snapshot(_with_round_preview(session)),
+            "token_count": config.RECALL_TOKENIZER,
+            "judge_mode": "off",
+            "judge_policy_revision": int(policy.get("revision") or 0),
+            "judgement_status": "bypassed_by_user",
+            "judged_count": 0,
+            "retrieval_coverage": _scope_coverage(coverage),
+            # 出口追加键等长占位（start: created=True + 64hex 指纹；
+            # refine 只加指纹不加 created——只减不增，仍 ≤ 骨架。
+            # draft 以 _draft 键自判（签名不变，monkeypatch 兼容））
+            **({"created": True} if "_draft" in session else {}),
+            "query_fingerprint": "0" * 64,
+        }
+        first_page = _paging.assemble_page(frozen_cards, (0, 0, 0),
+                                           page_extra)
 
     # commit-at-end：以下只组装，不写库。持久化材料随 effects 返回，
     # 由最终事务一次性提交（检索/Jev 失败时数据库零痕迹）。
@@ -578,52 +628,15 @@ def _run_round_compute(session: dict, plan: dict,
                 (k for k, v in by_receipt.items()
                  if v == c["resource_ref"]), None)
 
-    status = state_machine.derive_status(search_status,
-                                         len(sel["delivered"]),
-                                         bool(sel["conflicts"]))
-    # S10：判断不可用/未配置时正文不直出——交付为空必须是显式结构化
-    # 状态，不是静默空结果（关闭模式无此抑制：bypassed 不等于故障）
-    if (not sel["delivered"] and policy["judge_required"]
-            and coverage.get("judge") in ("not_configured", "unavailable")):
-        sel["missing"].append(
-            "判断层不可用（not_configured/unavailable）：候选正文"
-            "不直出（S10）；可在网页配置判断 provider 或经人工关闭后"
-            "以全集分页交付")
-    continuation = None
-    if ("words" in channels and _words_evidence_insufficient(
-            plan, words_hits or [])):
-        continuation = {"available": True, "action": "round2_raw",
-                        "via": "memory.recall.round2"}
+    # status/S10/continuation 已上移至装页前（WP-01 A6：off 首页骨架
+    # 需要全部终态字段）；on 模式 packet 组装继续用同名变量
 
     if policy["mode"] == "off":
-        packet = {
-            "recall_session_id": sid,
-            "revision": session["current_revision"],
-            "intent": plan.get("intent")
-            or ("find_words" if (plan.get("channels") or []) == ["words"]
-                else "recall_event"),
-            "status": status,
-            "search_status": search_status,
-            "delivery_action": "needs_validation",
-            "instruction_authority": "none",
-            "content_role": "retrieved_memory",
-            "coverage": coverage,
-            "missing": sel["missing"],
-            "conflicts": sel["conflicts"],
-            "degraded_reasons": sorted(set(degraded)),
-            "continuation": continuation,
-            "budget": budget.snapshot(_with_round_preview(session)),
-            "token_count": config.RECALL_TOKENIZER,
-            # 关闭模式分页合同（§4.2/§4.3）：不经 _enforce_output_budget
-            #（分页装配器自管 24576 字节预算，且不得 pop 候选）
-            "candidates": first_page["candidates"],
-            "judge_mode": "off",
-            "judge_policy_revision": int(policy.get("revision") or 0),
-            "judgement_status": "bypassed_by_user",
-            "judged_count": 0,
-            "retrieval_coverage": first_page["retrieval_coverage"],
-            "pagination": first_page["pagination"],
-        }
+        # 装页器产出的页**就是**最终 packet（extra 含全部终态字段，
+        # candidates/pagination 由装配器管理）——关闭模式分页合同
+        # （§4.2/§4.3）：不经 _enforce_output_budget（分页装配器自管
+        # 24576 字节预算，且不得 pop 候选）
+        packet = first_page
     else:
         packet = {
             "recall_session_id": sid,
@@ -835,7 +848,29 @@ def _commit_round_effects(conn, session_id: str, revision: int,
                           scope: str = "", kind: str = "memory",
                           cref: str | None = None) -> str:
     """最终事务内的本轮派生行写入（candidates/receipts/状态/回执/
-    Round1 成功回执——S13）。返回本轮签发的 continue_request_ref。"""
+    Round1 成功回执——S13）。返回本轮签发的 continue_request_ref。
+
+    WP-01 A8（CX-17/C-007）：交付前政策纪元 fencing——检索/判断在途
+    期间政策被人类切换（mode 或 revision 前进）则拒绝提交
+    （RECALL_POLICY_CHANGED），与续页/重放同码同口径。
+    """
+    _snap = effects.get("judge_policy") or {}
+    if _snap:
+        from . import judge_policy as _jp
+        from ..errors import Forbidden as _PolF
+        _cur = _jp.effective()
+        if _cur["mode"] != _snap.get("mode") or \
+                int(_cur.get("revision") or 0) != \
+                int(_snap.get("revision") or 0):
+            raise _PolF(
+                f"召回判断政策已切换（检索时 {_snap.get('mode')}"
+                f"@rev{_snap.get('revision')}，提交时 {_cur['mode']}"
+                f"@rev{_cur.get('revision')}）：本轮拒绝提交",
+                code="RECALL_POLICY_CHANGED",
+                compute_mode=_snap.get("mode"), current_mode=_cur["mode"],
+                compute_policy_revision=_snap.get("revision"),
+                current_policy_revision=_cur.get("revision"),
+                session_id=session_id)
     store.upsert_candidates(conn, session_id, effects["candidates"],
                             revision)
     store.add_receipts(conn, session_id, effects["receipts"],
