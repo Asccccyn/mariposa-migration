@@ -113,6 +113,13 @@ def _install_test_judge() -> None:
                 degraded_reason=None, cache_hits=0,
                 cache_misses=len(candidates), request_count=0)
 
+        def outbound_grants(self):
+            # WP-01 A02（2026-10-09）：outbound_grants 空集=零许可
+            # （base 契约 fail-closed）——测试 fake 如实声明全许可面
+            # （模拟已配置 profile 的 provider），重放许可过滤走真实路径
+            return frozenset({"event_excerpt", "word_excerpt",
+                              "source_excerpt"})
+
     judge_base.register_for_tests("test_deterministic", DeterministicJudge())
 
 
