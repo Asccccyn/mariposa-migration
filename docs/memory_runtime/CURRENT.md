@@ -359,6 +359,19 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-09（Codex 复审 RRA 返修，run-000112）：§4.1 纪元与政策
+  执行收紧——env 跟随更新（部署后补配）升 revision 记 history（构成
+  新纪元，同 mode 换 provider 不再是同纪元）；坏 allowed_data/
+  revision 行按 unconfigured fail-closed 阻断正文（红线 1 字面落地）；
+  enabled-only 更新保留 provider/model 配置（缺省≠显式清空，红线 3）；
+  password grant（人类网页登录）签 entry_source=web（政策写权网页门
+  的可信标记，第三方绑定流保持 oauth）；off 模式 Round2 raw 卡交付
+  获授权 Source 修订全文（D-2 落实，长文分页翻尽）；bootstrap estomago
+  桶 event/words 分节+memory_item 续取（整包 ≤24576，§8 D-6 联动）；
+  分页游标编码版本化（2^40 偏移，旧二元令牌兼容解码）；多载体分片
+  保留结构事实/来源版本；episode start<end 仅同消息比较；Codex 判断
+  器按锁定 SDK 真实签名调用（删除发明的 timeout 参数）+字段级许可
+  投影+对账集=实际送判集合。
 - 2026-10-09（WP-01+WP-02 行为收口，联合审计返修 run-160858）：
   §4.1 政策纪元定义扩为 **mode+revision**（同 mode 下 provider/
   allowed_data 变更=切换；replay/续页/Round2 gate/交付前复核四处
