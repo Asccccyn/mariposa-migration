@@ -176,20 +176,24 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                     raise Forbidden("memory 不存在或无表示版本",
                                     code="INVALID_ARGUMENT",
                                     memory_id=mid)
-                from .core import BOOT_MEMITEM_SECTION_CHARS as _W
+                from .core import BOOT_MEMITEM_SECTION_CHARS as _W  # noqa: F401
                 if fld == "event_text":
                     content = (vv["event_text"] or vv["hold_text"]) or ""
                     if off > len(content):
                         raise Forbidden("cursor.offset 超出正文范围",
                                         code="INVALID_ARGUMENT",
                                         got=off, total_chars=len(content))
-                    nxt = (off + _W if off + _W < len(content) else None)
+                    # RRA-006（二次回访 2026-10-10）：续取分节同**字节**
+                    # 口径——控制字符 JSON 6B/字符时码点定宽顶穿信封
+                    from .core import _byte_width
+                    w = _byte_width(content, start=off)
+                    nxt = (off + w if off + w < len(content) else None)
                     return {"snapshot_id": snapshot_id,
                             "section": "memory_item", "memory_id": mid,
                             "field": fld,
                             "content_role": "bootstrap_memory_package",
                             "instruction_authority": "none",
-                            "content": content[off:off + _W],
+                            "content": content[off:off + w],
                             "offset": off, "total_chars": len(content),
                             "next_cursor": ({"memory_id": mid,
                                              "field": fld,

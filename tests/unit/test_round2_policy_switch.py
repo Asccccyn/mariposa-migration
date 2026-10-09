@@ -459,3 +459,67 @@ class TestRRA010OffRawFullText:
             "也不是整段重复后的总量达标）"
         assert "RA_RAW_TAIL_CANARY" in "".join(joined.values()), \
             "长文尾部 canary 可达"
+
+    def test_off_raw_control_escape_within_budget_and_exact(self, actors):
+        """RRA-010（二次回访根因）：变宽 Raw（'崧蓝'+'A'×3998+
+        '\x01'×8000）——首段 ASCII 便宜、后段控制字符 6B/字符。每页
+        信封实测 ≤24576（旧固定片宽后续页 25432..25439B）；两载体按
+        (resource_ref, kind) 精确拼回。"""
+        from mariposa.recall import paging as _pg
+        body = "崧蓝" + "A" * 3998 + "\x01" * 8000
+        _r1_scenario_off(actors, op="op-rra10c")
+        from mariposa.source import importer
+        import json as _json, tempfile, pathlib
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        f = tmp / "rra10c.json"
+        f.write_text(_json.dumps([{
+            "uuid": "c-rra10c", "chat_messages": [{
+                "uuid": "rra10c-m1", "sender": "human",
+                "created_at": "2026-09-20T10:00:00.000Z",
+                "content": [{"type": "text", "text": body}]}]}],
+            ensure_ascii=False), encoding="utf-8")
+        importer.import_file("jiaming", str(f))
+        set_policy(False)
+        r1 = _start(actors, terms=("崧蓝",), op="op-rra10c2")
+        sid = r1["data"]["recall_session_id"]
+        r2 = _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT",
+                     op="op-rra10cr2")
+        packet = r2["data"]
+        rsid = packet["pagination"]["result_set_id"]
+        env = _json.dumps({"ok": True, "data": packet},
+                          ensure_ascii=False).encode()
+        assert len(env) <= 24576, f"首页 {len(env)}B 超限"
+        per = {}
+        for c in packet["candidates"]:
+            fr = c.get("fragment") or {}
+            if fr.get("text"):
+                per.setdefault((c.get("resource_ref"),
+                                fr.get("kind")), []).append(
+                    (fr.get("start_char"), fr["text"]))
+        cursor = packet["pagination"].get("next_cursor")
+        pages = 0
+        while cursor and pages < 60:
+            pages += 1
+            page = _pg.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid,
+                "cursor": cursor})
+            env2 = _json.dumps({"ok": True, "data": page},
+                               ensure_ascii=False).encode()
+            assert len(env2) <= 24576, \
+                f"第 {pages} 续页 {len(env2)}B 超 24576（变宽残因）"
+            for c in page["candidates"]:
+                fr = c.get("fragment") or {}
+                if fr.get("text"):
+                    per.setdefault((c.get("resource_ref"),
+                                    fr.get("kind")), []).append(
+                        (fr.get("start_char"), fr["text"]))
+            cursor = page["pagination"].get("next_cursor")
+        assert cursor is None, "翻尽收敛"
+        kinds = set()
+        for key, chunks in per.items():
+            chunks.sort(key=lambda x: x[0])
+            assert "".join(t for _, t in chunks) == body, \
+                f"{key} 变宽载体精确拼回"
+            kinds.add(key[1])
+        assert kinds == {"evidence_snippet", "excerpt"}, \
+            "两个载体都完整交付"
