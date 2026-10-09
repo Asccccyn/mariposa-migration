@@ -322,17 +322,31 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                                  separators=(",", ":"))}],
                 "isError": True,
             })
-        # 出站信封协商（1005B）：content 的完整 JSON 副本默认保留
-        # （MCP 规范向后兼容通道——不赌客户端只读 structuredContent）；
-        # 客户端显式 params._meta.content_envelope="single"（见
-        # initialize instructions）时省略副本，content 仅留指针行。
+        # 出站信封协商（1005B）+WP-06 6C（D-4 选 A，2026-10-09）：
+        # 分页类响应（结果集含 pagination 字段——off 模式全集分页）
+        # **默认 content_envelope="single"**（content 仅摘要行，正文走
+        # structuredContent；此前 dual 双份 JSON 使 MCP 线缆超 24576）；
+        # 非分页响应默认保持 dual（完整 JSON 副本——MCP 向后兼容通道，
+        # 不赌客户端只读 structuredContent）。显式 params._meta.
+        # content_envelope 可覆盖（"single"/"dual"）。
         # 序列化统一紧凑分隔符（默认 ", "/": " 每键值对白送 2 字符）。
         _meta = params.get("_meta")
-        _single = (isinstance(_meta, dict)
-                   and _meta.get("content_envelope") == "single")
-        _content_text = ("see structuredContent" if _single else
-                         json.dumps(out, ensure_ascii=False,
-                                    separators=(",", ":")))
+        _explicit = (isinstance(_meta, dict)
+                     and _meta.get("content_envelope") in
+                     ("single", "dual"))
+        _single = ((_explicit and _meta["content_envelope"] == "single")
+                   or (not _explicit and _paged_default_single(out)))
+        if _single:
+            if _paged_default_single(out):
+                _n = len(out["data"].get("candidates") or [])
+                _content_text = (f"see structuredContent"
+                                 f"（分页响应；本页条目 {_n}，完整页合同"
+                                 f"见 structuredContent）")
+            else:
+                _content_text = "see structuredContent"
+        else:
+            _content_text = json.dumps(out, ensure_ascii=False,
+                                       separators=(",", ":"))
         return _rpc_result(msg_id, {
             "content": [{"type": "text", "text": _content_text}],
             "structuredContent": out,
@@ -340,6 +354,14 @@ async def handle(request: Request, profile: str) -> JSONResponse:
         })
 
     return _rpc_error(msg_id, -32601, f"Method not found: {method}")
+
+
+def _paged_default_single(out) -> bool:
+    """WP-06 6C（D-4）：分页类响应（data.pagination 存在）默认
+    content_envelope=single 的判定（非分页保持 dual 默认）。"""
+    return (isinstance(out, dict)
+            and isinstance(out.get("data"), dict)
+            and isinstance(out["data"].get("pagination"), dict))
 
 
 def _bearer(request: Request) -> str | None:

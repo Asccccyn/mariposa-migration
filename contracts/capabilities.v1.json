@@ -550,7 +550,6 @@
       "canonical_name": "maintenance.idempotency.reconcile",
       "transport_name": "mariposa_maintenance_idempotency_reconcile",
       "allowed_principals": [
-        "jiaming",
         "qiaosheng",
         "worker"
       ],
@@ -574,7 +573,6 @@
       "canonical_name": "maintenance.outbox.drain",
       "transport_name": "mariposa_maintenance_outbox_drain",
       "allowed_principals": [
-        "jiaming",
         "qiaosheng",
         "worker"
       ],
@@ -598,7 +596,6 @@
       "canonical_name": "maintenance.rebuild_index",
       "transport_name": "mariposa_maintenance_rebuild_index",
       "allowed_principals": [
-        "jiaming",
         "qiaosheng",
         "worker"
       ],
@@ -631,7 +628,6 @@
       "canonical_name": "maintenance.semantic.warmup",
       "transport_name": "mariposa_maintenance_semantic_warmup",
       "allowed_principals": [
-        "jiaming",
         "qiaosheng",
         "worker"
       ],
@@ -655,7 +651,6 @@
       "canonical_name": "maintenance.source.cleanup",
       "transport_name": "mariposa_maintenance_source_cleanup",
       "allowed_principals": [
-        "jiaming",
         "qiaosheng",
         "worker"
       ],
