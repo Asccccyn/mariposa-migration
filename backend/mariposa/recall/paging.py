@@ -246,27 +246,6 @@ def _envelope_bytes(page: dict) -> int:
                           ensure_ascii=False).encode("utf-8"))
 
 
-def _fragment_chars_for(page: dict, card: dict, holder: dict,
-                        field: str) -> int:
-    """该卡的固定分片大小（确定性：只依赖卡片与页元数据骨架）。
-
-    从初值起折半，直至"该片段在当前空页骨架下也能放进预算"；最少
-    1 字符。(idx, fidx) → 偏移 = fidx × 该固定值——调用点仅在本页
-    entries 为空时到达，骨架与实页一致，映射全局确定，拼回逐字一致。
-    """
-    text = holder.get(field) or ""
-    size = _FRAGMENT_CHARS_START
-    while size > 0:
-        frag = _fragment_card(card, holder, field, 0,
-                              min(len(text), size))
-        probe = dict(page)
-        probe["candidates"] = [frag]
-        if _envelope_bytes(probe) <= PAGE_ENVELOPE_MAX_BYTES:
-            return size
-        size //= 2
-    return 1
-
-
 def _page_skeleton(extra_page_fields: dict, candidate_total: int) -> dict:
     """装配/校验共用的页骨架（CX-06：出口最终键的等长占位——估算用；
     最终 pagination 重建时占位被真值替换，真值恒 ≤ 占位字节）。"""
@@ -287,7 +266,7 @@ def _fragment_plan(page: dict, card: dict, holder: dict,
                    field: str) -> list[tuple[int, int]]:
     """载体全量的**确定性分片计划**（RRA-003/010 根因修复，二次回访
     2026-10-10）：逐片按**该片真实序列化字节**从初值折半——此前
-    `_fragment_chars_for` 只测从 0 起的样片并对全载体定宽，首段
+    旧实现的固定码点片宽（按首片估宽推广到全载体）在首段
     ASCII 便宜、后段控制字符 JSON 6B/字符时后续片击穿 24576。分片
     只在空页发生（整卡顺延后的页首），预算=空页骨架；每片 ≥1 字符
     （空页必装得下，杜绝空页活锁）。计划是 (骨架, 卡, 载体) 的纯
