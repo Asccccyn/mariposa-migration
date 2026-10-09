@@ -359,6 +359,22 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-09（Codex 回访返修，run-035424，10 项 FAIL）：政策写权
+  **调用面**收口——MCP 面（含 web 令牌）不导出不执行
+  maintenance.recall_policy.update（REST /api 是网页唯一正门；§4.1
+  双层）；model_id 与 provider 同 UNSET 哨兵合同（缺省=保留现值、
+  显式 null=清空）；分页游标无 tag 双纪元按 created_at 分界（f313618
+  无 tag 三元此前被当二元误解成 idx=100000 的空页+同游标活锁；越界
+  位置明确拒绝）；分片卡不再重复携带其它长载体（长 Raw 卡 excerpt
+  不随 evidence 分片整段重复，首包 34482B→预算内）+长证据去正文
+  身份存根保 source_version；bootstrap.next 公开 schema 加
+  memory_item、memory_days 首页游标取已服务行（不漏溢出桶）、续页
+  同字节预算、单长话语条内字符分节（char_offset 续取）；Codex
+  **可执行 live 安全门**（MARIPOSA_CODEX_LIVE_ENABLED 默认关——
+  readiness/judge/调用三重闸，G-1 她批准后显式开门；fake transport
+  线程化 deadline 期间执行、锁等待按剩余 deadline）；字段许可映射
+  覆盖生产 EVIDENCE_KINDS（word_verbatim/paraphrase/unverified→
+  word_excerpt 等，未映射带正文 kind fail-closed）。
 - 2026-10-09（Codex 复审 RRA 返修，run-000112）：§4.1 纪元与政策
   执行收紧——env 跟随更新（部署后补配）升 revision 记 history（构成
   新纪元，同 mode 换 provider 不再是同纪元）；坏 allowed_data/

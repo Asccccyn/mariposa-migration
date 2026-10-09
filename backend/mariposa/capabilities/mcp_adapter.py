@@ -36,6 +36,13 @@ from .registry import REGISTRY  # noqa: E402  （延迟导入避免循环依赖�
 
 _T_PREFIX = "mariposa_"
 
+#: RRA-001（回访 2026-10-09）：政策写权「人类网页独占」的**调用面**
+#: 收口——REST /api 是网页唯一正门；MCP 面对该能力不导出、不执行
+#:（此前 web 令牌流入 MCP 客户端后仍能经 tools/list 发现并实际调用
+#: policy.update，handler 的 entry_source=web 门对 web 令牌恒放行）。
+#: registry handler 内的门保持（REST 面双层）。
+_MCP_FACE_BLOCKED = frozenset({"maintenance.recall_policy.update"})
+
 
 def _transport_name(canonical: str) -> str:
     return _T_PREFIX + canonical.replace(".", "_")
@@ -55,6 +62,10 @@ def _tools_for(principal: Principal) -> list[dict]:
     tools = []
     for cap in registry.REGISTRY.values():
         if principal.principal_id not in cap.allowed_principals:
+            continue
+        # RRA-001（回访 2026-10-09）：MCP 面不导出的能力（政策写网页
+        # 独占——发现与执行双收口；含持 web 令牌的合法调用者）
+        if cap.name in _MCP_FACE_BLOCKED:
             continue
         # 受限服务凭据（迁移 30）：工具清单与 HTTP invoke 同源过滤——
         # 受限 binding 的 tools/list 不得披露/放行白名单外能力
@@ -288,6 +299,14 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                                     "invalid params: arguments must be"
                                     " an object")
         canonical = _canonical_name(name)
+        # RRA-001（回访 2026-10-09）：MCP 面不执行的能力——与 tools/list
+        # 同一套收口（发现/执行一致；web 令牌经 MCP 也不保留政策写权）
+        if canonical in _MCP_FACE_BLOCKED:
+            _r = _proto_rate_guard(msg_id)
+            return _r or _rpc_error(
+                msg_id, -32002,
+                "召回判断政策写仅人类网页（REST /api）面可执行；"
+                "MCP 面不导出、不执行该能力")
         # GATE-01：成功调用按能力分类计档（读扣读档、写扣写档，
         # 与 HTTP /api 通道同一档位语义）
         _cap = registry.REGISTRY.get(canonical)
