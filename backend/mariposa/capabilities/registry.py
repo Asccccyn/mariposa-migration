@@ -347,7 +347,8 @@ def _register() -> dict[str, Capability]:
         {"qiaosheng"}, True,
         description="召回判断政策写入（expected_revision CAS + 幂等键；"
                     "开启=所选 provider 判断，关闭=零判断调用+候选全集"
-                    "分页；仅 qiaosheng）")
+                    "分页；仅 qiaosheng，且仅网页登录会话可写——"
+                    "OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）")
     add("emotion.context.get", _emotion_reserved, _owners(), False,
         description="情绪补充召回（reserved，默认禁用）")
     add("listening.status", _listening_reserved, _owners(), False,
@@ -840,6 +841,16 @@ def _judge_policy_get(principal: Principal, a: dict) -> dict:
 
 def _judge_policy_update(principal: Principal, a: dict) -> dict:
     from ..recall import judge_policy as _jp
+    # WP-08（CX-04/C-010）：政策写权「人类网页独占」落到入口层——
+    # principal_id 同为 qiaosheng 的 OAuth 绑定/其他入口（如 /mcp
+    # business 面持绑定客户端）不可写（CURRENT §4.1 字面）；服务层
+    # principal_id 门保持（双层）。GET 只读不加门。
+    if getattr(principal, "entry_source", None) != "web":
+        raise Forbidden(
+            "召回判断政策仅人类网页登录可写；OAuth 绑定/模型/worker "
+            "通道一律只读（maintenance.recall_policy.get）",
+            code="POLICY_WRITE_WEB_ONLY",
+            entry_source=getattr(principal, "entry_source", None))
     if "enabled" not in a:
         raise Forbidden("enabled 必填（true=开启判断/false=关闭直出"
                         "需显式确认）", code="INVALID_ARGUMENT")
