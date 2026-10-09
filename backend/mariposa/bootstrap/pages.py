@@ -176,7 +176,6 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                     raise Forbidden("memory 不存在或无表示版本",
                                     code="INVALID_ARGUMENT",
                                     memory_id=mid)
-                from .core import BOOT_MEMITEM_SECTION_CHARS as _W  # noqa: F401
                 if fld == "event_text":
                     content = (vv["event_text"] or vv["hold_text"]) or ""
                     if off > len(content):
