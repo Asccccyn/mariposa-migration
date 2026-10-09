@@ -101,14 +101,20 @@ class TestRound2Gate:
     """WP-05/D06：死适配层 pl.round2_gate 已删——gate 语义改经现行
     round2._round2_gate（服务端全条件核验）验证。"""
 
-    def _gate(self, actors, reason):
+    def _gate(self, actors, reason, evidence_requirement=None):
+        """真实 start + 现行 _round2_gate。默认 fixture 带
+        verbatim_required（首轮事实 req_met=False →
+        VERBATIM_REQUIRED_NOT_MET/EVIDENCE_INSUFFICIENT 有服务端事实支持，
+        RRA-011：正例必须真实满足全部 gate 条件）。"""
         from mariposa.recall import round2 as r2
         from mariposa.recall import service as rs, store as st
         from mariposa import db as _db
         hold(actors, "gate 正文", days_ago=0)
-        packet = rs.start(actors["jiaming"], {"query_plan": {
-            "original_request": "gate", "channels": ["event"],
-            "lexical_terms": ["gate"]}})
+        plan = {"original_request": "gate", "channels": ["event"],
+                "lexical_terms": ["gate"]}
+        if evidence_requirement:
+            plan["evidence_requirement"] = evidence_requirement
+        packet = rs.start(actors["jiaming"], {"query_plan": plan})
         sess = st.require_session(packet["recall_session_id"])
         with _db.recall_runtime() as conn:
             allowed, gate = r2._round2_gate(conn, sess, reason)
@@ -116,14 +122,22 @@ class TestRound2Gate:
 
     def test_round1_receipt_auto_issued_by_start(self, actors):
         """A05：首轮真实执行完成自动签发 ROUND1_COMPLETE。"""
-        gate = self._gate(actors, "EVIDENCE_INSUFFICIENT")
+        gate = self._gate(actors, "VERBATIM_REQUIRED_NOT_MET",
+                          evidence_requirement="verbatim_required")
         assert gate["round1_receipt"] is True
 
     def test_gate_allows_with_full_conditions(self, actors):
-        from mariposa.recall import round2 as r2
-        gate = self._gate(actors, "EVIDENCE_INSUFFICIENT")
+        """RRA-011 修复：完整条件正例恢复 assert allowed is True——
+        fixture 真实满足服务端事实门（verbatim_required 首轮 req_met=
+        False → 理由有事实支持），不再只测理由属于闭集。"""
+        gate = self._gate(actors, "VERBATIM_REQUIRED_NOT_MET",
+                          evidence_requirement="verbatim_required")
         assert gate["reason_in_closed_set"] is True
-        assert r2._ROUND2_REASONS  # 现行闭集仍在（形状锚点）
+        assert gate["round1_receipt"] is True
+        assert gate["reason_fact_supported"] is True, \
+            f"fixture 必须真实满足事实门（gate={gate}）"
+        assert gate["allowed"] is True, \
+            f"完整条件正例必须实际放行（gate={gate}）"
 
     def test_bad_reason_blocks(self, actors):
         gate = self._gate(actors, "JUDGE_UNAVAILABLE")

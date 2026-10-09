@@ -335,11 +335,15 @@ class TestMultiCarrier:
         card = {
             "resource_ref": "memory:cx01-mem", "channel": "event",
             "content_version": "1", "matched_fields": ["text"],
+            "source_version": "hash-canary",
             "evidence": [
                 {"evidence_kind": "authored_event", "field": "text",
                  "snippet": canary_a},
                 {"evidence_kind": "word_excerpt", "field": "our_words",
                  "snippet": canary_b},
+                {"evidence_kind": "structured_fact", "field": "categories",
+                 "snippet": "",
+                 "structured_value": {"categories": ["milestone"]}},
             ],
         }
         # 服务级直调装配器（夹具不依赖检索产卡形态）
@@ -367,6 +371,13 @@ class TestMultiCarrier:
             if f.get("fragment", {}).get("evidence_index") == 1)
         assert got_a == canary_a, "第一载体（evidence 0）拼回完整"
         assert got_b == canary_b, "第二载体（evidence 1）拼回完整（不再静默丢失）"
+        # RRA-003：结构证据/来源版本随片保留；正常收尾无伪 invalid
+        for f in frags:
+            kept = {e.get("field") for e in f.get("evidence") or []}
+            assert "categories" in kept, "结构事实（categories）随片保留"
+            assert f.get("source_version") == "hash-canary", \
+                "来源版本随片保留"
+            assert not f.get("invalid"), "正常载体耗尽不产伪 invalid条目"
 
 
 # ------------------------------------------------------- CX-06 最终信封
@@ -454,3 +465,32 @@ class TestInFlightPolicyFencing:
                    expected=pol["revision"])
         r = start(actors, ["窗帘"], "op-t10b")
         assert r["judge_mode"] == "on"
+
+
+class TestRRACursorUpgrade:
+    def test_004_old_binary_cursor_decodes_not_first_page(self, actors):
+        """RRA-004：旧二元编码持久令牌（position=idx*10000+frag）升级
+        后按旧编码解码——续页不重发首页。"""
+        import sqlite3
+        for i in range(15):
+            hold(actors, f"南瓜灯事件编号{i:03d}号记录")
+        set_policy(False)
+        p1 = start(actors, ["南瓜灯"], "op-cup")
+        rsid = p1["pagination"]["result_set_id"]
+        sid = p1["recall_session_id"]
+        # 手工种一枚旧编码游标（idx=10, frag=0 → 100000），模拟升级前
+        # 签发的持久令牌
+        from mariposa.recall import store as _st
+        with _st.db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO recall_page_cursors(token, result_set_id,"
+                " position, created_at) VALUES('pgc_legacy_probe',?,?,"
+                "datetime('now'))", (rsid, 100000))
+            conn.execute("COMMIT")
+        page = paging.serve_page(actors["jiaming"], {
+            "result_set_id": rsid, "session_id": sid,
+            "cursor": "pgc_legacy_probe"})
+        refs = [c.get("resource_ref") for c in page["candidates"]]
+        first_ref = p1["candidates"][0]["resource_ref"]
+        assert first_ref not in refs, "旧令牌续页不得重发首页条目"

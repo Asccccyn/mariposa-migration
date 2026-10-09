@@ -28,7 +28,8 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
     """
     if principal_id != "jiaming":
         raise Forbidden("bootstrap is for jiaming entries", principal=principal_id)
-    if section not in ("memory_days", "plans", "i", "plan_content"):
+    if section not in ("memory_days", "plans", "i", "plan_content",
+                       "memory_item"):
         raise Forbidden(f"unknown section: {section}（v2 开窗无 raw 段）")
     # P1 复审（2026-10-02 接续）：校验 state_hash 与取页在同一读事务
     # ——此前校验连接先关、取页/Plan 各自重开连接，交错窗口内旧
@@ -152,6 +153,77 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                         "next_cursor": ({"plan_id": plan_id,
                                          "plan_offset": nxt_pc}
                                         if nxt_pc else None)}
+
+            # RRA-006（2026-10-09 复审）：estomago 桶正文分节续取——
+            # cursor={memory_id, field(event_text|our_words), offset}；
+            # 与 plan_content 同构（码点分节、钉当前内容、无截断冒充）
+            if section == "memory_item":
+                mid = _cur_str("memory_id")
+                fld = _cur_str("field")
+                if fld not in ("event_text", "our_words"):
+                    raise Forbidden(
+                        f"memory_item.field 必须是 event_text/our_words",
+                        code="INVALID_ARGUMENT", field=fld)
+                off = _cur_int("offset")
+                vv = conn.execute(
+                    "SELECT event_text, hold_text FROM memory_versions"
+                    " WHERE memory_id=? AND version_no="
+                    "(SELECT current_version_no FROM memories WHERE"
+                    " memory_id=?)", (mid, mid)).fetchone()
+                if vv is None:
+                    raise Forbidden("memory 不存在或无表示版本",
+                                    code="INVALID_ARGUMENT",
+                                    memory_id=mid)
+                from .core import BOOT_MEMITEM_SECTION_CHARS as _W
+                if fld == "event_text":
+                    content = (vv["event_text"] or vv["hold_text"]) or ""
+                    if off > len(content):
+                        raise Forbidden("cursor.offset 超出正文范围",
+                                        code="INVALID_ARGUMENT",
+                                        got=off, total_chars=len(content))
+                    nxt = (off + _W if off + _W < len(content) else None)
+                    return {"snapshot_id": snapshot_id,
+                            "section": "memory_item", "memory_id": mid,
+                            "field": fld,
+                            "content_role": "bootstrap_memory_package",
+                            "instruction_authority": "none",
+                            "content": content[off:off + _W],
+                            "offset": off, "total_chars": len(content),
+                            "next_cursor": ({"memory_id": mid,
+                                             "field": fld,
+                                             "offset": nxt}
+                                            if nxt else None)}
+                # our_words：按条目续取（cursor.item_offset；形状=数组）
+                ioff = _cur_int("item_offset")
+                rows = conn.execute(
+                    "SELECT w.speaker, w.text FROM memory_our_words w"
+                    " JOIN memories mm ON mm.memory_id=w.memory_id"
+                    " WHERE w.memory_id=? AND mm.visibility='active'",
+                    (mid,)).fetchall()
+                if ioff > len(rows):
+                    raise Forbidden("cursor.item_offset 超出条目范围",
+                                    code="INVALID_ARGUMENT",
+                                    got=ioff, total_items=len(rows))
+                _kept, _used, _nxt_item = [], 0, None
+                for i in range(ioff, len(rows)):
+                    r = rows[i]
+                    if _kept and _used + len(r["text"]) > _W:
+                        _nxt_item = i
+                        break
+                    _kept.append({"speaker": r["speaker"],
+                                  "text": r["text"]})
+                    _used += len(r["text"])
+                return {"snapshot_id": snapshot_id,
+                        "section": "memory_item", "memory_id": mid,
+                        "field": fld,
+                        "content_role": "bootstrap_memory_package",
+                        "instruction_authority": "none",
+                        "items": _kept, "item_offset": ioff,
+                        "total_items": len(rows),
+                        "next_cursor": ({"memory_id": mid, "field": fld,
+                                         "item_offset": _nxt_item}
+                                        if _nxt_item is not None
+                                        else None)}
 
             # i：正文分节续取（F16）——同事务读当前 I，超长默认包
             # 只给首节，warning 承诺的分节续取在这里兑现

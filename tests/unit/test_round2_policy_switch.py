@@ -385,3 +385,71 @@ class TestR08ContinuationGates:
         with pytest.raises(Forbidden) as ei:
             _round2(actors, sid)
         assert ei.value.code == "RECALL_POLICY_CHANGED"
+
+
+class TestRRA010OffRawFullText:
+    """RRA-010（D-2 落实）：off 模式 Round2 raw 卡交付获授权 Source
+    修订全文——长文翻尽拼回逐字一致，不再是命中窗口摘录。"""
+
+    def test_off_raw_full_text_delivered_across_pages(self, actors):
+        from mariposa.recall import paging as _pg
+        tail = "RA_RAW_TAIL_CANARY" + "尾" * 6000
+        body = "原文里的崧蓝染色记忆" + tail
+        _r1_scenario_off(actors, op="op-rra10")
+        # 用长正文重种 source（同 helper 逻辑但自定义文本）
+        from mariposa.source import importer
+        import json as _json, tempfile, pathlib
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        f = tmp / "rra10.json"
+        f.write_text(_json.dumps([{
+            "uuid": "c-rra10", "chat_messages": [{
+                "uuid": "rra10-m1", "sender": "human",
+                "created_at": "2026-09-20T10:00:00.000Z",
+                "content": [{"type": "text", "text": body}]}]}],
+            ensure_ascii=False), encoding="utf-8")
+        importer.import_file("jiaming", str(f))
+        sid = None
+        r2 = None
+        from mariposa.capabilities import registry as _reg
+        # 重新 start 使 round1 完成于长文在库后
+        set_policy(False)
+        r1 = _start(actors, terms=("崧蓝",), op="op-rra10b")
+        sid = r1["data"]["recall_session_id"]
+        r2 = _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT",
+                     op="op-rra10r2")
+        assert r2["ok"], _json.dumps(r2)[:200]
+        packet = r2["data"]
+        assert packet["judge_mode"] == "off"
+        rsid = packet["pagination"]["result_set_id"]
+        cursor = packet["pagination"].get("next_cursor")
+        # 按载体分别拼回（全文化后 excerpt 与 raw_verbatim 证据各是一份
+        # 全文载体，分片装配各自完整交付）
+        def _collect(page):
+            exc, ev0 = [], []
+            for c in page:
+                if c.get("excerpt"):
+                    exc.append(c["excerpt"])
+                fr = c.get("fragment") or {}
+                if fr.get("text"):
+                    if fr.get("kind") == "excerpt":
+                        exc.append(fr["text"])
+                    else:
+                        ev0.append(fr["text"])
+            return exc, ev0
+
+        exc, ev0 = _collect(packet["candidates"])
+        while cursor:
+            page = _pg.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid,
+                "cursor": cursor})
+            e2, v2 = _collect(page["candidates"])
+            exc += e2
+            ev0 += v2
+            cursor = page["pagination"].get("next_cursor")
+        # 顺序无关的全文交付断言：canary 可达（旧 bug=窗口截断不可达）
+        # + 尾部 6000 字全部到达 + 长文载体总量=全文（不是 67 字窗口）
+        joined = "".join(exc) + "".join(ev0)
+        assert "RA_RAW_TAIL_CANARY" in joined, "长文尾部 canary 可达"
+        assert joined.count("尾") >= 6000, "尾部 6000 字全部到达"
+        assert sum(len(x) for x in exc if len(x) > 100) >= len(body), \
+            "长文载体交付总量≥全文长度（不再只有命中窗口）"
