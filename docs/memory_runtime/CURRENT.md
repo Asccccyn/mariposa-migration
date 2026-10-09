@@ -99,7 +99,11 @@
     不重复业务执行、不新建 session、不重复消费预算、不产生第二份
     逻辑结果；**实际出站内容仍按当前权限、开关、版本与 Judge 状态
     重新校验**——Judge 已关闭时返回同一 operation 的
-    unavailable/空正文，不重新释放旧正文。payload 不同 →
+    unavailable/空正文，不重新释放旧正文（政策**切换**场景自
+    2026-10-08 §4.1 起为结构化 `RECALL_POLICY_CHANGED` 拒绝——
+    保存时模式与当前政策模式不一致即 fail-closed，不同形态混不进
+    同一结果集；本句适用于政策关闭态下新生成的 unavailable 结果，
+    D-1=A 2026-10-09 裁定）。payload 不同 →
     `REF_REUSE_MISMATCH`。未显式给 `operation_id` 时由 request_ref
     派生幂等键（schema 二选一）。
   - `continue_request_ref` 只表示"接着哪一个已交付的 revision 往下
@@ -283,10 +287,13 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   错误名放松 enum 校验。
 - **creation_mode 必填口径已定、分步实施**（F-J-22，2026-10-06 裁定口径）：
   ①迁移工具已显式 retrospective（历史导入不再是"当下记录"）；
-  ②公开合同面必填（schema required+estómago 工具面）**待下一批实施**——
-  实施前需先理清 input_schemas 的双源结构（内联 dict 与 load_schemas
-  返回不同 required 集，直接改内联不生效=假防护）。当下/补记由调用方
-  声明，宿主不猜；D1 当天自动日期保留不变。
+  ②公开合同面必填（schema required+estómago 工具面）**已实施**
+  （2026-10-08 收编）：memory.hold 的 required 集含 creation_mode
+  （capabilities/input_schemas.py:891-897），且 V2_INPUT_SCHEMAS 为
+  公开输入校验唯一运行时正本（schema_for 单源，:1339-1344；历史
+  execution_pack v1.1 schema 不再回退）——双源假防护问题随之消除。
+  estómago 绑定通道走同一 memory.hold 能力 schema，必填同权。
+  当下/补记由调用方声明，宿主不猜；D1 当天自动日期保留不变。
 - **当天记录自动日期**：`creation_mode="contemporaneous"` 且未显式给
   `memory_date` 的 hold，服务端在同一次正式提交事务内用 held_at 的
   上海业务日填充 `memory_date`（bootstrap 三日窗与 by_date 因此可见
@@ -344,6 +351,10 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-09（联合审计返修 WP-03，程知行 run-160858 执行包）：D-1=A
+  裁定收编——§4 重放段加政策切换交叉注（切换场景=RECALL_POLICY_CHANGED
+  结构化拒绝，off 态新生成 unavailable 语义保留）；§8.1 ②改「待下一批
+  实施」为已实施+落点（creation_mode 公开面必填、V2 单源 schema）。
 - 2026-10-08（`MANUAL_HANDOFF_JUDGE_SWITCH_V1`，江乔生裁定）：新增 §4.1
   判断总开关（持久政策正本、三态语义、关闭≠未配置、人类网页独占写权）；
   关闭模式全候选分页合同（memory.recall.page、冻结结果集、24576 字节/
