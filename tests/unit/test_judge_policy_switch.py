@@ -348,17 +348,19 @@ class TestP01FullCandidateSet:
         assert packet["pagination"]["returned_count"] <= 10
 
     def test_p03_long_text_fragment_reassembly(self, actors):
-        """P03：单候选正文超旧 600 字限与单页字节限 → 码点分片、
-        游标前进、拼回逐字等于获授权投影（retrieval_documents.
-        whitelist_body——现行 evidence 层同一正本，与判断开启路径
-        同源；不是 memory_versions 原文，投影层禁止回读）。"""
+        """P03（WP-06 6A，D-2 选 A）：单候选正文超旧 600 字限与单页
+        字节限 → 码点分片、游标前进、拼回逐字等于当前 revision 的
+        version_body 正本（memory_versions——她 2026-10-09 裁定关闭
+        模式=按原本格式给周家明，X16 标点/换行/说话人保真）。"""
         body = ("搬" * 9000) + ("家" * 9000) + "。"
-        hold(actors, body)
+        r = hold(actors, body)
         from mariposa import db as _db
         with _db.formal() as conn:
-            expected = conn.execute(
-                "SELECT whitelist_body FROM retrieval_documents"
-            ).fetchone()["whitelist_body"]
+            vrow = conn.execute(
+                "SELECT event_text, hold_text FROM memory_versions"
+                " WHERE memory_id=? AND version_no=1",
+                (r["memory_id"],)).fetchone()
+            expected = vrow["event_text"] or vrow["hold_text"]
         set_policy(False)
         packet = start(actors, terms=["搬家"], op="op-p03")
         entries, pages = walk_all_pages(actors["jiaming"], packet)

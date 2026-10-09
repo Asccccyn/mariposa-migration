@@ -92,7 +92,8 @@ class TestWordsDerivedCleanup:
         ow.append("jiaming", m["memory_id"],
                   [{"speaker": "qiaosheng", "text": "删除也要清的话语",
                     "expression_kind": "verbatim"}])
-        registry.invoke(actors["jiaming"], "maintenance.rebuild_index", {},
+        # WP-06 6B：rebuild 写面收敛 {qiaosheng,worker}（jiaming 不再可调）
+        registry.invoke(actors["qiaosheng"], "maintenance.rebuild_index", {},
                         None)
         with db.formal() as conn:
             n0 = conn.execute(

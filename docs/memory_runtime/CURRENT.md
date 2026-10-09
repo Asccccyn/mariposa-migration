@@ -271,6 +271,14 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   模型上下文边界时都必须能明确证明该页内容是 memory/data 且无
   instruction authority——页级 envelope 或统一 ContextAssembler
   包装均可；**不要求逐项复制 Recall 字段或 JSON 形状统一**。
+- **estomago 开窗近三日桶字段矩阵（D-6，她 2026-10-09 裁定）**：
+  estomago profile 的 memory_days 桶条目携带 **时间（memory_date）/
+  心情标签+心情文字（mood_text——撤销 D2/2026-10-06 的 estomago
+  排除）/事件正文（当前 revision 正本）/我们的话（our_words）**；
+  该桶在 memory_relations 存在任一 active 边时附 `relations` 摘要
+  （计数+关系类型标签去重，不带目标桶明细——明细走 relations.list，
+  维持 I 开窗最小化"按需显式读取"边界）；无边省略该键。非 estomago
+  profile 字段矩阵不变；出站体积联动 §4.3 的 24576 信封预算（A6）。
 - **I 开窗出站最小化（2026-10-04 三，乔生裁定）**：I 的条目/版本/
   历史/溯源机器在存储层全部保留，但开窗包（Bootstrap）的 i 段
   **只返回当前的话**，外加两个极简提示——有历史版本提示版本号
@@ -350,6 +358,13 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 批；v1.7 及更早的 recall 政策版本为历史）。
 
 ## 12. 变更记录
+
+- 2026-10-09（WP-06 裁定施工，五项她已裁）：D-2 选 A——off 模式全集
+  交付载体改当前 revision 的 version_body 正本（原文格式，X16 保真，
+  §4.3）；D-3 选 A——maintenance 写面收敛 {qiaosheng,worker}（jiaming
+  失去对账/重建写面，只读面保持三方）；D-4 选 A——MCP 分页类响应默认
+  content_envelope=single（线缆 ≤24576）；D-6——estomago 开窗桶字段
+  矩阵补全（见 §8 bootstrap 条目）。
 
 - 2026-10-09（联合审计返修 WP-03，程知行 run-160858 执行包）：D-1=A
   裁定收编——§4 重放段加政策切换交叉注（切换场景=RECALL_POLICY_CHANGED

@@ -755,18 +755,33 @@ def _run_round_compute(session: dict, plan: dict,
 
 
 def _expand_full_text(card: dict) -> None:
-    """关闭模式全量投影（§4.3）：事件正文换完整获授权文本。
+    """关闭模式全量投影（§4.3）：事件正文换完整获授权原文。
 
     旧 600 字 excerpt 是判断开启路径的有界交付裁剪；关闭模式的候选
-    全集分页要求"每条获授权内容全部可取得"——authored_event 证据的
-    snippet 换成完整 whitelist_body，truncated=False。words 卡的
-    word 文本本身即全文。legacy forgotten_summary 保持证据缺口语义
-    （无正文可展开，LEGACY_CONTENT_GAP 不冒充）。
+    全集分页要求"每条获授权内容全部可取得"。WP-06 6A（D-2 选 A，
+    她 2026-10-09 裁定"关闭=按原本格式给周家明"）：载体从归一化
+    whitelist_body 改为当前 revision 的 version_body（memory_versions
+    表示版本体系正本——原文标点/换行/说话人保真 X16）；权限口径
+    不变（version_body 本就是获授权面正本，与 whitelist 同门）。
+    words 卡的 word 文本本身即全文。legacy forgotten_summary 保持
+    证据缺口语义（无正文可展开，LEGACY_CONTENT_GAP 不冒充）。
     """
     if card.get("channel") != "event":
         return
-    row = card.get("_row") or {}
-    body = row.get("whitelist_body")
+    # 当前 revision 的 version_body 正本（memory.service.version_body
+    # 唯一解析入口：full=event_text 优先/旧数据回退 hold_text；
+    # forgotten_summary=compressed_summary——本函数下方对 forgotten
+    # 保持缺口语义，故这里只取 full 表示）
+    body = None
+    mid = card.get("memory_id")
+    if mid and card.get("content_version") is not None:
+        with db.formal() as conn:
+            vrow = conn.execute(
+                "SELECT event_text, hold_text FROM memory_versions"
+                " WHERE memory_id=? AND version_no=?",
+                (mid, int(card["content_version"]))).fetchone()
+        if vrow is not None:
+            body = vrow["event_text"] or vrow["hold_text"]
     if not body or card.get("representation") == "forgotten_summary":
         return
     for ev in card.get("evidence") or []:

@@ -376,3 +376,26 @@ class TestFifthRoundMetering:
             "被拒来源不得留成员记录"
         assert ("anon", "10.4.0.4") in gate._ovf_members, \
             "放行消费的来源记录粘性成员（原始键）"
+
+
+class Test6BOpsMaintainerSplit:
+    """WP-06 6B（D-3 选 A）：维护写面收敛 {qiaosheng,worker}——jiaming
+    失去对账/重建写面（只读面保持三方）。"""
+
+    def test_jiaming_blocked_on_ops_writes(self):
+        from mariposa.capabilities import registry as reg
+        for cap in ("maintenance.idempotency.reconcile",
+                    "maintenance.outbox.drain",
+                    "maintenance.rebuild_index",
+                    "maintenance.source.cleanup",
+                    "maintenance.semantic.warmup"):
+            assert reg.REGISTRY[cap].allowed_principals == {"qiaosheng", "worker"}, cap
+
+    def test_readers_keep_three_principals(self):
+        from mariposa.capabilities import registry as reg
+        for cap in ("maintenance.outbox.status",
+                    "maintenance.activity.list",
+                    "maintenance.jobs.status",
+                    "maintenance.settings.get"):
+            assert reg.REGISTRY[cap].allowed_principals == \
+                {"qiaosheng", "jiaming", "worker"}, cap

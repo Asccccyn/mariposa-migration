@@ -52,11 +52,18 @@ def _owners() -> set[str]:
     return {"qiaosheng", "jiaming"}
 
 
-def _maintainers() -> set[str]:
-    """P1-5（2026-10-02 接续复审）：maintenance 工具的授权集——
-    /mcp/maintenance profile 只放行 worker，而此前这些能力只授权
-    owners，形成死入口（owner 进不去、worker 拿不到）。owners 经
-    HTTP 仍可用，worker 经 maintenance profile 可用。"""
+def _ops_maintainers() -> set[str]:
+    """WP-06 6B（D-3 选 A，她 2026-10-09 裁定"维护不需要周家明"——
+    指模型侧 jiaming 不参与维护写面）：maintenance **写/对账/重建**
+    动作收敛为人类+维护 worker；jiaming（模型）失去 reconcile/
+    drain/rebuild/cleanup/warmup 写面（只读面见 _maintainers_readers）。
+    """
+    return {"qiaosheng", "worker"}
+
+
+def _maintainers_readers() -> set[str]:
+    """maintenance 只读面（status/list/settings.get）：三方可读——
+    维持既有 P1-5 死入口修复语义。"""
     return {"qiaosheng", "jiaming", "worker"}
 
 
@@ -178,7 +185,7 @@ def _register() -> dict[str, Capability]:
     # memory.restore、workspace.forgetting.*、workspace.proposals.*、
     # memory.forgetting.decide、workspace.review.*、memory.retention.decide、
     # workspace.memory.inspect 不再注册；旧请求获 UNKNOWN_CAPABILITY。
-    add("maintenance.idempotency.reconcile", _idem_reconcile, _maintainers(), True,
+    add("maintenance.idempotency.reconcile", _idem_reconcile, _ops_maintainers(), True,
         description="崩溃窗口对账：核实业务结果后清除 running 幂等占位")
     add("source.import", _source_import, _owners(), True, True,
         description="导入 Claude conversations 导出（.json/.zip；流式解析；"
@@ -304,11 +311,11 @@ def _register() -> dict[str, Capability]:
         description="关系纠错历史（只读；目标已删返回原始身份）")
     add("memory.relations.trace", _rel_trace, _owners(), False,
         description="沿 continuation_of 追事件链")
-    add("maintenance.outbox.drain", _outbox_drain, _maintainers(), True,
+    add("maintenance.outbox.drain", _outbox_drain, _ops_maintainers(), True,
         description="消费 outbox（至少一次+幂等标记）")
-    add("maintenance.outbox.status", _outbox_status, _maintainers(), False,
+    add("maintenance.outbox.status", _outbox_status, _maintainers_readers(), False,
         description="outbox 待处理统计")
-    add("maintenance.activity.list", _activity_list, _maintainers(), False,
+    add("maintenance.activity.list", _activity_list, _maintainers_readers(), False,
         description="审计查询（管理接口，不参与召回）")
     add("media.upload.prepare", _media_prepare, _owners(), True,
         description="申请上传 token（字节走专用 HTTP 端点，不进工具参数）")
@@ -323,18 +330,18 @@ def _register() -> dict[str, Capability]:
     add("memory.by_category", _by_category, _owners(), False,
         description="按分类直达（标题优先，不进召回）")
     add("memory.by_tag", _by_tag, _owners(), False, description="按标签查（结构化入口）")
-    add("maintenance.rebuild_index", _rebuild_index, _maintainers(), True,
+    add("maintenance.rebuild_index", _rebuild_index, _ops_maintainers(), True,
         description="按当前版本重建全部派生索引（旧投影+分字段+words+source）")
-    add("maintenance.source.cleanup", _source_cleanup, _maintainers(), True,
+    add("maintenance.source.cleanup", _source_cleanup, _ops_maintainers(), True,
         description="清理 Source 暂存残留（过期 staging/part 文件）；"
                     "返回清理计数")
-    add("maintenance.semantic.warmup", _semantic_warmup, _maintainers(), True,
+    add("maintenance.semantic.warmup", _semantic_warmup, _ops_maintainers(), True,
         description="全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）")
     add("presence.status", _presence_status, _everyone(), False,
         description="当前活动状态（三时间线概览）")
-    add("maintenance.jobs.status", _jobs_status, _maintainers(), False,
+    add("maintenance.jobs.status", _jobs_status, _maintainers_readers(), False,
         description="维护任务状态总览")
-    add("maintenance.settings.get", _settings_get, _maintainers(), False,
+    add("maintenance.settings.get", _settings_get, _maintainers_readers(), False,
         description="只读配置快照（时区/开窗/遗忘/provider 状态）")
     # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：召回判断总开关——
     # 持久正本在正式库；仅人类网页登录（qiaosheng）可写，模型/worker
