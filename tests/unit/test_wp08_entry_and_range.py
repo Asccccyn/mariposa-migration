@@ -237,3 +237,64 @@ class TestPolicyWriteRealWebLogin:
                 headers={"Authorization": f"Bearer {web_tok}"})
             assert upd.status_code == 200, upd.text
             assert upd.json()["data"]["mode"] == "off"
+
+
+class TestRRAFollowUpWebMcpAndNull:
+    """RRA-001/009（回访 2026-10-09 run-035424）：web 令牌经 MCP 面的
+    政策写收口（发现+执行）+ model_id 显式 null 清空合同。"""
+
+    def test_web_token_mcp_face_neither_lists_nor_calls(self, actors):
+        """同一 web 令牌：REST 面可写（正门保持），MCP 面 tools/list 不
+        导出政策写工具、tools/call 明确拒绝且政策行不动。"""
+        from mariposa.app import app
+        from fastapi.testclient import TestClient
+        import mariposa.oauth as _oauth
+        _oauth.set_password("qiaosheng", "rra1-mcp-pw")
+        with TestClient(app, raise_server_exceptions=False) as c:
+            login = c.post("/oauth/token", data={
+                "grant_type": "password", "password": "rra1-mcp-pw"})
+            assert login.status_code == 200, login.text
+            tok = login.json()["access_token"]
+            headers = {"Authorization": f"Bearer {tok}"}
+            listed = c.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            names = [t["name"] for t in
+                     listed.json().get("result", {}).get("tools", [])]
+            assert "mariposa_maintenance_recall_policy_update" \
+                not in names, "MCP 面不导出政策写工具（发现收口）"
+            assert "mariposa_maintenance_recall_policy_get" in names, \
+                "只读 GET 工具保持导出（收口仅政策写）"
+            rev_before = judge_policy.get_policy()["revision"]
+            mcp = c.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "mariposa_maintenance_recall_policy_update",
+                    "arguments": {"expected_revision": rev_before,
+                                  "enabled": False,
+                                  "idempotency_key": "rra1-mcp"}}})
+            body = mcp.json()
+            assert body.get("error", {}).get("code") == -32002, \
+                f"MCP 面调用必须明确拒绝：{body}"
+            assert judge_policy.get_policy()["revision"] == rev_before, \
+                "被拒调用不得推进政策行"
+
+    def test_model_id_absent_preserves_and_explicit_null_clears(
+            self, actors):
+        """RRA-009（回访）：缺省=保留现值（enabled-only / 换 provider 均
+        不顺带动模型）；显式 null=清空模型且不动 provider。"""
+        web = actors["web"]
+        out1 = registry.invoke(web, "maintenance.recall_policy.update", {
+            "expected_revision": judge_policy.get_policy()["revision"],
+            "enabled": True, "provider": "typesafe_jev",
+            "model_id": "CHOSEN_MODEL"}, None)["data"]
+        assert out1["model_id"] == "CHOSEN_MODEL"
+        out2 = registry.invoke(web, "maintenance.recall_policy.update", {
+            "expected_revision": out1["revision"],
+            "enabled": False}, None)["data"]
+        assert out2["provider"] == "typesafe_jev"
+        assert out2["model_id"] == "CHOSEN_MODEL", "缺省=保留现值"
+        out3 = registry.invoke(web, "maintenance.recall_policy.update", {
+            "expected_revision": out2["revision"], "enabled": False,
+            "model_id": None}, None)["data"]
+        assert out3["provider"] == "typesafe_jev", "仅清模型不清 provider"
+        assert out3["model_id"] is None, "显式 null=清空（此前未兑现）"

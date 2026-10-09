@@ -106,18 +106,21 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                                          last_id or "",
                                          BOOT_SECTION_LIMIT)).fetchall()
                 # D2（2026-10-06）+R14：分页与首页同 profile（身份检查
-                # 已统一前置；此处仅按快照 profile 装配内容）
-                items = [_memory_slim(conn, r["memory_id"],
-                                      profile=_snap_profile
-                                      or "claude_chat")
-                         for r in rows]
+                # 已统一前置；此处仅按快照 profile 装配内容）。
+                # RRA-006（回访 2026-10-09）：续页与首页共用字节预算装桶
+                # （此前续页按条数装页无预算，5 桶 31250B 击穿 24576）；
+                # 游标取**最后已服务行**（严格 > 从未服务桶继续）
+                from .core import _pack_memory_rows
+                items, overflow = _pack_memory_rows(
+                    conn, rows,
+                    profile=_snap_profile or "claude_chat")
                 total = conn.execute(
                     "SELECT COUNT(*) AS c FROM memories WHERE"
                     " visibility='active' AND memory_date IN (?,?,?)",
                     tuple(three_days)).fetchone()["c"]
                 nxt = None
-                if len(items) >= BOOT_SECTION_LIMIT:
-                    last = rows[-1]
+                if overflow is not None or len(rows) >= BOOT_SECTION_LIMIT:
+                    last = rows[len(items) - 1]
                     nxt = {"memory_before_date": last["memory_date"],
                            "memory_last_id": last["memory_id"]}
                 return {"snapshot_id": snapshot_id,
@@ -193,8 +196,11 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                                              "field": fld,
                                              "offset": nxt}
                                             if nxt else None)}
-                # our_words：按条目续取（cursor.item_offset；形状=数组）
+                # our_words：按条目续取（cursor.item_offset/char_offset；
+                # 形状=数组。RRA-006 回访 2026-10-09：单条超宽经
+                # char_offset 条内字符续取——_section_words 与首页同口径）
                 ioff = _cur_int("item_offset")
+                coff = _cur_int("char_offset")
                 rows = conn.execute(
                     "SELECT w.speaker, w.text FROM memory_our_words w"
                     " JOIN memories mm ON mm.memory_id=w.memory_id"
@@ -204,24 +210,20 @@ def next_page(principal_id: str, entry_source: str, snapshot_id: str,
                     raise Forbidden("cursor.item_offset 超出条目范围",
                                     code="INVALID_ARGUMENT",
                                     got=ioff, total_items=len(rows))
-                _kept, _used, _nxt_item = [], 0, None
-                for i in range(ioff, len(rows)):
-                    r = rows[i]
-                    if _kept and _used + len(r["text"]) > _W:
-                        _nxt_item = i
-                        break
-                    _kept.append({"speaker": r["speaker"],
-                                  "text": r["text"]})
-                    _used += len(r["text"])
+                from .core import _section_words
+                _kept, _nxt_item, _nxt_char = _section_words(
+                    rows, ioff, coff)
                 return {"snapshot_id": snapshot_id,
                         "section": "memory_item", "memory_id": mid,
                         "field": fld,
                         "content_role": "bootstrap_memory_package",
                         "instruction_authority": "none",
                         "items": _kept, "item_offset": ioff,
+                        "char_offset": coff,
                         "total_items": len(rows),
                         "next_cursor": ({"memory_id": mid, "field": fld,
-                                         "item_offset": _nxt_item}
+                                         "item_offset": _nxt_item,
+                                         "char_offset": _nxt_char}
                                         if _nxt_item is not None
                                         else None)}
 
