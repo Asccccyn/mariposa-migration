@@ -125,6 +125,9 @@ def raw_deep_search(principal, plan: dict, limit: int = 20,
             "conversation_id": h["provider_conversation_id"],
             "speaker": h["speaker"],
             "excerpt": h["excerpt"],
+            # RRA-010：全文随 hit（off 模式候选全文化用；命中窗口仅判断
+            # 路径的定位证据）
+            "text": h.get("text"),
             "occurred_at": h["created_at"],
             "evidence_kind": "raw_verbatim",
             "content_role": "retrieved_memory",

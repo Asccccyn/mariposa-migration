@@ -166,15 +166,21 @@ def _verify_segments_tx(conn, raw) -> list[dict]:
                     f"segment[{i}].{label} 超出成员文本范围（码点半开区间）",
                     code="EPISODE_SOURCE_OFFSET", value=repr(off),
                     text_len=len(text))
-        # WP-08（CX-05/C-011）：同段 start<end（Source 绑定码点半开区间
-        # 不变量同式）——start≥end 是反向/空片段，不得受理成 revision
+        # WP-08（CX-05/C-011）+RRA-002（2026-10-09 复审）：start<end 只在
+        # 首末成员为**同一消息**时成立（同一坐标轴）——start 偏移属于首
+        # 成员文本、end 偏移属于末成员文本（Source 绑定口径），跨消息
+        # 片段各偏移只需各自界内且成员路径有序；跨消息时比较两个局部
+        # 坐标是误拒合法片段（如 first offset7 + last offset2）
         s_off = seg.get("start_char_offset")
         e_off = seg.get("end_char_offset")
-        if s_off is not None and e_off is not None and not (s_off < e_off):
-            raise Forbidden(
-                f"segment[{i}] start_char_offset 必须 < "
-                "end_char_offset（码点半开区间）", code="INVALID_RANGE",
-                start=s_off, end=e_off)
+        if s_off is not None and e_off is not None:
+            first_mid = members[0]["source_message_id"]
+            last_mid = members[-1]["source_message_id"]
+            if first_mid == last_mid and not (s_off < e_off):
+                raise Forbidden(
+                    f"segment[{i}] start_char_offset 必须 < "
+                    "end_char_offset（同一消息的码点半开区间）",
+                    code="INVALID_RANGE", start=s_off, end=e_off)
         item = {"conversation_id": conv, "members": members}
         for k in ("start_char_offset", "end_char_offset"):
             if seg.get(k) is not None:
@@ -238,15 +244,21 @@ def _validate_segments(raw) -> list[dict]:
                 raise Forbidden(
                     f"segment[{i}] member 缺 source_message_id/content_hash",
                     code="INVALID_ARGUMENT")
-        # WP-08（CX-05/C-011）：同段 start<end（Source 绑定码点半开区间
-        # 不变量同式）——start≥end 是反向/空片段，不得受理成 revision
+        # WP-08（CX-05/C-011）+RRA-002（2026-10-09 复审）：start<end 只在
+        # 首末成员为**同一消息**时成立（同一坐标轴）——start 偏移属于首
+        # 成员文本、end 偏移属于末成员文本（Source 绑定口径），跨消息
+        # 片段各偏移只需各自界内且成员路径有序；跨消息时比较两个局部
+        # 坐标是误拒合法片段（如 first offset7 + last offset2）
         s_off = seg.get("start_char_offset")
         e_off = seg.get("end_char_offset")
-        if s_off is not None and e_off is not None and not (s_off < e_off):
-            raise Forbidden(
-                f"segment[{i}] start_char_offset 必须 < "
-                "end_char_offset（码点半开区间）", code="INVALID_RANGE",
-                start=s_off, end=e_off)
+        if s_off is not None and e_off is not None:
+            first_mid = members[0]["source_message_id"]
+            last_mid = members[-1]["source_message_id"]
+            if first_mid == last_mid and not (s_off < e_off):
+                raise Forbidden(
+                    f"segment[{i}] start_char_offset 必须 < "
+                    "end_char_offset（同一消息的码点半开区间）",
+                    code="INVALID_RANGE", start=s_off, end=e_off)
         item = {"conversation_id": conv, "members": members}
         for k in ("start_char_offset", "end_char_offset"):
             if seg.get(k) is not None:

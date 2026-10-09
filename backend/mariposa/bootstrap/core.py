@@ -25,6 +25,8 @@ BOOT_I_SECTION_CHARS = 2000
 # 裁定（2026-10-04）：Plan 允许长正文、存在真实预算风险——与 I 同款
 # 分节/续取（mood 不是长内容载体，不做）
 BOOT_PLAN_SECTION_CHARS = BOOT_I_SECTION_CHARS
+#: RRA-006（2026-10-09 复审）：estomago 桶事件/话语正文分节宽度（码点）
+BOOT_MEMITEM_SECTION_CHARS = BOOT_I_SECTION_CHARS
 
 _ENTRY_ALLOWED = {
     "claude_chat": {"claude_chat"},
@@ -69,7 +71,12 @@ def _state_hash(conn) -> str:
             # 合本体（排序拼接防顺序漂移）
             ("memory_moods", "captured_at", ""),
             ("memory_categories", "created_at", ""),
-            ("i_revision_memory_relations", "created_at", "")):
+            ("i_revision_memory_relations", "created_at", ""),
+            # RRA-005（2026-10-09 复审）：D-6 开窗输出新增依赖 our_words
+            # 与关系边——两者写入不触 memories.updated_at，COUNT/MAX
+            # 指纹完全不感知（追加话语/建关系后旧 snapshot 仍 unchanged）
+            ("memory_our_words", "created_at", ""),
+            ("memory_relations", "created_at", "")):
         row = conn.execute(
             f"SELECT COUNT(*) AS c, MAX({time_col}) AS m {extra} FROM {table}"
         ).fetchone()
@@ -105,6 +112,22 @@ def _three_day_window(tz) -> tuple:
     today = datetime.now(timezone.utc).astimezone(tz).date()
     return today, [(today - timedelta(days=i)).isoformat()
                    for i in range(BOOT_MEMORY_DAYS)]
+
+
+def _section_body(item: dict, memory_id: str, field: str,
+                   full: str) -> None:
+    """RRA-006：estomago 桶正文载体分节——首节入 item，超宽给
+    truncated/total_chars/next_cursor（bootstrap.next section=
+    memory_item 续取；短文整带）。"""
+    width = BOOT_MEMITEM_SECTION_CHARS
+    if len(full) <= width:
+        item[field] = full
+        return
+    item[field] = full[:width]
+    item[f"{field}_truncated"] = True
+    item[f"{field}_total_chars"] = len(full)
+    item[f"{field}_next"] = {"memory_id": memory_id, "field": field,
+                             "offset": width}
 
 
 def _memory_slim(conn, memory_id: str,
@@ -144,6 +167,9 @@ def _memory_slim(conn, memory_id: str,
         item["mood_tags"] = []
         item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）
     if profile == "estomago":
+        # RRA-006：事件/话语正文按码点分节（首节+truncated+续取
+        # cursor——完整内容经 bootstrap.next section=memory_item 续取，
+        # 不静默裁剪；短文整带无 cursor）
         vv = conn.execute(
             "SELECT event_text, hold_text FROM memory_versions"
             " WHERE memory_id=? AND version_no=?",
@@ -151,16 +177,35 @@ def _memory_slim(conn, memory_id: str,
         if vv is not None:
             _body = vv["event_text"] or vv["hold_text"]
             if _body:
-                item["event_text"] = _body
+                _section_body(item, memory_id, "event_text", _body)
         _words = conn.execute(
             "SELECT w.speaker, w.text FROM memory_our_words w"
             " JOIN memories mm ON mm.memory_id=w.memory_id"
             " WHERE w.memory_id=? AND mm.visibility='active'",
             (memory_id,)).fetchall()
         if _words:
-            item["our_words"] = [
-                {"speaker": w["speaker"], "text": w["text"]}
-                for w in _words]
+            # RRA-006：话语按**条目**分节（保持数组形状——消费端
+            # w.speaker/w.text 不变）；超宽给 truncated/next（续取
+            # section=memory_item 返回剩余条目数组）
+            _budget = BOOT_MEMITEM_SECTION_CHARS
+            _kept, _used, _offset = [], 0, 0
+            for i, w in enumerate(_words):
+                _len = len(w["text"])
+                if _kept and _used + _len > _budget:
+                    _offset = i
+                    break
+                _kept.append({"speaker": w["speaker"],
+                              "text": w["text"]})
+                _used += _len
+            else:
+                _offset = None
+            item["our_words"] = _kept
+            if _offset is not None:
+                item["our_words_truncated"] = True
+                item["our_words_total_items"] = len(_words)
+                item["our_words_next"] = {
+                    "memory_id": memory_id, "field": "our_words",
+                    "item_offset": _offset}
         _edges = conn.execute(
             "SELECT relation_type FROM memory_relations"
             " WHERE from_memory=? OR to_memory=?",

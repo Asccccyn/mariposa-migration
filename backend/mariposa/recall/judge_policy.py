@@ -87,12 +87,24 @@ def ensure_bootstrapped() -> None:
                     " VALUES(1, 1, 1, ?, NULL, '{}',"
                     " 'system:env_import', ?)", (provider, _now()))
             else:
+                # RRA-008（2026-10-09 复审）：env 跟随更新（部署后补配的
+                # 升级路径）必须构成新纪元——provider 变化升 revision 并
+                # 记 history（政策纪元=mode+revision，同 mode 换 provider
+                # 也是切换；此前不升 revision 使旧纪元 fencing 失效）
                 conn.execute(
-                    "UPDATE recall_judge_policy SET provider=?,"
-                    " updated_at=? WHERE id=1"
+                    "UPDATE recall_judge_policy SET revision=revision+1,"
+                    " provider=?, updated_at=? WHERE id=1"
                     " AND updated_by='system:env_import'",
                     (provider, _now()))
-            # OR IGNORE：env 重导入（部署后补配）不重复记 bootstrap 幂等行
+                conn.execute(
+                    "INSERT INTO recall_judge_policy_history("
+                    "revision, enabled, provider, model_id, changed_by,"
+                    " idempotency_key, created_at)"
+                    " SELECT revision, enabled, provider, model_id,"
+                    " 'system:env_import', NULL, ?"
+                    " FROM recall_judge_policy WHERE id=1",
+                    (_now(),))
+            # OR IGNORE：env 首次种入不重复记 bootstrap 幂等行
             conn.execute(
                 "INSERT OR IGNORE INTO recall_judge_policy_history("
                 "revision, enabled, provider, model_id, changed_by,"
@@ -139,15 +151,22 @@ def get_policy() -> dict:
         allowed = {}
         degraded.append("policy_allowed_data_invalid")
     out["allowed_data"] = allowed
-    if out["enabled"] is False:
+    # RRA-007（2026-10-09 复审）：坏 allowed_data 行 fail-closed——
+    # degraded 里含 policy_allowed_data_invalid/policy_revision_invalid
+    # 时按 unconfigured 阻断正文（红线 1"坏行 degraded fail-closed"），
+    # 不是警告后继续；off（明确人类记录）不受影响
+    _row_invalid = any(d in ("policy_allowed_data_invalid",
+                             "policy_revision_invalid")
+                       for d in degraded)
+    if out["enabled"] is False and not _row_invalid:
         # 唯一合法"关闭"形态：明确人类记录。provider 配置保留展示
         #（关开关不销毁所选 provider 配置），但不再被构造/调用。
         out["mode"] = "off"
-    elif _provider_known(out["provider"]):
+    elif _provider_known(out["provider"]) and not _row_invalid:
         out["mode"] = "on"
     else:
-        # enabled=1 但 provider 缺失/未知 → 未配置（阻断），不是关闭；
-        # 未知 provider 名也不被解释成关闭直出（J05）
+        # enabled=1 但 provider 缺失/未知/行损坏 → 未配置（阻断），
+        # 不是关闭；未知 provider 名也不被解释成关闭直出（J05）
         out["mode"] = "unconfigured"
         if out["provider"]:
             degraded.append(f"provider_unknown:{out['provider']}")
@@ -167,8 +186,18 @@ def effective() -> dict:
     return p
 
 
+class _Unset:
+    """RRA-009：字段缺省哨兵——enabled-only 更新不清 provider/model。"""
+
+    def __repr__(self):
+        return "<unset>"
+
+
+UNSET = _Unset()
+
+
 def update_policy(principal_id: str, *, expected_revision: int,
-                  enabled: bool, provider: str | None,
+                  enabled: bool, provider=UNSET,
                   model_id: str | None = None,
                   idempotency_key: str | None = None) -> dict:
     """人类政策写入（CAS + 幂等 + 审计；仅 qiaosheng，能力层同权校验）。
@@ -178,13 +207,28 @@ def update_policy(principal_id: str, *, expected_revision: int,
     - provider 写侧白名单：None 或 KNOWN_PROVIDERS；未知名拒绝，
       不落坏行再靠读侧兜底；
     - 相同 idempotency_key 重复提交只应用一次（重放返回已生效政策）；
-    - 关闭（enabled=False）保留 provider/model_id 值——重开时配置还在。
+    - 关闭（enabled=False）保留 provider/model_id 值——重开时配置还在；
+    - RRA-009（2026-10-09 复审）：provider/model_id 缺省（UNSET 哨兵）
+      =不改现值；显式 None=清空（公开合同两形态分明，仅切开关不再
+      顺带销毁所选配置——红线 3"关开关不销毁 provider 配置"）。
     """
     if principal_id != "qiaosheng":
         raise Forbidden(
             "召回判断政策仅人类网页登录（qiaosheng）可写；模型与 "
             "worker 无切换权", code="FORBIDDEN", principal=principal_id)
-    if provider is not None and not _provider_known(provider):
+    _cur_row = None
+    with db.formal() as conn:
+        _cur_row = conn.execute(
+            "SELECT provider, model_id FROM recall_judge_policy"
+            " WHERE id=1").fetchone()
+    if provider is UNSET:
+        provider = _cur_row["provider"] if _cur_row else None
+        if enabled and provider is None:
+            raise Forbidden(
+                "开启判断必须选择 provider（先配 provider 再开，或保持"
+                "关闭；本次未携带 provider 且现值未配置）",
+                code="INVALID_ARGUMENT")
+    elif provider is not None and not _provider_known(provider):
         # 生产写侧实际白名单=KNOWN_PROVIDERS（_INJECTED 恒空）；
         # 测试注入的 fake 经 register_for_tests 后可被选为政策 provider
         raise Forbidden(
@@ -194,6 +238,11 @@ def update_policy(principal_id: str, *, expected_revision: int,
         raise Forbidden(
             "开启判断必须选择 provider（先配 provider 再开，或保持关闭）",
             code="INVALID_ARGUMENT")
+    if model_id is None and provider is not UNSET and _cur_row \
+            and _cur_row["model_id"]:
+        # model_id 缺省且本次非 enabled-only（显式带了 provider）→
+        # 保留现值（避免换 provider 时顺带清模型选择）
+        model_id = _cur_row["model_id"]
     ensure_bootstrapped()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")

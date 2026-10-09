@@ -129,7 +129,13 @@ class TestEpisodeRangeInvariant:
         """T2（CX-05）：start≥end 全矩阵拒（INVALID_RANGE，不落
         revision）；正常区间保持；单端缺省不受新不变量误伤。"""
         from mariposa.episodes import service as ep
+        import hashlib
+        from mariposa.identity import Principal as _P
+        from mariposa.source import ingest as live
         fx = _make_episode_fixture()
+        worker = _P("worker", "w", "agent", "estomago_archive",
+                    "binding_wp08_ep",
+                    capabilities_allowlist=frozenset(["source.ingest"]))
 
         def seg(start=None, end=None):
             out = {"conversation_id": fx["conversation_id"],
@@ -153,3 +159,81 @@ class TestEpisodeRangeInvariant:
             # 单端/缺省不受新不变量误伤（既有语义）
             out2 = ep._verify_segments_tx(conn, seg(end=4))
             assert "start_char_offset" not in out2[0]
+            # RRA-002：跨消息片段（首成员 offset7 起 + 末成员 offset2
+            # 止）是合法坐标（两个局部轴各自界内）——不按同一轴比较
+            ack2 = live.ingest(worker, {
+                "operation_id": "wp8-ep-src-2", "stream_id": "stream_wp08",
+                "origin_instance": "estomago",
+                "origin_conversation_id": "room-wp08",
+                "messages": [{
+                    "origin_message_id": "wp8-m2", "revision": 1,
+                    "previous_revision": None,
+                    "conversation_sequence": 2, "predecessor": None,
+                    "sender": "assistant",
+                    "published_kind": "chat_message",
+                    "occurred_at": "2026-10-07T02:00:00Z",
+                    "received_at": "2026-10-07T02:00:00Z",
+                    "published_at": "2026-10-07T02:00:00Z",
+                    "text": "0123456789", "assets": [],
+                    "content_hash": hashlib.sha256(
+                        "0123456789".encode()).hexdigest()}]})
+            ack3 = live.ingest(worker, {
+                "operation_id": "wp8-ep-src-3", "stream_id": "stream_wp08",
+                "origin_instance": "estomago",
+                "origin_conversation_id": "room-wp08",
+                "messages": [{
+                    "origin_message_id": "wp8-m3", "revision": 1,
+                    "previous_revision": None,
+                    "conversation_sequence": 3,
+                    "predecessor": None, "sender": "user",
+                    "published_kind": "chat_message",
+                    "occurred_at": "2026-10-07T03:00:00Z",
+                    "received_at": "2026-10-07T03:00:00Z",
+                    "published_at": "2026-10-07T03:00:00Z",
+                    "text": "abcdefghij", "assets": [],
+                    "content_hash": hashlib.sha256(
+                        "abcdefghij".encode()).hexdigest()}]})
+            cross = [{
+                "conversation_id": fx["conversation_id"],
+                "members": [
+                    {"source_message_id": ack2["messages"][0][
+                        "source_message_id"],
+                     "content_hash": ack2["messages"][0]["content_hash"]},
+                    {"source_message_id": ack3["messages"][0][
+                        "source_message_id"],
+                     "content_hash": ack3["messages"][0]["content_hash"]}],
+                "start_char_offset": 7, "end_char_offset": 2}]
+            out3 = ep._verify_segments_tx(conn, cross)
+            assert out3[0]["start_char_offset"] == 7
+            assert out3[0]["end_char_offset"] == 2, \
+                "跨消息两个局部坐标不做同轴比较（RRA-002）"
+
+
+class TestPolicyWriteRealWebLogin:
+    """RRA-001：真实签发链验证——password grant（网页登录）可写政策；
+    authorization_code/refresh（MCP 绑定流）同主体拒。"""
+
+    def test_password_grant_can_write(self, actors):
+        """真实签发链：set_password → password grant（entry=web）→
+        真实鉴权调用政策写 200（RRA-001 复验入口）。"""
+        from mariposa.app import app
+        from fastapi.testclient import TestClient
+        from mariposa.recall import judge_policy as _jp
+        import mariposa.oauth as _oauth
+        _oauth.set_password("qiaosheng", "wp8-real-web-pw")
+        with TestClient(app, raise_server_exceptions=False) as c:
+            r = c.post("/oauth/token", data={
+                "grant_type": "password",
+                "password": "wp8-real-web-pw"})
+            assert r.status_code == 200, r.text
+            web_tok = r.json()["access_token"]
+            cur = _jp.get_policy()["revision"]
+            upd = c.post(
+                "/api/capability/maintenance.recall_policy.update",
+                json={"arguments": {
+                    "expected_revision": cur, "enabled": False,
+                    "provider": None,
+                    "idempotency_key": "wp8-real-web"}},
+                headers={"Authorization": f"Bearer {web_tok}"})
+            assert upd.status_code == 200, upd.text
+            assert upd.json()["data"]["mode"] == "off"

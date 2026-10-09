@@ -517,6 +517,8 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
             "matched_fields": ["raw_messages"],
             "excerpt": h.get("excerpt"),
             "speaker": h.get("speaker"),
+            # RRA-010：全文随卡（_row 出站前剥离；off 模式展开为正文）
+            "_row": {"text": h.get("text")},
             "evidence": [evidence_mod.make_evidence(
                 "raw_verbatim", "raw_messages", h.get("excerpt") or "",
                 h["resource_ref"])],
@@ -529,6 +531,12 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
                            store.rejected_resource_refs(sid),
                            judge_required=policy["judge_required"])
     if policy["mode"] == "off":
+        # RRA-010（D-2 落实）：off 模式 raw 卡换获授权 Source 修订全文
+        #（此前只有命中窗口 excerpt 且假标 truncated=false——关闭=按
+        # 原本格式给周家明，全文经冻结分页逐页可取，长文码点分片）
+        from .service import _expand_raw_full_text
+        for c in sel["delivered"]:
+            _expand_raw_full_text(c)
         # 关闭模式（§4.4/R05）：本批候选全集冻结为分页结果集——上游
         # raw 游标推进以"本批全部可交付"（已冻结可逐页取）为前提；
         # 交付分页游标与上游 raw_search 续页分槽（R06）。

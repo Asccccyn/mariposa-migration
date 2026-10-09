@@ -754,6 +754,26 @@ def _run_round_compute(session: dict, plan: dict,
     return packet, effects
 
 
+def _expand_raw_full_text(card: dict) -> None:
+    """off 模式 raw 卡全文化（RRA-010，D-2"按原本格式"落实）。
+
+    excerpt 命中窗口与 raw_verbatim 证据换获授权 Source 修订全文
+    （_row.text，随检索命中携带；_finalize_cards/project_card 出站前
+    剥离 _row）；分页装配器对超长载体按码点分片，翻尽=全文。
+    """
+    if card.get("channel") != "raw":
+        return
+    full = (card.get("_row") or {}).get("text")
+    if not full:
+        return
+    card["excerpt"] = full
+    card["truncated"] = False
+    for ev in card.get("evidence") or []:
+        if ev.get("evidence_kind") == "raw_verbatim":
+            ev["snippet"] = full
+            ev["truncated"] = False
+
+
 def _expand_full_text(card: dict) -> None:
     """关闭模式全量投影（§4.3）：事件正文换完整获授权原文。
 

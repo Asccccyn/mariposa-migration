@@ -380,7 +380,10 @@ class TestCR01R1ReplayRoleGate:
                                  None)["data"]
             assert len(r1["candidates"]) == 1
             # 撤回 event_excerpt：fresh 与旧 operation 重放同权 0 卡
-            cfg.RECALL_JUDGE_PROVIDER = "g_narrow"
+            # RRA-008 后语义：换 provider 名=政策新纪元（重放按
+            # RECALL_POLICY_CHANGED 拒——正确行为）。本测语义=同 provider
+            # 许可缩权：同名重注册窄许可实例，env 不动（纪元不变）
+            self._register("g_full", {"title_cue"})
             fresh = registry.invoke(actors["jiaming"],
                                     "memory.recall.start",
                                     {**plan, "operation_id": "cr01-fresh"},
@@ -423,7 +426,7 @@ class TestCR01R1ReplayRoleGate:
                                  {**plan, "operation_id": "cr01w-op"},
                                  None)["data"]
             assert len(r1["candidates"]) == 1
-            cfg.RECALL_JUDGE_PROVIDER = "gw_narrow"
+            self._register("gw_full", {"event_excerpt"})
             fresh = registry.invoke(actors["jiaming"],
                                     "memory.recall.start",
                                     {**plan, "operation_id":

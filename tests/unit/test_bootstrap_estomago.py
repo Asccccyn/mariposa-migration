@@ -158,3 +158,107 @@ class TestEstomagoRelationsSummary:
         assert "to_memory" not in str(rel), "不带目标桶明细"
         assert "relations" in by_mid[r2["memory_id"]], \
             "双向端都见到边（from OR to 对称计数）"
+
+
+class TestRRA005StateHashCoversD6:
+    def test_word_and_relation_change_invalidate_snapshot(self, jiaming):
+        """RRA-005：D-6 新增输出依赖（our_words/memory_relations）写入后
+        旧 snapshot 必须失效（loaded_snapshot_id 复用返回 SNAPSHOT_STALE
+        语义——unchanged=true 不得再出现）。"""
+        from mariposa.memory import service as mem
+        r = _hold_with_mood(0)
+        pack1 = bootstrap.get("jiaming", "estomago", "estomago")
+        snap = pack1["snapshot_id"]
+        # 追加 our_words（不触 memories.updated_at）
+        mem.hold(
+            identity.Principal("jiaming", "周家明", "agent",
+                               "estomago", "bj"),
+            text="追加话语的事件正文", original_title="追加话语",
+            categories=["sweet"], creation_mode="contemporaneous",
+            our_words=[{"speaker": "qiaosheng", "text": "NEW_WORD_CANARY",
+                        "expression_kind": "verbatim"}],
+            raw_pending=False)
+        from mariposa.errors import SnapshotStale as _Stale
+        try:
+            bootstrap.get("jiaming", "estomago", "estomago",
+                          loaded_snapshot_id=snap)
+            raise AssertionError("话语写入后旧快照必须失效（不得 unchanged）")
+        except _Stale:
+            pass  # RRA-005：显式 SNAPSHOT_STALE（比 unchanged=False 更强）
+        # 建关系边（同因）
+        pack3 = bootstrap.get("jiaming", "estomago", "estomago")
+        snap3 = pack3["snapshot_id"]
+        with db.formal() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO memory_relations(from_memory, to_memory,"
+                " relation_type, created_by, created_at)"
+                " VALUES(?,?,?,?,datetime('now'))",
+                (r["memory_id"], pack3["memory_days"]["items"][-1][
+                    "memory_id"], "related", "jiaming"))
+            conn.execute("COMMIT")
+        try:
+            bootstrap.get("jiaming", "estomago", "estomago",
+                          loaded_snapshot_id=snap3)
+            raise AssertionError("关系边写入后旧快照必须失效")
+        except _Stale:
+            pass
+
+
+class TestRRA006BudgetAndSectioning:
+    def _big_hold(self, actors_unused=None):
+        import mariposa.identity.service as ids
+        return memory.hold(
+            ids.Principal("jiaming", "周家明", "agent", "estomago", "bj"),
+            text="事" * 11000, original_title="巨桶",
+            categories=["sweet"], creation_mode="contemporaneous",
+            our_words=[{"speaker": "qiaosheng",
+                        "text": "话" * 1500,
+                        "expression_kind": "verbatim"}] * 2,
+            raw_pending=False)
+
+    def test_full_envelope_within_budget_and_spliceable(self, jiaming):
+        """RRA-006：estomago 大桶（11k 字 event+3k 字 words）——整包
+        ≤24576；event/words 分节标记+续取拼回完整。"""
+        import json as _json
+        r = self._big_hold()
+        pack = bootstrap.get("jiaming", "estomago", "estomago")
+        blob = len(_json.dumps(pack, ensure_ascii=False,
+                               separators=(",", ":")).encode("utf-8"))
+        assert blob <= 24576, f"整包 {blob}B 击穿 24576 信封预算"
+        items = pack["memory_days"]["items"]
+        assert items, "大桶条目在首页（分节后有界）"
+        it = next(x for x in items if x["memory_id"] == r["memory_id"])
+        assert it.get("event_text_truncated") is True, "长 event 标记截断"
+        assert it.get("event_text_total_chars") == 11000
+        # 续取拼回完整（event_text）
+        cur = it.get("event_text_next")
+        parts = [it["event_text"]]
+        while cur:
+            pg = bootstrap.next_page("jiaming", "estomago",
+                                     pack["snapshot_id"], cur,
+                                     "memory_item")
+            parts.append(pg["content"])
+            cur = pg.get("next_cursor")
+        assert "".join(parts) == "事" * 11000, "event 续取拼回逐字完整"
+        # our_words 条目级分节（首段+续取补齐全部条目）
+        wcur = it.get("our_words_next")
+        witems = list(it["our_words"])
+        while wcur:
+            pg = bootstrap.next_page("jiaming", "estomago",
+                                     pack["snapshot_id"], wcur,
+                                     "memory_item")
+            witems += pg["items"]
+            wcur = pg.get("next_cursor")
+        assert len(witems) == 2, "words 续取补齐全部条目"
+
+    def test_short_bucket_single_page_unchanged(self, jiaming):
+        """短对照：正文/话语不超节宽——整带、无 truncated/next 键。"""
+        r = _hold_with_mood(9)
+        pack = bootstrap.get("jiaming", "estomago", "estomago")
+        it = next((x for x in pack["memory_days"]["items"]
+                   if x["memory_id"] == r["memory_id"]), None)
+        assert it is not None
+        assert it.get("event_text") == "estomago 开窗资料事件9"
+        assert "event_text_truncated" not in it
+        assert "event_text_next" not in it

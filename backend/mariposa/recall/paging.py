@@ -106,7 +106,10 @@ def get_or_issue_cursor(conn, result_set_id: str, position: int) -> str:
     + fragment_index（各维天然远小于上限；服务端解码，不接受任意
     offset）。三元组自 CX-01（多载体逐载体续取）起启用。
     """
-    packed = (int(position[0]) * 100_000_000
+    # RRA-004：新三元编码加 2^40 偏移——与旧二元编码
+    #（idx*10_000+frag，值域 <2^40 当 idx<10^9）无重叠，旧持久令牌
+    # 升级后按旧编码正确解码（不静默重发首页）
+    packed = ((1 << 40) + int(position[0]) * 100_000_000
               + int(position[1]) * 10_000 + int(position[2]))
     row = conn.execute(
         "SELECT token FROM recall_page_cursors WHERE result_set_id=?"
@@ -135,8 +138,13 @@ def _resolve_cursor(result_set_id: str,
             "任意 offset", code="PAGINATION_CURSOR_INVALID",
             result_set_id=result_set_id)
     packed = int(row["position"])
-    return (packed // 100_000_000,
-            (packed // 10_000) % 10_000, packed % 10_000)
+    if packed >= (1 << 40):
+        # 新三元（candidate, carrier, fragment）
+        v = packed - (1 << 40)
+        return (v // 100_000_000, (v // 10_000) % 10_000, v % 10_000)
+    # RRA-004：旧二元（candidate, fragment）——升级前签发的持久令牌，
+    # carrier 维按 0（最长载体起点）解析，语义=从该卡首个载体继续
+    return (packed // 10_000, 0, packed % 10_000)
 
 
 def _text_carriers(card: dict) -> list[tuple[dict, str]]:
@@ -157,12 +165,17 @@ def _fragment_card(card: dict, field_holder: dict, field: str,
     与获授权投影逐字一致（P03）。
     """
     text = field_holder.get(field) or ""
-    frag = {k: card[k] for k in ("resource_ref", "candidate_ref", "channel",
-                                 "representation", "content_version",
-                                 "representation_version", "memory_id",
-                                 "word_id", "speaker", "memory_date",
-                                 "evidence_requirement_met")
-            if k in card}
+    # RRA-003（2026-10-09 复审）：保留冻结卡全部非正文载体字段（结构
+    # 事实/来源版本/matched_fields 等）——此前白名单只剩身份键，读完
+    # 整个候选也拿不到结构证据；长正文载体仍只经片段交付（防预算翻倍）
+    frag = {k: v for k, v in card.items()
+            if k != "evidence"
+            and not (field_holder is card and k == field)}
+    keep_ev = [ev for ev in (card.get("evidence") or [])
+               if ev is not field_holder
+               and len(ev.get("snippet") or "") <= 200]
+    if keep_ev:
+        frag["evidence"] = keep_ev
     ev_index = None
     if field_holder is not card and field == "snippet":
         try:
@@ -277,10 +290,9 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
             fidx = 0
             continue
         if car >= len(carriers):
-            # 游标越过载体总数（上游不该签发）：防活锁，整卡收尾
-            entries.append({"invalid": True,
-                            "resource_ref": card.get("resource_ref"),
-                            "reason": "cursor_beyond_fragments"})
+            # 全部载体耗尽=该卡完整交付（RRA-003：正常收尾不产伪
+            # invalid——position 只由服务端签发，陌生游标在
+            # _resolve_cursor 已拒）
             idx += 1
             car = 0
             fidx = 0

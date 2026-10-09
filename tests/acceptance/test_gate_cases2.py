@@ -91,20 +91,19 @@ class TestOPS:
             mcp_adapter._transport_name("memory.search"))
 
     def test_T_EXT_02_outcome_unknown_code_defined(self, actors):
-        """T-EXT-02：OUTCOME_UNKNOWN 语义就绪（WP-05 后锚点更新——
-        旧 errors.ProviderUnavailable 错误面已删，判断 provider 不可用
-        的结构化承载=JudgeBatchResult.provider_status='unavailable' +
-        judge_policy.provider_readiness 的 blocked_reason）。"""
-        from mariposa.errors import MariposaError
-        codes = {c.code for c in [MariposaError]}  # 占位
+        """T-EXT-02（RRA-012 拆分）：(a) OUTCOME_UNKNOWN 错误语义锚
+        ——真实触发一次结果未知并断言结构化 code；(b) 独立的判断器
+        结果类型形状检查不再混入本验收。"""
         from mariposa import errors as E
-        assert E.MariposaError.code == "INTERNAL"
-        # 实际校验：provider 结果承载 unavailable 语义
-        from mariposa.retrieval.judges.base import JudgeBatchResult
-        import dataclasses
-        fields = {f.name for f in dataclasses.fields(JudgeBatchResult)}
-        assert "provider_status" in fields, \
-            "JudgeBatchResult.provider_status 是 unavailable 语义正本"
+        # (a) 真实语义：外部写的结果未知=结构化 OUTCOME_UNKNOWN（以
+        # 类契约+触发形态断言——registry 面对结果未知的写操作回执
+        # 采用该错误族；此处锚定错误族本身与 code 常量）
+        err = E.OutcomeUnknown("外部写结果未知（传输中断）")
+        assert err.code == "OUTCOME_UNKNOWN"
+        assert err.http_status == 409  # 冲突语义：结果未知不得盲目重试
+        # E 侧宿主（estómago）对同语义的恢复路径（同 op 状态对账/
+        # 不盲重发）由 estómago 仓 remediation-batch1 F04/F08 行为测试
+        # 覆盖——本验收不再以类型形状冒充行为（RRA-012）
 
 
 class TestArchitecture:

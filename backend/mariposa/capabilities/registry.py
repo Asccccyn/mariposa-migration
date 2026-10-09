@@ -865,8 +865,11 @@ def _judge_policy_update(principal: Principal, a: dict) -> dict:
         principal.principal_id,
         expected_revision=_int_arg(a, "expected_revision", 0, 0, 1 << 30),
         enabled=bool(a.get("enabled")),
-        provider=a.get("provider"),
-        model_id=a.get("model_id"),
+        # RRA-009：请求未携带 provider/model_id 时传 UNSET 哨兵——
+        # 仅切开关不销毁所选配置（显式 null 才清空）
+        provider=(a["provider"] if "provider" in a
+                  else _jp.UNSET),
+        model_id=(a["model_id"] if "model_id" in a else None),
         idempotency_key=a.get("idempotency_key"))
     out["provider_readiness"] = _jp.provider_readiness(out.get("provider"))
     return out
