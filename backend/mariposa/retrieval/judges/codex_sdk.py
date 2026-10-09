@@ -263,12 +263,28 @@ class CodexSdkJudge(base.JudgeProvider):
 
     name = "codex_sdk"
 
-    def __init__(self):
+    def __init__(self, *, model_id: str | None = None,
+                 allowed_data=None):
         grants = parse_grants(_grants_env())
         self._grants = grants if grants is not None else frozenset()
         self._grants_invalid = grants is None
-        self._model_id = (os.environ.get("MARIPOSA_CODEX_MODEL_ID", "")
-                          or "").strip() or None
+        # WP-02（CX-03）：政策传入即胜出（政策唯一正本，env 仅回落）；
+        # 政策面合法值已经 update_policy 白名单校验，不重复 env 解析
+        if allowed_data:
+            self._grants = frozenset(allowed_data)
+            self._grants_invalid = False
+        self._model_id = model_id or (
+            os.environ.get("MARIPOSA_CODEX_MODEL_ID", "")
+            or "").strip() or None
+
+    def apply_policy(self, *, model_id=None, allowed_data=None):
+        """WP-02（CX-03）：政策值注入（政策唯一正本，env 仅回落）；
+        政策面合法值已经 update_policy 白名单校验。"""
+        if model_id:
+            self._model_id = model_id
+        if allowed_data:
+            self._grants = frozenset(allowed_data)
+            self._grants_invalid = False
 
     def outbound_grants(self) -> frozenset:
         """Codex 自身的外发许可（与 Jev 分立；拼错/未配=无许可 fail-closed）。"""
@@ -284,7 +300,17 @@ class CodexSdkJudge(base.JudgeProvider):
             return base.JudgeBatchResult(
                 provider_status="unavailable",
                 degraded_reason="allowed_data_policy_missing")
-        prompt = _judge_prompt(query_plan, candidates)
+        # WP-02（CX-15=C-008）：出站投影按卡必要角色过滤（与 replay/
+        # selection 的 required_excerpt_roles 同源）——单许可下未许可卡
+        # 的正文/证据不进 prompt；许可集为空已在上游 fail-closed。
+        from .typesafe_jev import required_excerpt_roles
+        authorized = [c for c in candidates
+                      if required_excerpt_roles(c) <= self._grants]
+        if not authorized and candidates:
+            return base.JudgeBatchResult(
+                provider_status="unavailable",
+                degraded_reason="no_authorized_candidates")
+        prompt = _judge_prompt(query_plan, authorized)
         sent_refs = [c.get("candidate_ref") or c["resource_ref"]
                      for c in candidates]
         sent_versions = {c.get("candidate_ref") or c["resource_ref"]:
@@ -342,6 +368,7 @@ class CodexSdkJudge(base.JudgeProvider):
                                        TextInput)
         except ImportError:
             return None, "sdk_not_installed"
+        import shutil
         import tempfile
         client = Codex(CodexConfig())
         tmpdir = tempfile.mkdtemp(prefix="codex-judge-")
@@ -350,10 +377,14 @@ class CodexSdkJudge(base.JudgeProvider):
                 model=self._model_id, sandbox=Sandbox.read_only,
                 cwd=tmpdir, ephemeral=True,
                 developer_instructions=_DEV_INSTRUCTIONS)
+            # WP-02（E05/CX-15）：deadline 贯通（CODEX_TIMEOUT_MS→秒）；
+            # 超时 SDK 抛出即 unavailable（不无限挂）——timeout 参数按
+            # 锁定版 0.161.0 文档形态，live 实测待她授权（G-1）
             result = thread.run(
                 [TextInput(text=prompt)],
                 output_schema=_OUTPUT_SCHEMA,
-                model=self._model_id)
+                model=self._model_id,
+                timeout=CODEX_TIMEOUT_MS / 1000)
             turn = getattr(result, "turn", result)
             texts = []
             for item in (getattr(turn, "items", None) or []):
@@ -375,6 +406,9 @@ class CodexSdkJudge(base.JudgeProvider):
                     close()
                 except Exception:  # noqa: BLE001——收尾失败不掩盖判断结果
                     pass
+            # WP-02（E05/JFA-E05）：临时 thread 目录回收——judge N 次后
+            # tempfile 根下不留 codex-judge-* 残留（不泄漏输入材料）
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 _DEV_INSTRUCTIONS = (

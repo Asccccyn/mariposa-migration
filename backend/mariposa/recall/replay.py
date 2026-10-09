@@ -110,8 +110,11 @@ def revalidate_replayed(fn_name: str, saved: dict,
     # 用 provider 无关接口 outbound_grants（Jev/Codex 同一入口）。
     from ..retrieval.judges import base as _jb
     _pol = _cur_pol
-    _provider = _jb.get_provider_by_name(
-        _pol.get("provider") if _pol["mode"] == "on" else None)
+    _provider = _jb.apply_policy_overrides(
+        _jb.get_provider_by_name(
+            _pol.get("provider") if _pol["mode"] == "on" else None),
+        model_id=_pol.get("model_id"),
+        allowed_data=(_pol.get("allowed_data") or None))
     _judge_down = isinstance(_provider, _jb.DisabledJudge)
     # WP-01 A02（2026-10-09）：outbound_grants 空集=零许可（base.py
     # 契约 fail-closed）——不再把空集当"未声明不过滤"（那会让未来

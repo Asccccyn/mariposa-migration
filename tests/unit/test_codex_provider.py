@@ -364,7 +364,10 @@ class TestJ11Permissions:
                           for r in refs]})}
 
         codex_sdk.set_transport_for_tests(transport)
-        enable_codex(monkeypatch)
+        # WP-02（CX-15）：判断出站按卡必要角色过滤——words 专项卡需
+        # word_excerpt 许可（单 event/source 许可下 words 候选正确被拦）
+        enable_codex(monkeypatch,
+                     allowed="event_excerpt,word_excerpt,source_excerpt")
         from mariposa.capabilities import registry
         r1 = registry.invoke(actors["jiaming"], "memory.recall.start",
                              {"query_plan": {
