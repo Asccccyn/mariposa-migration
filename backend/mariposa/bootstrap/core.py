@@ -110,10 +110,9 @@ def _three_day_window(tz) -> tuple:
 def _memory_slim(conn, memory_id: str,
                   profile: str = "claude_chat") -> dict:
     from ..memory import categories as cats_mod
-    """三天桶条目：标题+心情标签+心情文字+分类；不默认展开事件正文。
-
-    D2 裁定（2026-10-06）：estomago profile 默认**不带**心情自由文字
-    （mood_text）——标签/标题/分类照给；cc/claude_chat 行为不变。"""
+    """三天桶条目：标题+心情标签+心情文字+分类；estomago profile 按
+    D-6（2026-10-09）另附事件正文/我们的话/关系注释摘要（其余 profile
+    不展开事件正文——D2/2026-10-06 的最小化语义保持）。"""
     m = conn.execute("SELECT * FROM memories WHERE memory_id=?",
                      (memory_id,)).fetchone()
     v = conn.execute(
@@ -134,14 +133,44 @@ def _memory_slim(conn, memory_id: str,
         "representation_version": m["representation_state"],
         "categories": cats_mod.list_of(conn, memory_id),
     }
+    # WP-06 6D-2（D-6，她 2026-10-09 裁定）：estomago 开窗近三日桶携带
+    # 时间/心情标签+心情文字/事件/我们的话；该桶存在 relation 时附关系
+    # 注释（计数+类型标签去重，不带目标桶明细——明细仍走 relations.list，
+    # 维持 I 开窗最小化 §8 的"按需显式读取"边界）；无边省略该键
     if mood is not None:
         item["mood_tags"] = [t["tag"] for t in tags]
-        if profile != "estomago":
-            item["mood_text"] = mood["mood_text"]
+        item["mood_text"] = mood["mood_text"]
     else:
         item["mood_tags"] = []
-        if profile != "estomago":
-            item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）
+        item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）
+    if profile == "estomago":
+        vv = conn.execute(
+            "SELECT event_text, hold_text FROM memory_versions"
+            " WHERE memory_id=? AND version_no=?",
+            (memory_id, m["current_version_no"])).fetchone()
+        if vv is not None:
+            _body = vv["event_text"] or vv["hold_text"]
+            if _body:
+                item["event_text"] = _body
+        _words = conn.execute(
+            "SELECT w.speaker, w.text FROM memory_our_words w"
+            " JOIN memories mm ON mm.memory_id=w.memory_id"
+            " WHERE w.memory_id=? AND mm.visibility='active'",
+            (memory_id,)).fetchall()
+        if _words:
+            item["our_words"] = [
+                {"speaker": w["speaker"], "text": w["text"]}
+                for w in _words]
+        _edges = conn.execute(
+            "SELECT relation_type FROM memory_relations"
+            " WHERE from_memory=? OR to_memory=?",
+            (memory_id, memory_id)).fetchall()
+        if _edges:
+            item["relations"] = {
+                "count": len(_edges),
+                "types": sorted({e["relation_type"] for e in _edges}),
+                "note": "存在关联记忆（明细走 relations.list 按需读取）",
+            }
     # 补录标记（D03）：hold 日期晚于事件日期 → 新收录，不冒充刚发生
     if m["held_at"]:
         held_day = ret_mod.local_date(m["held_at"],

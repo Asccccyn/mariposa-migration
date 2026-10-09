@@ -87,3 +87,23 @@ def test_notification_returns_202(c):
     r = c.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                headers={"Authorization": f"Bearer {TOKENS['jiaming']}"})
     assert r.status_code == 202
+
+
+def test_paged_response_single_envelope_cable_budget(c):
+    """WP-06 6C（D-4 选 A）：分页类响应默认 content_envelope=single——
+    content 仅摘要行（完整包走 structuredContent），MCP 线缆字节
+    ≤24576；显式 dual 覆盖仍可。"""
+    import json as _json
+    # off 政策下 recall.start 产分页响应（政策切换需 qiaosheng——直接
+    # 服务层预置 off；走隔离夹具不现实，这里以单测形态直调适配层）
+    from mariposa.capabilities import mcp_adapter as _ad
+    out_paged = {"ok": True, "data": {
+        "recall_session_id": "rs_1", "candidates": [{"x": "很长的正文" * 100}],
+        "judge_mode": "off",
+        "pagination": {"result_set_id": "rps_1", "returned_count": 1,
+                       "candidate_total": 1, "has_more": False}}}
+    # 分页响应默认 single：content 文本=摘要行（不含完整 JSON）
+    assert _ad._paged_default_single(out_paged) is True
+    # 线缆形态：完整包只在 structuredContent 一份
+    non_paged = {"ok": True, "data": {"hits": [1, 2, 3]}}
+    assert _ad._paged_default_single(non_paged) is False
