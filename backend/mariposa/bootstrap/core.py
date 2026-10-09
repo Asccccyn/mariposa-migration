@@ -41,6 +41,10 @@ _ENTRY_ALLOWED = {
 
 BOOT_RULES_VERSION = "boot_rules_v2.1"
 
+#: RRA-006：memory_days 段单页字节预算（UTF-8；给 plans/i/纪念日等
+#: 其余段与信封骨架留约 12KB——整包 ≤24576）
+_MEMORY_DAY_PAGE_BUDGET_BYTES = 12000
+
 
 def _state_hash(conn) -> str:
     """开窗依据资源的状态指纹：任一变化使旧 snapshot 失效（§12.2）。
@@ -130,6 +134,59 @@ def _section_body(item: dict, memory_id: str, field: str,
                              "offset": width}
 
 
+def _section_words(rows, start_item: int = 0, start_char: int = 0):
+    """RRA-006（回访 2026-10-09）：our_words 装页——条目数组形状保持，
+    条目间断页；**单条超宽时按码点分节**（此前单条 10000 字整条塞入，
+    整包 31596B 击穿 24576；首段带 text_truncated/text_total_chars，
+    续段经 item_offset+char_offset 游标续取）。返回 (kept, next_item,
+    next_char)：next_item=None=全部装完。"""
+    width = BOOT_MEMITEM_SECTION_CHARS
+    kept: list[dict] = []
+    used = 0
+    i = start_item
+    char_off = start_char
+    # 越过已耗尽的条目起点（char_off 抵达条尾 → 下一条）
+    while i < len(rows) and char_off >= len(rows[i]["text"] or ""):
+        i += 1
+        char_off = 0
+    while i < len(rows):
+        text = rows[i]["text"] or ""
+        remain = text[char_off:]
+        if kept and used + len(remain) > width:
+            return kept, i, char_off
+        if len(remain) > width:
+            kept.append({"speaker": rows[i]["speaker"],
+                         "text": remain[:width],
+                         "text_truncated": True,
+                         "text_total_chars": len(text)})
+            return kept, i, char_off + width
+        kept.append({"speaker": rows[i]["speaker"], "text": remain})
+        used += len(remain)
+        i += 1
+        char_off = 0
+    return kept, None, 0
+
+
+def _pack_memory_rows(conn, rows, profile: str = "claude_chat"):
+    """RRA-006（回访 2026-10-09）：memory_days 页按**实际序列化字节**
+    装桶——bootstrap.get 首页与 bootstrap.next 续页同一口径（此前续页
+    按条数装页无预算，5 桶 31250B 击穿 24576）；装不下的桶顺延下页
+    不 pop。返回 (items, overflow_row)：overflow=None=本批全装下。"""
+    import json as _json
+    items: list[dict] = []
+    served = 0
+    overflow = None
+    for r in rows:
+        it = _memory_slim(conn, r["memory_id"], profile=profile)
+        b = len(_json.dumps(it, ensure_ascii=False).encode("utf-8"))
+        if items and served + b > _MEMORY_DAY_PAGE_BUDGET_BYTES:
+            overflow = r
+            break
+        items.append(it)
+        served += b
+    return items, overflow
+
+
 def _memory_slim(conn, memory_id: str,
                   profile: str = "claude_chat") -> dict:
     from ..memory import categories as cats_mod
@@ -184,28 +241,17 @@ def _memory_slim(conn, memory_id: str,
             " WHERE w.memory_id=? AND mm.visibility='active'",
             (memory_id,)).fetchall()
         if _words:
-            # RRA-006：话语按**条目**分节（保持数组形状——消费端
-            # w.speaker/w.text 不变）；超宽给 truncated/next（续取
-            # section=memory_item 返回剩余条目数组）
-            _budget = BOOT_MEMITEM_SECTION_CHARS
-            _kept, _used, _offset = [], 0, 0
-            for i, w in enumerate(_words):
-                _len = len(w["text"])
-                if _kept and _used + _len > _budget:
-                    _offset = i
-                    break
-                _kept.append({"speaker": w["speaker"],
-                              "text": w["text"]})
-                _used += _len
-            else:
-                _offset = None
+            # RRA-006（回访 2026-10-09）：话语按**条目**分节（保持数组
+            # 形状——消费端 w.speaker/w.text 不变）；单条超宽按码点分节
+            # （续取 section=memory_item 返回剩余条目/条内剩余字符）
+            _kept, _nxt_i, _nxt_c = _section_words(_words)
             item["our_words"] = _kept
-            if _offset is not None:
+            if _nxt_i is not None:
                 item["our_words_truncated"] = True
                 item["our_words_total_items"] = len(_words)
                 item["our_words_next"] = {
                     "memory_id": memory_id, "field": "our_words",
-                    "item_offset": _offset}
+                    "item_offset": _nxt_i, "char_offset": _nxt_c}
         _edges = conn.execute(
             "SELECT relation_type FROM memory_relations"
             " WHERE from_memory=? OR to_memory=?",

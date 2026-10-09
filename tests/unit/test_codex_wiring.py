@@ -51,9 +51,10 @@ class _Thread:
         self._reply = reply
         self.calls: list[dict] = []
 
-    def run(self, inputs, *, output_schema=None, model=None, timeout=None):
-        self.calls.append({"inputs": inputs, "timeout": timeout,
-                           "model": model})
+    # RRA-013：签名与锁定版 0.161.0 Thread.run 一致（无 timeout 参数）
+    # ——fake 接受发明参数会掩盖真实接口不匹配
+    def run(self, inputs, *, output_schema=None, model=None):
+        self.calls.append({"inputs": inputs, "model": model})
         return _Result(self._reply)
 
 
@@ -186,6 +187,9 @@ class TestWiring:
         reply = json.dumps({"items": []})
         monkeypatch.setitem(sys.modules, "openai_codex",
                             _fake_sdk_module(reply))
+        # RRA-018（回访）：live 形态测试显式开门——生产默认关（G-1
+        # 她批准后才设 MARIPOSA_CODEX_LIVE_ENABLED=1）
+        monkeypatch.setenv("MARIPOSA_CODEX_LIVE_ENABLED", "1")
         judge = codex_sdk.CodexSdkJudge(
             allowed_data=["event_excerpt", "word_excerpt",
                           "source_excerpt"])
@@ -195,7 +199,9 @@ class TestWiring:
                         [], {})
         assert _count_leak() == before, \
             "live 形态临时目录零残留（finally rmtree）"
-        # 超时路径：fake 慢 transport（超过 CODEX_TIMEOUT_MS）
+        # 超时路径：fake 慢 transport（超过 CODEX_TIMEOUT_MS）——
+        # RRA-018 回访：deadline 在调用**期间**执行（elapsed 有界），
+        # 不再等 transport 自然跑完后才报 timeout
         old_ms = codex_sdk.CODEX_TIMEOUT_MS
         codex_sdk.CODEX_TIMEOUT_MS = 50
         try:
@@ -206,10 +212,15 @@ class TestWiring:
             codex_sdk.set_transport_for_tests(slow)
             judge2 = codex_sdk.CodexSdkJudge(
                 allowed_data=["event_excerpt"])
+            t0 = time.monotonic()
             out = judge2.judge({"original_request": "x",
                                 "lexical_terms": ["x"]}, [], {})
+            elapsed = time.monotonic() - t0
             assert out.provider_status == "unavailable"
             assert out.degraded_reason == "timeout"
+            assert elapsed < 0.15, \
+                f"deadline 必须期间执行（elapsed={elapsed:.3f}s；" \
+                "回访残因=fake 跑完 126.8ms 后才报 timeout）"
         finally:
             codex_sdk.CODEX_TIMEOUT_MS = old_ms
             codex_sdk.set_transport_for_tests(None)
@@ -328,30 +339,153 @@ class TestFieldGrantReconciliation:
         assert "DENIED_WORD" not in p0, "无 word_excerpt 许可的同卡证据不外发"
 
     def test_025_unsent_ref_rejected_not_evaluated(self):
-        """回包返回未送判的 ref（被许可过滤）→ 陌生 ref 整批作废。"""
+        """回包返回未送判的 ref（被许可过滤）→ 陌生 ref 整批作废。
+        RRA-025（回访 2026-10-09）：固化**原始反例**——原候选含被
+        许可过滤的 words 卡（过滤前集合成员），回包同时返回已送判 ref
+        与该被过滤 ref → 仍整批作废（此前 sent_refs 取过滤前全集，未
+        送判 ref 被伪标 evaluated）。"""
 
         def transport(spec):
             refs = [c["candidate_ref"] for c in
                     json.loads(spec["prompt"])["candidates"]]
-            # 恶意/错位回包：送判 memory:m1，回 our_word:never-sent
+            # 已送判 ref 正常回 + 被过滤 ref（不在送判集）一并回
             return {"status": "ok", "text": json.dumps({
                 "items": [
                     {"candidate_ref": refs[0], "relevant": "relevant",
                      "confidence": "high", "reason": "r"},
-                    {"candidate_ref": "our_word:never-sent",
+                    {"candidate_ref": "our_word:filtered",
                      "relevant": "relevant", "confidence": "high",
                      "reason": "r"}]})}
 
         codex_sdk.set_transport_for_tests(transport)
         judge = codex_sdk.CodexSdkJudge(
-            allowed_data=["event_excerpt", "title_cue",
-                          "word_excerpt", "source_excerpt"])
-        card = {
+            allowed_data=["event_excerpt"])
+        sent_card = {
             "candidate_ref": "memory:m1", "resource_ref": "memory:m1",
             "channel": "event", "content_version": "1",
             "evidence": [{"evidence_kind": "authored_event",
                           "field": "text", "snippet": "body"}]}
+        hidden = {
+            "candidate_ref": "our_word:filtered",
+            "resource_ref": "our_word:filtered", "channel": "words",
+            "content_version": "1", "evidence": []}
         out = judge.judge({"original_request": "x",
-                           "lexical_terms": ["x"]}, [card], {})
+                           "lexical_terms": ["x"]},
+                          [sent_card, hidden], {})
         assert out.provider_status == "unavailable", \
-            "未送判 ref 出现在回包=整批作废（不得伪标 evaluated）"
+            "被过滤卡的 ref 出现在回包=陌生 ref 整批作废（不得伪标 evaluated）"
+
+
+class TestRRAFollowUpLiveGateAndProductionKinds:
+    """RRA-018/024（回访 2026-10-09 run-035424）：live 安全门可执行 +
+    生产证据词表字段许可映射。"""
+
+    def test_018_live_gate_blocks_ready_and_judge_before_boundary(
+            self, actors, monkeypatch):
+        """合成 key/model/grants + SDK 在场（fake 模块）+ 门未开：
+        readiness=live_gate_closed（不 ready）；直构 provider judge 在
+        到达调用边界前拒绝（可执行门，不是注释声明）。"""
+        monkeypatch.setenv("MARIPOSA_CODEX_API_KEY", "SYNTHETIC_NOT_REAL")
+        monkeypatch.setenv("MARIPOSA_CODEX_MODEL_ID", "synthetic-model")
+        monkeypatch.setenv("MARIPOSA_CODEX_ALLOWED_DATA", "event_excerpt")
+        monkeypatch.delenv("MARIPOSA_CODEX_LIVE_ENABLED", raising=False)
+        monkeypatch.setitem(sys.modules, "openai_codex",
+                            _fake_sdk_module())
+        assert codex_sdk.sdk_available() is True
+        rd = codex_sdk.readiness()
+        assert rd["ready"] is False
+        assert rd["blocked_reason"] == "live_gate_closed", \
+            "合成配置齐备也必须被可执行 live 门拦住"
+        # 直构 provider：judge 在 _call_model 之前拒绝（live 边界不可达）
+        p = jb.get_provider_by_name("codex_sdk")
+        assert isinstance(p, codex_sdk.CodexSdkJudge)
+        out = p.judge({"original_request": "x", "lexical_terms": ["x"]},
+                      [], {})
+        assert out.provider_status == "unavailable"
+        assert out.degraded_reason == "codex_live_gate_closed"
+        # 门开（她批准后的开关形态）→ readiness ready、judge 可达边界
+        monkeypatch.setenv("MARIPOSA_CODEX_LIVE_ENABLED", "1")
+        rd2 = codex_sdk.readiness()
+        assert rd2["ready"] is True, rd2
+
+    def test_018_lock_wait_bounded_by_deadline(self, monkeypatch):
+        """锁被占时等待 ≤ 剩余 deadline（此前 max(0.1, ms/1000) 地板使
+        20ms 配置实际等 ~105ms）→ codex_lock_timeout。"""
+        import threading
+        old_ms = codex_sdk.CODEX_TIMEOUT_MS
+        codex_sdk.CODEX_TIMEOUT_MS = 40
+        try:
+            codex_sdk.set_transport_for_tests(
+                lambda spec: {"status": "ok", "text": '{"items": []}'})
+            codex_sdk._CODEX_LOCK.acquire()
+            holder = threading.Thread(
+                target=lambda: (time.sleep(0.3),
+                                codex_sdk._CODEX_LOCK.release()))
+            holder.start()
+            judge = codex_sdk.CodexSdkJudge(
+                allowed_data=["event_excerpt"])
+            t0 = time.monotonic()
+            out = judge.judge({"original_request": "x",
+                               "lexical_terms": ["x"]}, [], {})
+            elapsed = time.monotonic() - t0
+            holder.join()
+            assert out.degraded_reason == "codex_lock_timeout"
+            assert elapsed < 0.12, \
+                f"锁等待必须按剩余 deadline 上界（elapsed={elapsed:.3f}s）"
+        finally:
+            codex_sdk.CODEX_TIMEOUT_MS = old_ms
+            codex_sdk.set_transport_for_tests(None)
+
+    def test_024_production_word_kinds_field_matrix(self):
+        """生产词表（word_verbatim/word_paraphrase/word_unverified）：
+        单 event_excerpt 许可下同卡话语不外发（此前三 kind 均漏映射
+        恒放行）；补 word_excerpt 许可后可发；未知 kind 带正文 fail-closed。"""
+        prompts = []
+
+        def transport(spec):
+            prompts.append(spec["prompt"])
+            refs = [c["candidate_ref"] for c in
+                    json.loads(spec["prompt"])["candidates"]]
+            return {"status": "ok", "text": json.dumps({
+                "items": [{"candidate_ref": r, "relevant": "relevant",
+                           "confidence": "high", "reason": "r"}
+                          for r in refs]})}
+
+        codex_sdk.set_transport_for_tests(transport)
+
+        def run(kind, grants):
+            prompts.clear()
+            card = {
+                "candidate_ref": "memory:audit", "resource_ref":
+                    "memory:audit", "channel": "event",
+                "content_version": "1", "_row": {"title": "DENIED_TITLE"},
+                "evidence": [
+                    {"evidence_kind": "authored_event", "field":
+                     "event_text", "snippet": "ALLOWED_EVENT"},
+                    {"evidence_kind": kind, "field": "our_words.text",
+                     "snippet": f"DENIED_WORD_{kind}"}]}
+            res = codex_sdk.CodexSdkJudge(
+                allowed_data=grants).judge(
+                {"original_request": "x", "lexical_terms": ["x"]},
+                [card], {})
+            body = prompts[0] if prompts else ""
+            return {"event_sent": "ALLOWED_EVENT" in body,
+                    "word_sent": f"DENIED_WORD_{kind}" in body,
+                    "title_sent": "DENIED_TITLE" in body,
+                    "status": res.provider_status}
+
+        for kind in ("word_verbatim", "word_paraphrase",
+                     "word_unverified"):
+            r = run(kind, ["event_excerpt"])
+            assert r["status"] == "evaluated"
+            assert r["event_sent"] is True, f"{kind}：获准事件照发"
+            assert r["word_sent"] is False, \
+                f"{kind}：生产话语 kind 未许可不得外发（漏映射残因）"
+            assert r["title_sent"] is False
+        ctl = run("word_verbatim",
+                  ["event_excerpt", "word_excerpt", "title_cue"])
+        assert ctl["word_sent"] is True and ctl["title_sent"] is True, \
+            "许可齐备时话语/标题照发（对照）"
+        # 未知 kind 带正文 → fail-closed（不猜角色）
+        unknown = run("mystery_kind", ["event_excerpt"])
+        assert unknown["word_sent"] is False

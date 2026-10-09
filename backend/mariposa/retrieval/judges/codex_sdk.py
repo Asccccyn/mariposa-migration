@@ -19,7 +19,10 @@ sandbox=read_only, cwd=隔离空目录) → thread.run(input, output_schema=…)
 实现 + fake transport 测试；真实 smoke 是她批准后的独立 live 项。
 
 readiness（零网络/零模型）：SDK 未装/未认证/未配 model → blocked（如
-实；不冒称可用，不影响关闭模式与其他 provider）。
+实；不冒称可用，不影响关闭模式与其他 provider）。RRA-018（回访
+2026-10-09）：live 安全门为**可执行开关**（MARIPOSA_CODEX_LIVE_ENABLED，
+默认关）——合成配置齐备也 blocked=live_gate_closed，judge 出站同闸；
+她批准 G-1 live 后显式开门。
 """
 from __future__ import annotations
 
@@ -44,6 +47,17 @@ CODEX_GRANT_WORDS = ("event_excerpt", "word_excerpt", "source_excerpt",
 #: 真实耗时上限属 live 验收（不冒称已测性能）
 CODEX_TIMEOUT_MS = int(os.environ.get(
     "MARIPOSA_CODEX_JUDGE_TIMEOUT_MS", "20000"))
+
+
+def _live_enabled() -> bool:
+    """RRA-018（回访 2026-10-09）：live 安全门——可执行开关，默认关。
+
+    合成/离线测试与 fake transport 不受影响；真实 SDK 边界（readiness
+    ready、judge 出站、_call_model live 路径）在她显式批准 live（G-1）
+    并设 MARIPOSA_CODEX_LIVE_ENABLED=1 之前一律阻断——注释/文档声明
+    不是执行门，本函数才是。"""
+    return (os.environ.get("MARIPOSA_CODEX_LIVE_ENABLED", "")
+            or "").strip().lower() in ("1", "true", "yes", "on")
 
 #: 输出 JSON Schema（锁定版 output_schema: JsonObject——pydantic dict 包装；
 #: 参数名以锁定版签名为准，live 校验后如需调整须重跑离线套件）
@@ -149,6 +163,13 @@ def readiness() -> dict:
     if not grants:
         out["blocked_reason"] = "allowed_data_missing"
         return out
+    # RRA-018（回访 2026-10-09）：live 安全门是**可执行**的最后闸——
+    # sdk/key/model/grants 齐备也必须显式开门（G-1 她批准后才设
+    # MARIPOSA_CODEX_LIVE_ENABLED=1）；fake transport（离线测试注入）
+    # 不经此门
+    if _FAKE_TRANSPORT is None and not _live_enabled():
+        out["blocked_reason"] = "live_gate_closed"
+        return out
     out["ready"] = True
     return out
 
@@ -183,13 +204,24 @@ def _judge_prompt(query_plan: dict, candidates: list,
             return True
         if not ev.get("snippet"):
             return True  # 结构事实（无正文）恒可发
+        # RRA-024（回访 2026-10-09）：映射覆盖**生产证据词表**
+        # （retrieval/evidence.py EVIDENCE_KINDS）——此前只认自造的
+        # word_excerpt 等别名，生产合法 word_verbatim/word_paraphrase/
+        # word_unverified 均漏映射（role=None → 恒放行外发）。未映射
+        # 且带正文 → 拒绝（fail-closed，与 parse_grants 同口径）
         kind = ev.get("evidence_kind") or ""
-        role = {"authored_event": "event_excerpt",
-                "event_excerpt": "event_excerpt",
-                "word_excerpt": "word_excerpt",
-                "raw_verbatim": "source_excerpt",
-                "source_excerpt": "source_excerpt"}.get(kind)
-        return role is None or role in grants
+        role = {
+            "authored_event": "event_excerpt",
+            "approved_summary": "event_excerpt",
+            "event_excerpt": "event_excerpt",   # 兼容别名
+            "word_verbatim": "word_excerpt",
+            "word_paraphrase": "word_excerpt",
+            "word_unverified": "word_excerpt",
+            "word_excerpt": "word_excerpt",     # 兼容别名
+            "raw_verbatim": "source_excerpt",
+            "source_excerpt": "source_excerpt",  # 兼容别名
+        }.get(kind)
+        return role is not None and role in grants
 
     for c in candidates:
         evs = []
@@ -322,6 +354,15 @@ class CodexSdkJudge(base.JudgeProvider):
             return base.JudgeBatchResult(
                 provider_status="unavailable",
                 degraded_reason="allowed_data_policy_missing")
+        # RRA-018（回访 2026-10-09）：live 安全门可执行——离线 fake
+        # transport 之外的真实 SDK 边界在她开门（G-1，
+        # MARIPOSA_CODEX_LIVE_ENABLED=1）之前一律拒绝出站（注释声明
+        # 不是执行门；readiness 同闸）。置于许可 fail-closed 之后：
+        # 拼错/未配许可的降级理由保持既有语义（J11）
+        if _FAKE_TRANSPORT is None and not _live_enabled():
+            return base.JudgeBatchResult(
+                provider_status="unavailable",
+                degraded_reason="codex_live_gate_closed")
         # WP-02（CX-15=C-008）：出站投影按卡必要角色过滤（与 replay/
         # selection 的 required_excerpt_roles 同源）——单许可下未许可卡
         # 的正文/证据不进 prompt；许可集为空已在上游 fail-closed。
@@ -343,10 +384,12 @@ class CodexSdkJudge(base.JudgeProvider):
                          (str(c["content_version"])
                           if c.get("content_version") is not None else None)
                          for c in authorized}
-        # RRA-013：锁等待有界（排队不超 CODEX_TIMEOUT_MS；拿不到锁=
-        # unavailable，不无限挂——run 自身无界如实声明）
+        # RRA-013/RRA-018（回访 2026-10-09）：锁等待按**剩余 deadline**
+        # 上界（此前 max(0.1, ms/1000) 地板使 20ms 配置实际等 ~105ms）；
+        # 拿不到锁=unavailable，不无限挂
         _deadline = time.monotonic() + CODEX_TIMEOUT_MS / 1000
-        if not _CODEX_LOCK.acquire(timeout=max(0.1, CODEX_TIMEOUT_MS / 1000)):
+        _lock_wait = max(0.0, _deadline - time.monotonic())
+        if not _CODEX_LOCK.acquire(timeout=_lock_wait):
             return base.JudgeBatchResult(
                 provider_status="unavailable",
                 degraded_reason="codex_lock_timeout")
@@ -376,17 +419,36 @@ class CodexSdkJudge(base.JudgeProvider):
         （readiness blocked → judge_policy 显示未就绪）。
         """
         if _FAKE_TRANSPORT is not None:
-            deadline = time.monotonic() + CODEX_TIMEOUT_MS / 1000
             spec = {
                 "prompt": prompt, "output_schema": _OUTPUT_SCHEMA,
                 "ephemeral": True, "sandbox": "read_only",
                 "cwd": "<isolated-empty>", "timeout_ms": CODEX_TIMEOUT_MS,
             }
-            started = time.monotonic()
-            out = _FAKE_TRANSPORT(spec)
-            elapsed = time.monotonic() - started
-            if elapsed > (deadline - started):
+            # RRA-018（回访 2026-10-09）：deadline 在调用**期间**执行——
+            # transport 在工作线程跑，join 按剩余时间等待；到点未归即
+            # timeout（此前同步执行完后才比较 elapsed，20ms 配置下 fake
+            # 跑完 126.8ms 才报 timeout）。后台线程自然收尾不阻塞返回
+            budget = (deadline - time.monotonic()
+                      if deadline is not None else CODEX_TIMEOUT_MS / 1000)
+            box: dict = {}
+
+            def _run():
+                try:
+                    box["out"] = _FAKE_TRANSPORT(spec)
+                except BaseException as exc:  # noqa: BLE001——原样上抛
+                    box["err"] = exc
+
+            import threading as _threading
+            worker = _threading.Thread(
+                target=_run, daemon=True,
+                name="codex-fake-transport")
+            worker.start()
+            worker.join(timeout=max(0.0, budget))
+            if worker.is_alive():
                 return None, "timeout"
+            if "err" in box:
+                raise box["err"]
+            out = box.get("out")
             if not isinstance(out, dict):
                 return None, "transport_invalid"
             if out.get("status") != "ok":
@@ -395,6 +457,10 @@ class CodexSdkJudge(base.JudgeProvider):
             if not isinstance(text, str):
                 return None, "transport_text_missing"
             return text, None
+        # RRA-018（回访 2026-10-09）：live 路径同闸——judge/readiness 的
+        # 门绕不过这里（纵深防御：直构 provider 也拦）
+        if not _live_enabled():
+            return None, "codex_live_gate_closed"
         if not sdk_available():
             return None, "sdk_not_installed"
         # —— live 路径（锁定版 0.161.0；未认证环境到不了这里）——

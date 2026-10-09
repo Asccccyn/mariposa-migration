@@ -785,10 +785,15 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                        "cursor": {"type": "object"},
                        # MEM-02（2026-10-04 二批）：枚举必须包含服务端
                        # 实际签发的续取段——i / plan_content 游标否则
-                       # 被 schema 拒绝，续取承诺不可消费
+                       # 被 schema 拒绝，续取承诺不可消费。
+                       # RRA-006（回访 2026-10-09）：memory_item（estomago
+                       # 桶正文/话语分节续取）服务层已有但被公开 schema
+                       # 拒绝（SCHEMA_VIOLATION），分节承诺在 registry
+                       # 面不可消费
                        "section": {"type": "string",
                                    "enum": ["memory_days", "plans", "i",
-                                            "plan_content"]}},
+                                            "plan_content",
+                                            "memory_item"]}},
     },
     "memory.our_words.source.correct": {
         "type": "object",

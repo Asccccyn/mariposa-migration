@@ -198,7 +198,7 @@ UNSET = _Unset()
 
 def update_policy(principal_id: str, *, expected_revision: int,
                   enabled: bool, provider=UNSET,
-                  model_id: str | None = None,
+                  model_id=UNSET,
                   idempotency_key: str | None = None) -> dict:
     """人类政策写入（CAS + 幂等 + 审计；仅 qiaosheng，能力层同权校验）。
 
@@ -208,9 +208,10 @@ def update_policy(principal_id: str, *, expected_revision: int,
       不落坏行再靠读侧兜底；
     - 相同 idempotency_key 重复提交只应用一次（重放返回已生效政策）；
     - 关闭（enabled=False）保留 provider/model_id 值——重开时配置还在；
-    - RRA-009（2026-10-09 复审）：provider/model_id 缺省（UNSET 哨兵）
-      =不改现值；显式 None=清空（公开合同两形态分明，仅切开关不再
-      顺带销毁所选配置——红线 3"关开关不销毁 provider 配置"）。
+    - RRA-009（2026-10-09 复审+回访）：provider/model_id 缺省（UNSET
+      哨兵）=不改现值；**显式 None=清空**——两字段同一合同。此前
+      model_id 缺省与显式 null 同走 None=保留，「显式 null 清空」
+      承诺未兑现（红线 3"关开关不销毁 provider 配置"的补全面）。
     """
     if principal_id != "qiaosheng":
         raise Forbidden(
@@ -238,11 +239,10 @@ def update_policy(principal_id: str, *, expected_revision: int,
         raise Forbidden(
             "开启判断必须选择 provider（先配 provider 再开，或保持关闭）",
             code="INVALID_ARGUMENT")
-    if model_id is None and provider is not UNSET and _cur_row \
-            and _cur_row["model_id"]:
-        # model_id 缺省且本次非 enabled-only（显式带了 provider）→
-        # 保留现值（避免换 provider 时顺带清模型选择）
-        model_id = _cur_row["model_id"]
+    if model_id is UNSET:
+        # 缺省=不改现值（enabled-only 或换 provider 都不顺带动模型选择；
+        # 显式 None=清空——registry 面按 "model_id" in a 区分两形态）
+        model_id = _cur_row["model_id"] if _cur_row else None
     ensure_bootstrapped()
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")

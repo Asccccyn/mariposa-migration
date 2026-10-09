@@ -124,14 +124,36 @@ def get_or_issue_cursor(conn, result_set_id: str, position: int) -> str:
     return token
 
 
+#: RRA-004（2026-10-09 回访）：无 tag 编码的双纪元分界。f313618（提交
+#: 于 2026-10-09T05:51:31Z）到 2^40 tag 版之间签发的持久游标是**无 tag
+#: 三元**（idx*100_000_000+car*10_000+frag，与 8515474 二元
+#: idx*10_000+frag 值域重叠、无法按值判别）——按游标行 created_at 分界：
+#: 不早于 f313618 提交时刻 → 三元；更早 → 二元。缺/坏时间=无法判读
+#: 纪元，明确拒绝（不猜编码）。
+_UNTAGGED_TRIPLE_SINCE = "2026-10-09T05:51:31+00:00"
+
+
+def _era_at_or_after(created_at, since_iso: str) -> bool:
+    try:
+        t = datetime.fromisoformat(
+            str(created_at).strip().replace(" ", "T", 1))
+    except (TypeError, ValueError):
+        raise Forbidden(
+            "旧游标缺少可判读的签发时间，无法判别编码纪元——明确拒绝",
+            code="PAGINATION_CURSOR_INVALID")
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t >= datetime.fromisoformat(since_iso)
+
+
 def _resolve_cursor(result_set_id: str,
                     token: str) -> tuple[int, int, int]:
     """游标 → (candidate_index, carrier_index, fragment_index)；
     陌生/跨集游标拒绝。"""
     with db.recall_runtime() as conn:
         row = conn.execute(
-            "SELECT result_set_id, position FROM recall_page_cursors"
-            " WHERE token=?", (token,)).fetchone()
+            "SELECT result_set_id, position, created_at FROM"
+            " recall_page_cursors WHERE token=?", (token,)).fetchone()
     if row is None or row["result_set_id"] != result_set_id:
         raise Forbidden(
             "游标无效或不属于该结果集；游标由服务端随页签发，不接受"
@@ -142,8 +164,14 @@ def _resolve_cursor(result_set_id: str,
         # 新三元（candidate, carrier, fragment）
         v = packed - (1 << 40)
         return (v // 100_000_000, (v // 10_000) % 10_000, v % 10_000)
-    # RRA-004：旧二元（candidate, fragment）——升级前签发的持久令牌，
-    # carrier 维按 0（最长载体起点）解析，语义=从该卡首个载体继续
+    # RRA-004（2026-10-09 回访）：无 tag 双纪元按 created_at 判别——
+    # 立即前版 f313618 的无 tag 三元此前被当二元解码（1e9 → index
+    # 100000），越界空页 + 同游标 has_more=true 死循环
+    if _era_at_or_after(row["created_at"], _UNTAGGED_TRIPLE_SINCE):
+        return (packed // 100_000_000, (packed // 10_000) % 10_000,
+                packed % 10_000)
+    # 旧二元（candidate, fragment）——8515474 纪元持久令牌，carrier 维
+    # 按 0（最长载体起点）解析，语义=从该卡首个载体继续
     return (packed // 10_000, 0, packed % 10_000)
 
 
@@ -163,19 +191,32 @@ def _fragment_card(card: dict, field_holder: dict, field: str,
 
     片段保留资源/版本/字段身份与 content_complete=false；全部片段拼回
     与获授权投影逐字一致（P03）。
+    RRA-003（2026-10-09 回访）：分片卡不得重复携带**其他长正文载体**——
+    此前分片 evidence snippet 时整段 excerpt 随每个分片原样保留（11000
+    字 excerpt 跟着 1 字分片重复，首包 34482B 折半到 1 字也装不下）；
+    长证据元素改为**去正文身份存根**（evidence_kind/field/source_ref/
+    source_version 全留——此前 >200 字元素被整条丢弃，来源版本永久
+    丢失）；短载体（≤200 字）原样保留。每个长载体的正文仍只经各自的
+    片段交付（防预算翻倍）。
     """
     text = field_holder.get(field) or ""
-    # RRA-003（2026-10-09 复审）：保留冻结卡全部非正文载体字段（结构
-    # 事实/来源版本/matched_fields 等）——此前白名单只剩身份键，读完
-    # 整个候选也拿不到结构证据；长正文载体仍只经片段交付（防预算翻倍）
     frag = {k: v for k, v in card.items()
-            if k != "evidence"
-            and not (field_holder is card and k == field)}
-    keep_ev = [ev for ev in (card.get("evidence") or [])
-               if ev is not field_holder
-               and len(ev.get("snippet") or "") <= 200]
-    if keep_ev:
-        frag["evidence"] = keep_ev
+            if k not in ("evidence", "excerpt")}
+    excerpt = card.get("excerpt")
+    excerpt_is_source = (field_holder is card and field == "excerpt")
+    if (isinstance(excerpt, str) and not excerpt_is_source
+            and len(excerpt) <= 200):
+        frag["excerpt"] = excerpt
+    stubs = []
+    for ev in (card.get("evidence") or []):
+        if ev is field_holder or len(ev.get("snippet") or "") > 200:
+            # 身份存根：去 snippet 正文，来源版本等元数据全保留
+            stubs.append({k: v for k, v in ev.items()
+                          if k != "snippet"})
+        else:
+            stubs.append(ev)
+    if stubs:
+        frag["evidence"] = stubs
     ev_index = None
     if field_holder is not card and field == "snippet":
         try:
@@ -432,6 +473,16 @@ def serve_page(principal, a: dict) -> dict:
     cursor = a.get("cursor")
     start_pos = ((0, 0, 0) if not cursor
                  else _resolve_cursor(rsid, str(cursor)))
+    # RRA-004（2026-10-09 回访）：越界位置明确拒绝——合法签发的游标恒有
+    # idx < 候选数（终态 (n,0,0) 不签游标）；越界位置照常装配会产出
+    # 0 条目 + has_more=true + 同位置同令牌的空页死循环
+    _n_total = len(pset["candidates"])
+    if start_pos[0] > _n_total or (start_pos[0] == _n_total
+                                   and (start_pos[1] or start_pos[2])):
+        raise Forbidden(
+            "游标位置超出冻结全集（不兼容旧游标或损坏位置）——明确拒绝，"
+            "不产出空页循环", code="PAGINATION_CURSOR_INVALID",
+            result_set_id=rsid)
     # JFA-007：重校验返回原序失效标记（不收缩）——装配吃冻结全集，
     # 坐标与游标同一坐标系，任何页间失效不得静默丢失未交付候选
     flags, invalidated = revalidate_page_cards(pset["candidates"])

@@ -328,19 +328,20 @@ class TestEmptyGrantsFailClosed:
 class TestMultiCarrier:
     def test_t7_dual_carrier_canaries_all_served(self, actors):
         """T7：双载体超限卡（两段长正文）→ 翻尽后两载体 canary 都在
-        出站拼回中出现，has_more 结态如实。"""
+        出站拼回中出现，has_more 结态如实。
+        RRA-003（回访 2026-10-09）：夹具改**生产形态**——source_version
+        落在 evidence 元素上（此前放卡顶层是非生产形状，恒真通过）。"""
         set_policy(False)
         canary_a = "甲" * 10000
         canary_b = "乙" * 10000
         card = {
             "resource_ref": "memory:cx01-mem", "channel": "event",
             "content_version": "1", "matched_fields": ["text"],
-            "source_version": "hash-canary",
             "evidence": [
                 {"evidence_kind": "authored_event", "field": "text",
-                 "snippet": canary_a},
-                {"evidence_kind": "word_excerpt", "field": "our_words",
-                 "snippet": canary_b},
+                 "snippet": canary_a, "source_version": "VER_A"},
+                {"evidence_kind": "word_verbatim", "field": "our_words",
+                 "snippet": canary_b, "source_version": "VER_B"},
                 {"evidence_kind": "structured_fact", "field": "categories",
                  "snippet": "",
                  "structured_value": {"categories": ["milestone"]}},
@@ -356,6 +357,10 @@ class TestMultiCarrier:
         while True:
             page = paging.assemble_page([card], pos, extra)
             pages += 1
+            blob = json.dumps({"ok": True, "data": page},
+                              ensure_ascii=False).encode("utf-8")
+            assert len(blob) <= 24576, \
+                f"第 {pages} 页信封 {len(blob)}B 超 24576（RRA-003 回访）"
             frags.extend(page["candidates"])
             np_ = page["pagination"]["next_position"]
             if not np_:
@@ -371,13 +376,65 @@ class TestMultiCarrier:
             if f.get("fragment", {}).get("evidence_index") == 1)
         assert got_a == canary_a, "第一载体（evidence 0）拼回完整"
         assert got_b == canary_b, "第二载体（evidence 1）拼回完整（不再静默丢失）"
-        # RRA-003：结构证据/来源版本随片保留；正常收尾无伪 invalid
+        # RRA-003（回访）：结构证据/来源版本随片保留（生产形态：在
+        # evidence 元素存根上，不在卡顶层）；正常收尾无伪 invalid
         for f in frags:
             kept = {e.get("field") for e in f.get("evidence") or []}
             assert "categories" in kept, "结构事实（categories）随片保留"
-            assert f.get("source_version") == "hash-canary", \
-                "来源版本随片保留"
-            assert not f.get("invalid"), "正常载体耗尽不产伪 invalid条目"
+            versions = {e.get("source_version")
+                        for e in f.get("evidence") or []}
+            assert {"VER_A", "VER_B"} <= versions, \
+                "两条长证据的来源版本经身份存根随片保留"
+            assert not f.get("invalid"), "正常载体耗尽不产伪 invalid 条目"
+
+    def test_t7b_raw_card_no_long_excerpt_repetition(self, actors):
+        """RRA-003/010（回访 2026-10-09）：长 Raw 卡（excerpt 与
+        raw_verbatim 证据同文各 11000 字）——分片卡**不得重复携带整段
+        excerpt**（此前整段 excerpt 随 1 字分片重复，首包 34482B 超限）；
+        每页信封 ≤24576；两载体各自按位置精确拼回；来源版本可达。"""
+        set_policy(False)
+        body = "甲" * 11000
+        card = {
+            "resource_ref": "source_msg:rra3-raw", "channel": "raw",
+            "content_version": None, "excerpt": body,
+            "evidence": [{
+                "evidence_kind": "raw_verbatim", "field": "raw_messages",
+                "source_ref": "source_msg:rra3-raw",
+                "source_version": "VER_CANARY", "snippet": body}],
+        }
+        extra = {"result_set_id": "rps_fixture_rra3",
+                 "recall_session_id": "rs_fixture2", "revision": 1,
+                 "judge_mode": "off"}
+        pos, pages, frags = (0, 0, 0), 0, []
+        while True:
+            page = paging.assemble_page([card], pos, extra)
+            pages += 1
+            blob = json.dumps({"ok": True, "data": page},
+                              ensure_ascii=False).encode("utf-8")
+            assert len(blob) <= 24576, \
+                f"第 {pages} 页信封 {len(blob)}B 超 24576"
+            for c in page["candidates"]:
+                assert not c.get("excerpt") or len(c["excerpt"]) <= 200, \
+                    "分片卡不得重复携带长 excerpt（RRA-003 残因）"
+            frags.extend(page["candidates"])
+            np_ = page["pagination"]["next_position"]
+            if not np_:
+                break
+            pos = tuple(np_)
+            assert pages < 500
+        ev_text = "".join(f["fragment"]["text"] for f in frags
+                          if f.get("fragment", {}).get("kind")
+                          == "evidence_snippet")
+        exc_text = "".join(f["fragment"]["text"] for f in frags
+                           if f.get("fragment", {}).get("kind")
+                           == "excerpt")
+        assert ev_text == body, "raw_verbatim 载体按位置精确拼回全文"
+        assert exc_text == body, "excerpt 载体按位置精确拼回全文"
+        assert "VER_CANARY" in json.dumps(frags, ensure_ascii=False), \
+            "来源版本（证据元素级）必须可达"
+        widths = {len(f["fragment"]["text"]) for f in frags}
+        assert max(widths) > 1, \
+            "预算未被击穿时分片宽度不应被折半到 1 字（34482B 残因特征）"
 
 
 # ------------------------------------------------------- CX-06 最终信封
@@ -479,14 +536,16 @@ class TestRRACursorUpgrade:
         rsid = p1["pagination"]["result_set_id"]
         sid = p1["recall_session_id"]
         # 手工种一枚旧编码游标（idx=10, frag=0 → 100000），模拟升级前
-        # 签发的持久令牌
+        # 签发的持久令牌。RRA-004 回访：无 tag 双纪元按 created_at 分界
+        # ——8515474 二元纪元的 created_at 必须早于 f313618 提交时刻
+        # （2026-10-09T05:51:31Z），否则按三元解码
         from mariposa.recall import store as _st
         with _st.db.recall_runtime() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT INTO recall_page_cursors(token, result_set_id,"
                 " position, created_at) VALUES('pgc_legacy_probe',?,?,"
-                "datetime('now'))", (rsid, 100000))
+                "'2026-10-07T00:00:00+00:00')", (rsid, 100000))
             conn.execute("COMMIT")
         page = paging.serve_page(actors["jiaming"], {
             "result_set_id": rsid, "session_id": sid,
@@ -494,3 +553,69 @@ class TestRRACursorUpgrade:
         refs = [c.get("resource_ref") for c in page["candidates"]]
         first_ref = p1["candidates"][0]["resource_ref"]
         assert first_ref not in refs, "旧令牌续页不得重发首页条目"
+
+    def test_004_prior_untagged_three_cursor_decodes_and_walks(
+            self, actors):
+        """RRA-004（回访 2026-10-09）：立即前版 f313618 的无 tag 三元
+        编码（idx*1e8+car*1e4+frag）持久令牌——按 created_at 纪元判别
+        为三元正确解码（position=1e9 → idx=10），不误解成二元 idx=
+        100000 的越界空页死循环（同游标 has_more=true 反复空页）。"""
+        for i in range(15):
+            hold(actors, f"南瓜灯事件编号{i:03d}号记录")
+        set_policy(False)
+        p1 = start(actors, ["南瓜灯"], "op-cup3")
+        rsid = p1["pagination"]["result_set_id"]
+        sid = p1["recall_session_id"]
+        assert p1["pagination"]["has_more"]
+        token = p1["pagination"]["next_cursor"]
+        # 模拟升级遗留：把在役游标位置改写为 f313618 三元编码的
+        # (idx=10, car=0, frag=0)——created_at 是本测试真实签发时间
+        # （f313618 纪元之后），判别依据真实存在而非伪造外部游标
+        from mariposa.recall import store as _st
+        with _st.db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE recall_page_cursors SET position=? WHERE token=?",
+                (10 * 100_000_000, token))
+            conn.execute("COMMIT")
+        assert paging._resolve_cursor(rsid, token) == (10, 0, 0)
+        pa = paging.serve_page(actors["jiaming"], {
+            "result_set_id": rsid, "session_id": sid, "cursor": token})
+        assert pa["candidates"], "f313618 三元游标必须从 idx=10 续页交付"
+        # 翻尽：全部续页非空（空页+has_more=同游标活锁）
+        seen_tokens, pages, cur = set(), 0, \
+            pa["pagination"].get("next_cursor")
+        while cur and pages < 200:
+            assert cur not in seen_tokens, "同一游标反复签发=空页死循环"
+            seen_tokens.add(cur)
+            page = paging.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid, "cursor": cur})
+            assert page["candidates"], "续页不得为空（空页+has_more=活锁）"
+            pages += 1
+            cur = page["pagination"].get("next_cursor")
+
+    def test_004_out_of_range_position_rejected_not_empty_loop(
+            self, actors):
+        """RRA-004（回访 2026-10-09）：任何解码后越界的位置（idx 超
+        冻结全集）明确拒绝——不得 0 条目 + has_more=true + 同令牌的
+        空页循环。"""
+        for i in range(12):
+            hold(actors, f"南瓜灯事件编号{i:03d}号记录")
+        set_policy(False)
+        p1 = start(actors, ["南瓜灯"], "op-cup4")
+        rsid = p1["pagination"]["result_set_id"]
+        sid = p1["recall_session_id"]
+        assert p1["pagination"]["has_more"], \
+            "12 卡全集（每页 ≤10 条目）必有续页游标"
+        token = p1["pagination"]["next_cursor"]
+        from mariposa.recall import store as _st
+        with _st.db.recall_runtime() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE recall_page_cursors SET position=? WHERE token=?",
+                (123 * 100_000_000, token))  # idx=123 远超 5 卡全集
+            conn.execute("COMMIT")
+        with pytest.raises(Forbidden) as ei:
+            paging.serve_page(actors["jiaming"], {
+                "result_set_id": rsid, "session_id": sid, "cursor": token})
+        assert ei.value.code == "PAGINATION_CURSOR_INVALID"

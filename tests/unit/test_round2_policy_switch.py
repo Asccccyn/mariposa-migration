@@ -422,34 +422,40 @@ class TestRRA010OffRawFullText:
         assert packet["judge_mode"] == "off"
         rsid = packet["pagination"]["result_set_id"]
         cursor = packet["pagination"].get("next_cursor")
-        # 按载体分别拼回（全文化后 excerpt 与 raw_verbatim 证据各是一份
-        # 全文载体，分片装配各自完整交付）
+        # 按资源/载体/位置精确拼回（RRA-010 回访 2026-10-09：此前 canary
+        # 存在/count≥/总量≥ 断言整段重复也通过；场景含第二张短 raw 卡，
+        # 拼回必须按 (resource_ref, 载体) 分组、按 start_char 排序）
+        per_carrier: dict = {}
         def _collect(page):
-            exc, ev0 = [], []
             for c in page:
-                if c.get("excerpt"):
-                    exc.append(c["excerpt"])
+                ref = c.get("resource_ref")
                 fr = c.get("fragment") or {}
                 if fr.get("text"):
-                    if fr.get("kind") == "excerpt":
-                        exc.append(fr["text"])
-                    else:
-                        ev0.append(fr["text"])
-            return exc, ev0
-
-        exc, ev0 = _collect(packet["candidates"])
+                    per_carrier.setdefault(
+                        (ref, fr.get("kind")), []
+                    ).append((fr.get("start_char"), fr["text"]))
+        _collect(packet["candidates"])
+        first_env = _json.dumps(
+            {"ok": True, "data": packet}, ensure_ascii=False).encode()
+        assert len(first_env) <= 24576, \
+            f"首页信封 {len(first_env)}B 超 24576（RRA-003 残因复测）"
         while cursor:
             page = _pg.serve_page(actors["jiaming"], {
                 "result_set_id": rsid, "session_id": sid,
                 "cursor": cursor})
-            e2, v2 = _collect(page["candidates"])
-            exc += e2
-            ev0 += v2
+            env = _json.dumps(
+                {"ok": True, "data": page}, ensure_ascii=False).encode()
+            assert len(env) <= 24576, \
+                f"续页信封 {len(env)}B 超 24576（RRA-003 残因复测）"
+            _collect(page["candidates"])
             cursor = page["pagination"].get("next_cursor")
-        # 顺序无关的全文交付断言：canary 可达（旧 bug=窗口截断不可达）
-        # + 尾部 6000 字全部到达 + 长文载体总量=全文（不是 67 字窗口）
-        joined = "".join(exc) + "".join(ev0)
-        assert "RA_RAW_TAIL_CANARY" in joined, "长文尾部 canary 可达"
-        assert joined.count("尾") >= 6000, "尾部 6000 字全部到达"
-        assert sum(len(x) for x in exc if len(x) > 100) >= len(body), \
-            "长文载体交付总量≥全文长度（不再只有命中窗口）"
+        joined = {}
+        for key, chunks in per_carrier.items():
+            chunks.sort(key=lambda x: x[0])
+            joined[key] = "".join(t for _, t in chunks)
+        full_kinds = {k[1] for k, v in joined.items() if v == body}
+        assert full_kinds == {"evidence_snippet", "excerpt"}, \
+            "长 Raw 卡两个载体都必须按位置精确拼回=全文（不是窗口摘录，" \
+            "也不是整段重复后的总量达标）"
+        assert "RA_RAW_TAIL_CANARY" in "".join(joined.values()), \
+            "长文尾部 canary 可达"

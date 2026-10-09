@@ -865,11 +865,13 @@ def _judge_policy_update(principal: Principal, a: dict) -> dict:
         principal.principal_id,
         expected_revision=_int_arg(a, "expected_revision", 0, 0, 1 << 30),
         enabled=bool(a.get("enabled")),
-        # RRA-009：请求未携带 provider/model_id 时传 UNSET 哨兵——
-        # 仅切开关不销毁所选配置（显式 null 才清空）
+        # RRA-009（回访 2026-10-09）：provider/model_id 两字段同合同——
+        # 请求未携带传 UNSET 哨兵（仅切开关不销毁所选配置），显式 null
+        # 才清空（此前 model_id 缺省/显式 null 同走 None=保留，「显式
+        # null 清空」承诺未兑现）
         provider=(a["provider"] if "provider" in a
                   else _jp.UNSET),
-        model_id=(a["model_id"] if "model_id" in a else None),
+        model_id=(a["model_id"] if "model_id" in a else _jp.UNSET),
         idempotency_key=a.get("idempotency_key"))
     out["provider_readiness"] = _jp.provider_readiness(out.get("provider"))
     return out

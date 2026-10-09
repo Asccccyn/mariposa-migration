@@ -262,3 +262,92 @@ class TestRRA006BudgetAndSectioning:
         assert it.get("event_text") == "estomago 开窗资料事件9"
         assert "event_text_truncated" not in it
         assert "event_text_next" not in it
+
+
+def _env_bytes(obj) -> int:
+    import json as _json
+    return len(_json.dumps({"ok": True, "data": obj}, ensure_ascii=False,
+                           separators=(",", ":")).encode("utf-8"))
+
+
+class TestRRA006FollowUp:
+    """RRA-006（回访 2026-10-09 run-035424）：memory_item 公开 schema 可
+    消费、多桶分页不漏桶且续页同预算、单条超宽话语按码点分节。"""
+
+    def _hold(self, text, words=None, title="synthetic"):
+        return memory.hold(
+            identity.Principal("jiaming", "周家明", "agent",
+                               "estomago", "bj"),
+            text=text, original_title=title, categories=["daily"],
+            creation_mode="contemporaneous",
+            our_words=words, raw_pending=False)
+
+    def test_registry_memory_item_via_public_schema(self, jiaming):
+        """4013 字事件——首页分节后经 registry（公开 schema 面）
+        bootstrap.next section=memory_item 续取拼回完整（此前 schema
+        拒绝 SCHEMA_VIOLATION，分节承诺不可消费）。"""
+        from mariposa.capabilities import registry as reg
+        full = "EVENT_CANARY-" + "甲" * 4000
+        self._hold(full)
+        p = identity.Principal("jiaming", "n", "agent",
+                               "estomago_builtin", "binding_jiaming")
+        first = reg.invoke(p, "bootstrap.get", {"profile": "estomago"},
+                           None)["data"]
+        it = first["memory_days"]["items"][0]
+        cur = it["event_text_next"]
+        assert cur and cur["field"] == "event_text", "4013 字必分节"
+        parts, snap = [it["event_text"]], first["snapshot_id"]
+        while cur:
+            r = reg.invoke(p, "bootstrap.next",
+                           {"snapshot_id": snap,
+                            "section": "memory_item", "cursor": cur},
+                           None)["data"]
+            parts.append(r["content"])
+            cur = r.get("next_cursor")
+        assert "".join(parts) == full, "registry 面续取拼回逐字完整"
+
+    def test_seven_bucket_walk_no_gap_within_budget(self, jiaming):
+        """7 个 ~6KB 桶——首页+全部续页均 ≤24576B；七桶全部可达不漏
+        （此前首页游标取溢出行致漏第 2 桶；续页无预算 31250B）。"""
+        ids = [self._hold("甲" * 1995 + f"{i:04d}", title=f"桶{i}")
+               ["memory_id"] for i in range(7)]
+        pack = bootstrap.get("jiaming", "estomago", "estomago")
+        assert _env_bytes(pack) <= 24576
+        seen = [it["memory_id"] for it in pack["memory_days"]["items"]]
+        cur = pack["memory_days"]["next_cursor"]
+        pages = 0
+        while cur and pages < 50:
+            page = bootstrap.next_page("jiaming", "estomago",
+                                       pack["snapshot_id"], cur,
+                                       "memory_days")
+            assert _env_bytes(page) <= 24576, "续页同预算（31250B 残因）"
+            seen += [it["memory_id"] for it in page["items"]]
+            cur = page.get("next_cursor")
+            pages += 1
+        assert sorted(set(seen)) == sorted(ids), "七桶全部可达（不漏桶）"
+        assert len(seen) == len(set(seen)), "不重复交付"
+
+    def test_single_long_word_sectioned_by_chars(self, jiaming):
+        """单条 10000 字话语——首段按码点分节（整包 ≤24576；此前 31596B），
+        条内 char_offset 续取拼回逐字完整。"""
+        full = "话" * 10000
+        mid = self._hold("small event",
+                         words=[{"speaker": "qiaosheng", "text": full,
+                                 "expression_kind": "verbatim"}]
+                         )["memory_id"]
+        pack = bootstrap.get("jiaming", "estomago", "estomago")
+        assert _env_bytes(pack) <= 24576, \
+            f"单长 word 整包 {_env_bytes(pack)}B 击穿预算（31596B 残因）"
+        it = next(x for x in pack["memory_days"]["items"]
+                  if x["memory_id"] == mid)
+        assert it["our_words_truncated"] is True
+        chunks = [w["text"] for w in it["our_words"]]
+        cur = it["our_words_next"]
+        assert cur.get("char_offset", 0) > 0, "单条超宽走条内字符游标"
+        while cur:
+            pg = bootstrap.next_page("jiaming", "estomago",
+                                     pack["snapshot_id"], cur,
+                                     "memory_item")
+            chunks += [w["text"] for w in pg["items"]]
+            cur = pg.get("next_cursor")
+        assert "".join(chunks) == full, "条内分节拼回逐字完整"
