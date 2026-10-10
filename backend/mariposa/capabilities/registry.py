@@ -42,6 +42,10 @@ class Capability:
     write: bool
     idempotent: bool = False
     description: str = ""
+    # 语义统一批（2026-10-10 她批）：占位状态=明确字段——此前靠描述
+    # 前缀 [blocked]/[reserved] 过滤，描述文字含 reserved 但非前缀的
+    # （emotion/listening）漏进发现列表
+    status: str = "available"  # available | blocked | reserved
 
 
 def _everyone() -> set[str]:
@@ -88,8 +92,8 @@ def _int_arg(a: dict, key: str, default: int, lo: int, hi: int) -> int:
 def _register() -> dict[str, Capability]:
     caps: dict[str, Capability] = {}
 
-    def add(name, handler, allowed, write, idempotent=False, description=""):
-        caps[name] = Capability(name, handler, set(allowed), write, idempotent, description)
+    def add(name, handler, allowed, write, idempotent=False, description="", status="available"):
+        caps[name] = Capability(name, handler, set(allowed), write, idempotent, description, status)
 
     add("memory.hold", _hold, {"qiaosheng", "jiaming"}, True,
         description="写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；"
@@ -97,7 +101,7 @@ def _register() -> dict[str, Capability]:
     add("memory.hold.status", _hold_status, _owners(), False,
         description="按 operation_id 查 hold 完成回执（历史成功与当前"
                     "资源状态分列；无记录=尚无提交证据）")
-    add("memory.get", _get, _owners(), False, description="读取当前表示（遗忘桶只返回摘要）")
+    add("memory.get", _get, _owners(), False, description="读取当前表示（历史 forgotten_summary 只返回审批摘要——LEGACY_CONTENT_GAP；v1.7 遗忘链已退役，无新遗忘产生）")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
@@ -178,7 +182,7 @@ def _register() -> dict[str, Capability]:
                     "（零检索/零判断/零 COUNT；政策切换拒绝混页；"
                     "游标与 refine/Raw 续页引用分槽不互换）")
     add("memory.words.get", _words_get, _owners(), False,
-        description="按 word_id 读单条话语（当前表示校验；遗忘=disabled）")
+        description="按 word_id 读单条话语（当前表示校验；历史 forgotten_summary 标 LEGACY_CONTENT_GAP）")
     add("memory.context.validate", _context_validate, _owners(), False,
         description="装配上下文的资源引用+版本重查（estómago/CC 换窗用）")
     # v1.7：遗忘/摘要/审查链已整体退役（决策 2026-09-28）——
@@ -279,9 +283,9 @@ def _register() -> dict[str, Capability]:
     add("memory.mood.vocab", _mood_vocab, _owners(), False,
         description="心情词表开放接口（大类/下层词+写入规则，单一事实源）")
     add("memory.by_emotion", _by_emotion, _owners(), False,
-        description="按情绪查（结构化入口，遗忘桶仍可查）")
+        description="按情绪查（结构化入口；历史 forgotten_summary 仍可查）")
     add("memory.update", _memory_update, _owners(), True,
-        description="修改桶正文（新版本，不就地覆盖；遗忘桶先恢复）")
+        description="修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）")
     add("memory.pin", lambda pr, a: extras.set_flag(
         pr.principal_id, str(a.get("memory_id", "")), "pin",
         bool(a.get("value", True))), _owners(), True,
@@ -333,7 +337,7 @@ def _register() -> dict[str, Capability]:
     add("media.list", _media_list, _owners(), False, description="媒体对象列表")
     add("media.get", _media_get_meta, _owners(), False, description="媒体元数据")
     add("memory.list", _memory_list, _owners(), False,
-        description="记忆倒序列表（遗忘桶只给摘要表示）")
+        description="记忆倒序列表（历史 forgotten_summary 只给摘要表示）")
     add("memory.by_date", _by_date, _owners(), False,
         description="按事件发生日期直达（标题优先）")
     add("memory.by_category", _by_category, _owners(), False,
@@ -366,9 +370,9 @@ def _register() -> dict[str, Capability]:
                     "分页；仅 qiaosheng，且仅网页登录会话可写——"
                     "OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）")
     add("emotion.context.get", _emotion_reserved, _owners(), False,
-        description="情绪补充召回（reserved，默认禁用）")
+        description="情绪补充召回（默认禁用）", status="reserved")
     add("listening.status", _listening_reserved, _owners(), False,
-        description="一起听歌（reserved，未选供应商）")
+        description="一起听歌（未选供应商）", status="reserved")
     return caps
 
 

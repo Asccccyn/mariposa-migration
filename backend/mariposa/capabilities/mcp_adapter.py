@@ -75,8 +75,12 @@ def _tools_for(principal: Principal) -> list[dict]:
         # 瘦身（审计 1005B）：blocked/reserved 占位（v1 兼容面的诚实
         # 声明）对 MCP 消费者是纯发现噪声——调了也只会拿到 blocked
         # 状态。仅从 tools/list 隐藏；HTTP capabilities.list 与 invoke
-        # 照旧（能力仍注册，负测/审计可验证）
-        if cap.description.startswith(("[blocked]", "[reserved]")):
+        # 照旧（能力仍注册，负测/审计可验证）。
+        # 语义统一批（2026-10-10）：状态=**明确字段**优先；描述前缀
+        # （[blocked]/[reserved]）保留为 v1_compat 动态注册路径的兼容
+        # 判断——两源合一，任一命中即从发现列表收起
+        if getattr(cap, "status", "available") != "available" \
+                or cap.description.startswith(("[blocked]", "[reserved]")):
             continue
         from . import input_schemas
         schema = input_schemas.schema_for(cap.name) or {

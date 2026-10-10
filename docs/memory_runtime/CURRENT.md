@@ -365,6 +365,15 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-10（语义统一批，她批"你做吧"）：Capability 加 **status 字段**
+  （available/blocked/reserved）——MCP 发现列表过滤改为状态字段优先
+  （描述前缀 [blocked]/[reserved] 保留为 v1_compat 动态注册路径的兼容
+  判断，两源合一）；emotion.context.get/listening.status 从发现列表收起
+  （描述含 reserved 文字但非前缀曾漏入）；五处旧"遗忘桶"措辞对齐 v1.7
+  退役后语义——历史 forgotten_summary 是 legacy 状态（LEGACY_CONTENT_GAP，
+  恢复走一次性离线迁移），不是活跃遗忘机制，不再以"遗忘桶"暗示在产
+  遗忘链。jiaming 发现列表 114→112。
+
 - 2026-10-10（JSON 瘦身专项·批 1，四轮回访全过后她开专项）：
   recall 续页去重——retrieval_coverage（~270B）与 budget 快照
   （~110B）改为**仅首页携带**（此前每页重复，续页 15% 纯重复；
