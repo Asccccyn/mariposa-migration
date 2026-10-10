@@ -521,11 +521,18 @@ def serve_page(principal, a: dict) -> dict:
         "delivery_action": "needs_validation",
         "instruction_authority": "none",
         "content_role": "retrieved_memory",
-        "retrieval_coverage": pset["coverage"],
         "invalidated": invalidated,
-        "budget": budget_mod.snapshot(session),
         "token_count": config.RECALL_TOKENIZER,
     }
+    # JSON 瘦身专项（2026-10-10 她）：查询级元数据只在**首页**发——
+    # retrieval_coverage（~270B）与 budget 快照（~110B）此前每页重复
+    # （续页 15% 纯重复）；E 消费面为条件透传（缺省容忍），invalidated
+    # 是页间失效披露仍逐页携带（空表省略）
+    if not cursor:
+        extra["retrieval_coverage"] = pset["coverage"]
+        extra["budget"] = budget_mod.snapshot(session)
+    if not invalidated:
+        extra.pop("invalidated")
     # RRA-004（二次回访 2026-10-10）：解码三元组**全量** fail-closed——
     # 此前只检 idx 正向上界：负 idx（position=-1 解出 (-1,9999,9999)）
     # 会倒序重发末卡+首页；carrier/fragment 越界被当"载体耗尽"静默跳卡/

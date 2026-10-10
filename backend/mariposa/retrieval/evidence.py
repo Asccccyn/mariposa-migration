@@ -38,8 +38,11 @@ def make_evidence(kind: str, field: str, snippet: str, source_ref: str,
         "field": field,
         "source_ref": source_ref,
         "source_version": source_version,
-        "truncated": truncated,
     }
+    # JSON 瘦身专项（2026-10-10 她）：truncated=False 是缺省——不写键
+    #（15B/条；读取方均为 falsy .get()）；True（真截断）如实携带
+    if truncated:
+        ev["truncated"] = truncated
     if structured_value is not None:
         ev["structured_value"] = structured_value
     else:
