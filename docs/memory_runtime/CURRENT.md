@@ -365,6 +365,15 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 ## 12. 变更记录
 
+- 2026-10-10（JSON 瘦身专项·批 1，四轮回访全过后她开专项）：
+  recall 续页去重——retrieval_coverage（~270B）与 budget 快照
+  （~110B）改为**仅首页携带**（此前每页重复，续页 15% 纯重复；
+  E 消费面为条件透传缺省容忍）；invalidated 空表省略（页间失效
+  披露仍逐页携带非空表）；evidence/卡级 truncated=False 缺省不写键
+  （读取方均为 falsy .get()；真截断如实携带）。实测续页 2592B→
+  2127B（-17%）。安全标签（content_role/instruction_authority）
+  每条携带是刻意设计，不动。
+
 - 2026-10-10（三次回访 A+B 批，run-230814，RRA-006 根因收口）：
   A——our_words 分节计量改**完整出站条目对象字节**（旧计量只算正文
   字符串，每条 ~34B 结构开销漏账：合法 700 条单字首包 26064B 击穿

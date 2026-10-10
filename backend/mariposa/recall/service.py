@@ -767,11 +767,11 @@ def _expand_raw_full_text(card: dict) -> None:
     if not full:
         return
     card["excerpt"] = full
-    card["truncated"] = False
+    card.pop("truncated", None)  # 全文化=未截断：缺省即 false（瘦身批）
     for ev in card.get("evidence") or []:
         if ev.get("evidence_kind") == "raw_verbatim":
             ev["snippet"] = full
-            ev["truncated"] = False
+            ev.pop("truncated", None)
 
 
 def _expand_full_text(card: dict) -> None:
@@ -807,7 +807,7 @@ def _expand_full_text(card: dict) -> None:
     for ev in card.get("evidence") or []:
         if ev.get("evidence_kind") == "authored_event":
             ev["snippet"] = body
-            ev["truncated"] = False
+            ev.pop("truncated", None)  # 全文化=未截断：缺省即 false
             return
 
 
