@@ -65,3 +65,40 @@ class TestPlanLifecycle:
             got = plans.get(conn, p["plan_id"])
         assert got["state"] == "done"
         assert got["completed_at"], "终结必须留终结时间锚"
+
+
+class TestPlanPromotionC2:
+    """C 档选 2（她 2026-10-10 裁定）：plan.get/complete/cancel 从 v1
+    薄实现转正主表——三动作不再仅有兼容层入口。"""
+
+    def test_plan_get_complete_cancel_main_table(self):
+        from mariposa.capabilities import registry as reg
+        from mariposa.identity import service as identity
+        from tests.conftest import reset_all
+        reset_all()
+        P = identity.Principal("qiaosheng", "q", "human", "web", "bq")
+        J = identity.Principal("jiaming", "n", "agent", "cc", "bj")
+        # 转正：主表描述非薄实现标记；薄层同名让位（REGISTRY 无重复注册路径）
+        for cap in ("plan.get", "plan.complete", "plan.cancel"):
+            assert not reg.REGISTRY[cap].description.startswith(
+                "[v1.1"), f"{cap} 应为主表描述"
+        c = reg.invoke(P, "plan.create",
+                       {"title": "转正验收", "content": "正文"}, None)["data"]
+        pid, ver = c["plan_id"], c["version"]
+        g = reg.invoke(J, "plan.get", {"plan_id": pid}, None)["data"]
+        assert g["title"] == "转正验收" and g["version"] == ver
+        done = reg.invoke(P, "plan.complete",
+                          {"plan_id": pid, "expected_version": ver},
+                          None)["data"]
+        assert done["state"] == "done" and done["version"] == ver + 1
+        c2 = reg.invoke(P, "plan.create", {"title": "弃"}, None)["data"]
+        x = reg.invoke(P, "plan.cancel",
+                       {"plan_id": c2["plan_id"],
+                        "expected_version": c2["version"]}, None)["data"]
+        assert x["state"] == "cancelled"
+        # schema 面：缺 expected_version 拒（转正后走真 schema 非薄层宽松）
+        import pytest as _pytest
+        from mariposa.errors import Forbidden as _F
+        with _pytest.raises(_F) as ei:
+            reg.invoke(P, "plan.complete", {"plan_id": pid}, None)
+        assert ei.value.code == "SCHEMA_VIOLATION"

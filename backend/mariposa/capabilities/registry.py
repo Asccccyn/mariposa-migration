@@ -233,6 +233,15 @@ def _register() -> dict[str, Capability]:
     add("plan.update", _plan_update, _owners(), True,
         description="修改计划（expected_version 乐观锁）")
     add("plan.list", _plan_list, _owners(), False, description="列出计划")
+    # C 档选 2（她 2026-10-10 裁定）：查看/完成/放弃从 v1 薄实现转正——
+    # 此前三动作仅有兼容层入口（绑定收口与 E 生产的依赖）；转正后
+    # v1_compat 按同名跳过自动让位
+    add("plan.get", _plan_get, _owners(), False,
+        description="读取单个计划明细（含正文、状态与版本）")
+    add("plan.complete", _plan_set_done, _owners(), True,
+        description="标记计划完成（expected_version 乐观锁；state=done 的专用动作）")
+    add("plan.cancel", _plan_set_cancelled, _owners(), True,
+        description="放弃计划（expected_version 乐观锁；state=cancelled；不物理删除）")
     add("memory.reengagement.record", _reengage, _owners(), True,
         description="记录真实再提起（按证据原时刻；扫描/访问不算）")
     add("identity.bindings.revoke", _binding_revoke, {"qiaosheng"}, True,
@@ -1056,6 +1065,24 @@ def _plan_update(principal: Principal, a: dict) -> dict:
 
 def _plan_list(principal: Principal, a: dict) -> dict:
     return {"plans": plans.list_plans(a.get("states"))}
+
+
+def _plan_get(principal: Principal, a: dict) -> dict:
+    with db.formal() as conn:
+        return plans.get(conn, str(a.get("plan_id", "")))
+
+
+def _plan_set_done(principal: Principal, a: dict) -> dict:
+    return plans.update(
+        principal.principal_id, str(a.get("plan_id", "")),
+        _int_arg(a, "expected_version", 0, 0, 1 << 31), state="done")
+
+
+def _plan_set_cancelled(principal: Principal, a: dict) -> dict:
+    return plans.update(
+        principal.principal_id, str(a.get("plan_id", "")),
+        _int_arg(a, "expected_version", 0, 0, 1 << 31),
+        state="cancelled")
 
 
 
