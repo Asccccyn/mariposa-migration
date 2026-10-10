@@ -294,6 +294,27 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "plan.list": {"type": "object", "additionalProperties": False,
                    "properties": {"states": {"type": "array",
                                               "items": {"type": "string"}}}},
+    # C 档选 2（她 2026-10-10）：三动作从 v1 薄实现转正——schema 与
+    # E 客户端现行调用形状一致（plan_id / plan_id+expected_version）
+    "plan.get": {
+        "type": "object", "required": ["plan_id"],
+        "additionalProperties": False,
+        "properties": {"plan_id": {"type": "string", "minLength": 1}},
+    },
+    "plan.complete": {
+        "type": "object", "required": ["plan_id", "expected_version"],
+        "additionalProperties": False,
+        "properties": {
+            "plan_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1}},
+    },
+    "plan.cancel": {
+        "type": "object", "required": ["plan_id", "expected_version"],
+        "additionalProperties": False,
+        "properties": {
+            "plan_id": {"type": "string", "minLength": 1},
+            "expected_version": {"type": "integer", "minimum": 1}},
+    },
     "presence.status": {"type": "object", "additionalProperties": False,
                          "properties": {}},
     "source.binding.list": {"type": "object", "additionalProperties": False,
