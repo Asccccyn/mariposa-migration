@@ -1,9 +1,0 @@
-{
-  "source": "/Users/zhoujiaming/Projects/mariposa",
-  "snapshot": "/Users/zhoujiaming/Documents/Codex/2026-10-04/an-z/work/audit/snapshot",
-  "head": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50",
-  "status": " M docs/memory_runtime/BASELINE.md\n M docs/memory_runtime/CURRENT.md\n M docs/memory_runtime/EVALUATION.md\n M docs/memory_runtime/PATH_MAP.md\n",
-  "files": 339,
-  "remote_main_verified": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50",
-  "remote_head_verified": "8b6b1c840872eedc87d41ef0e5058d45cf4cec50"
-}
