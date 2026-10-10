@@ -1,3 +1,0 @@
-  ok 2 e2e\forget-loop.spec.ts:114:1 › 日历页签渲染月视图 + 刷新后状态保持（T-OPS-04） (2.4s)
-
-  2 passed (16.8s)
