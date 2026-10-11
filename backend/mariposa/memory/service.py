@@ -150,6 +150,8 @@ def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
 #: 全局唯一短标识。单一全局号段，永不复用（桶删除后号码作废不回填）；
 #: 既有 mem_ 旧编号不受影响，两类并存。
 _BUCKET_ID_COUNTER_KEY = "_global"
+# 空分类放行白名单（她 2026-10-10 现场裁定：批量迁移件分类待填）
+_EMPTY_CATEGORY_ENTRY_SOURCES = frozenset({"ombre_legacy_migration"})
 _BUCKET_ID_MAX = 99999
 
 
@@ -339,14 +341,19 @@ def hold_in_tx(
     v2 = any(v is not None for v in (original_title, categories, mood,
                                      our_words, creation_mode,
                                      occurred_start, occurred_end))
-    # v1.7 §3.2：分类必填——没有未分类默认值，不为通过测试自动补"日常"
+    # v1.7 §3.2 原裁定：分类必填、无默认值。修订（她 2026-10-10 现场
+    # 裁定）：批量迁移件允许空分类（"先空着我自己来"）——空=分类待填，
+    # 绝不自动补"日常"；后续走 memory.categories.replace 补。
     from ..errors import Forbidden as _F
-    if not categories:
-        raise _F("CATEGORY_REQUIRED：至少一项合法分类（九分类，v1.7）",
+    cats = categories_mod.validate(categories) if categories else []
+    # 空分类放行仅限显式迁移入口（白名单 entry_source）；网页/MCP 的
+    # 日常 hold 仍按原裁定拒绝——web 等通用 entry_source 不在白名单
+    if not cats and entry_source not in _EMPTY_CATEGORY_ENTRY_SOURCES:
+        raise _F("CATEGORY_REQUIRED：至少一项合法分类（九分类，v1.7）；"
+                 "空分类仅限迁移入口（她 2026-10-10 批量迁移裁定）",
                  code="CATEGORY_REQUIRED",
                  allowed=sorted(("daily", "milestone", "sad", "sweet", "date",
                                  "plan", "sex", "anniversary", "reloplay")))
-    cats = categories_mod.validate(categories)
     # 2026-10-05 宿主用户裁定：原始标题必填——全量浏览先扫标题，标题即
     # 提要；精简上限 30 字符，超限结构化拒绝
     title = (original_title or "").strip()
@@ -390,7 +397,7 @@ def hold_in_tx(
                 code="MOOD_WINDOW_REQUIRED")
         mood_data = _validate_mood(principal, mood, mode)
 
-    memory_id = memory_id or _next_bucket_id(conn, cats[0])
+    memory_id = memory_id or _next_bucket_id(conn, cats[0] if cats else None)
     now = now or _now()
     # 裁定（宿主用户 2026-10-06，F-J-03/D1 选项 A）：当天记录自动日期——
     # contemporaneous 且未给日期的 hold，memory_date 用同一次 held_at 的
