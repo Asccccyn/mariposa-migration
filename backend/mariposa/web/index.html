@@ -699,10 +699,18 @@ function srcMsgHtml(m) {
   for (const a of (m.attachments || []))
     badges.push(`<span class="src-badge">附件 ${esc(typeof a === 'string' ? a : (a.file_name || a.filename || a.title || a.block_type || ''))}</span>`);
   let evidence = '';
-  if (m.has_thinking || m.has_tool_content || m.normalized_sender === 'unknown' || m.normalized_sender === 'system' || m.normalized_sender === 'tool')
-    evidence = '<details><summary>证据内容（thinking / 工具 / 非正文块）</summary>' +
-      `<div class="src-md">${srcMd(m.text || '（正文为空；完整结构见 content_json，母本在 Raw Archive）')}</div>` +
-      '</details>';
+  if (m.has_thinking || m.has_tool_content || m.normalized_sender === 'unknown' || m.normalized_sender === 'system' || m.normalized_sender === 'tool') {
+    let inner = '';
+    if (m.thinking_text)
+      inner += `<div class="src-md">${srcMd(m.thinking_text)}</div>`;
+    if (m.thinking_summaries && m.thinking_summaries.length)
+      inner += `<div class="meta" style="margin-top:6px">官方思考摘要：${m.thinking_summaries.map(esc).join(' ／ ')}</div>`;
+    if (!inner)
+      inner = `<div class="src-md">${srcMd(m.text || '（正文为空；完整结构见 content_json，母本在 Raw Archive）')}</div>`;
+    evidence = (m.has_thinking
+        ? '<details><summary>他的思考过程（thinking，点开看）</summary>' + inner + '</details>'
+        : '<details><summary>证据内容（工具 / 非正文块）</summary>' + inner + '</details>');
+  }
   const body = m.text
     ? `<div class="src-bubble"><div class="src-md">${srcMd(m.text)}</div></div>`
     : `<div class="src-bubble" style="opacity:.6">（无用户可见正文）</div>`;
@@ -741,6 +749,9 @@ async function loadSourceConvs(reset) {
       const div = document.createElement('div');
       div.className = 'item src-conv';
       div.innerHTML = `<div><b>${esc(c.title)}</b></div>` +
+        (c.summary
+          ? `<div class="meta" style="opacity:.7">${esc(c.summary.replace(/\s+/g, ' ').slice(0, 90))}${c.summary.length > 90 ? '…' : ''}</div>`
+          : '') +
         `<div class="meta"><span>${c.message_count} 条</span>` +
         `<span>${srcTime(c.first_message_at)} → ${srcTime(c.last_message_at)}</span>` +
         `<code>${esc(c.provider_conversation_id)}</code></div>`;
@@ -783,7 +794,11 @@ function renderSourceConv(d, jump) {
     `<button id="srcConvBack">← 返回列表</button></div>` +
     `<div class="meta"><span>${c.message_count} 条</span>` +
     `<span>会话 ${srcTime(c.created_at)} → ${srcTime(c.updated_at)}</span>` +
-    `<code>${esc(c.provider_conversation_id)}</code></div></div>`;
+    `<code>${esc(c.provider_conversation_id)}</code></div>` +
+    (c.summary
+      ? `<details style="margin:8px 0"><summary>会话摘要（官方生成，点开看）</summary>` +
+        `<div class="src-md">${srcMd(c.summary)}</div></details>`
+      : '') + `</div>`;
   html += d.messages.map(srcMsgHtml).join('');
   box.innerHTML = html;
   $('srcConvBack').onclick = () => { box.innerHTML = ''; loadSourceConvs(); };

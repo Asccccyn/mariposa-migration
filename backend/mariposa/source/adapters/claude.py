@@ -46,6 +46,7 @@ def normalize_conversation(element: Any) -> ConversationDraft:
     synthetic = not (isinstance(uuid, str) and uuid.strip())
     conv_id = uuid.strip() if not synthetic else None
     name = element.get("name") or element.get("title")
+    summary = element.get("summary")
     return ConversationDraft(
         provider_conversation_id=conv_id if conv_id else "",
         id_synthetic=synthetic,
@@ -53,6 +54,8 @@ def normalize_conversation(element: Any) -> ConversationDraft:
         created_at=_as_original_str(element.get("created_at")),
         updated_at=_as_original_str(element.get("updated_at")),
         messages=element.get("chat_messages") or [],
+        summary=summary.strip()
+            if isinstance(summary, str) and summary.strip() else None,
     )
 
 

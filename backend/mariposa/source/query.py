@@ -464,6 +464,68 @@ def _parent_path_ids(conn, start, end, pubflt: str) -> list[str]:
     return path
 
 
+def _thinking_evidence(content_json: str | None) -> tuple[str, list[str]]:
+    """从 content 证据提取 thinking 块文本与官方思考摘要。
+
+    官方导出的 thinking 块：{type:"thinking", thinking:"<原文>",
+    summaries:[{summary:"<官方一句话摘要>"}]}。返回 (原文拼接, 摘要列表)；
+    content_json 损坏/缺块时返回空——展示层 fail-open 为"不可用"，
+    母本仍在 Raw Archive。
+    """
+    if not content_json:
+        return "", []
+    try:
+        blocks = json.loads(content_json)
+    except (ValueError, TypeError):
+        return "", []
+    if not isinstance(blocks, list):
+        return "", []
+    texts: list[str] = []
+    summaries: list[str] = []
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("type") != "thinking":
+            continue
+        t = b.get("thinking")
+        if isinstance(t, str) and t.strip():
+            texts.append(t.strip())
+        for s in b.get("summaries") or []:
+            if isinstance(s, dict) and isinstance(s.get("summary"), str) \
+                    and s["summary"].strip():
+                summaries.append(s["summary"].strip())
+    # 保序去重（官方可能对同一思考给多条近似摘要）
+    seen = set()
+    ordered = [s for s in summaries
+               if not (s in seen or seen.add(s))]
+    return "\n\n".join(texts), ordered
+
+
+def _attach_thinking(serialized: list[dict], conversation_id: str) -> None:
+    """给已序列化消息就地补 thinking 展示字段（一次批量补查）。
+
+    会话查看是阅读路径，thinking 需要可见；_COLS 不含 content_json
+    （检索路径不该背大字段），所以在阅读出口单点批量补。
+    """
+    want = [m["provider_message_id"] for m in serialized
+            if m.get("has_thinking")]
+    if not want:
+        return
+    ph = ",".join("?" * len(want))
+    with db.formal() as conn:
+        rows = conn.execute(
+            f"SELECT provider_message_id, content_json FROM source_messages"
+            f" WHERE provider_message_id IN ({ph})", want).fetchall()
+    ev = {r["provider_message_id"]: _thinking_evidence(r["content_json"])
+          for r in rows}
+    for m in serialized:
+        if not m.get("has_thinking"):
+            continue
+        text, sums = ev.get(m["provider_message_id"], ("", []))
+        if text:
+            m["thinking_text"] = text
+        if sums:
+            m["thinking_summaries"] = sums
+
+
 def get_conversation(conversation_id: str, after_seq=None,
                      before_seq=None, around_seq: int | None = None,
                      limit: int = 100, after_id: str | None = None,
@@ -591,9 +653,11 @@ def get_conversation(conversation_id: str, after_seq=None,
             " AND published=1", (conv["id"],)).fetchone()["c"]
     first = msgs[0] if msgs else None
     last = msgs[-1] if msgs else None
+    serialized = [_serialize(r) for r in msgs]
+    _attach_thinking(serialized, conv["id"])
     return {
         "conversation": _conv_summary(conv),
-        "messages": [_serialize(r) for r in msgs],
+        "messages": serialized,
         "next_after_seq": last["sequence"] if last else None,
         "prev_before_seq": first["sequence"] if first else None,
         "next_after_cursor": ({"seq": last["sequence"], "id": last["id"]}
@@ -644,7 +708,7 @@ def conversations_list(limit: int = 50, offset: int = 0,
     with db.formal() as conn:
         rows = conn.execute(
             f"SELECT id, provider, provider_conversation_id, title,"
-            f" created_at, updated_at,"
+            f" created_at, updated_at, summary,"
             f" (SELECT COUNT(*) FROM source_messages m WHERE"
             f"  m.conversation_id=source_conversations.id AND m.published=1)"
             f" AS message_count,"
@@ -881,14 +945,16 @@ def _find_conversation(conn, conversation_id: str):
     多源存量下取错会话（range/binding 复用此 resolver）。"""
     row = conn.execute(
         "SELECT id, provider, provider_conversation_id, title, created_at,"
-        " updated_at, message_count, first_message_at, last_message_at"
+        " updated_at, message_count, first_message_at, last_message_at,"
+        " summary"
         " FROM source_conversations WHERE id=?",
         (conversation_id,)).fetchone()
     if row is not None:
         return row
     rows = conn.execute(
         "SELECT id, provider, provider_conversation_id, title, created_at,"
-        " updated_at, message_count, first_message_at, last_message_at"
+        " updated_at, message_count, first_message_at, last_message_at,"
+        " summary"
         " FROM source_conversations WHERE provider_conversation_id=?",
         (conversation_id,)).fetchall()
     if len(rows) > 1:
@@ -909,6 +975,8 @@ def _conv_summary(conv) -> dict:
            "created_at": _fmt_min(conv["created_at"]),
            "updated_at": _fmt_min(conv["updated_at"]),
            "message_count": conv["message_count"]}
+    if "summary" in conv.keys() and conv["summary"]:
+        out["summary"] = conv["summary"]
     if "first_message_at" in conv.keys():
         out["first_message_at"] = _fmt_min(conv["first_message_at"])
         out["last_message_at"] = _fmt_min(conv["last_message_at"])

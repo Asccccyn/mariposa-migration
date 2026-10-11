@@ -734,18 +734,28 @@ def _ensure_conversation(conn, provider: str, batch_id: str, draft,
         (provider, draft.provider_conversation_id)).fetchone()
     if row:
         stats["conversations_existing"] += 1
-        conn.execute(
-            "UPDATE source_conversations SET last_import_batch_id=?"
-            " WHERE id=?", (batch_id, row["id"]))
+        # 摘要仅在新导出带非空 summary 时刷新（官方会持续更新摘要）；
+        # 绝不用 NULL 覆盖已存值——旧格式导出没有 summary 是常态，不是删除
+        if getattr(draft, "summary", None):
+            conn.execute(
+                "UPDATE source_conversations SET last_import_batch_id=?,"
+                " summary=? WHERE id=?",
+                (batch_id, draft.summary, row["id"]))
+        else:
+            conn.execute(
+                "UPDATE source_conversations SET last_import_batch_id=?"
+                " WHERE id=?", (batch_id, row["id"]))
         return row["id"]
     stats["conversations_new"] += 1
     conv_id = f"sc_{_uuid.uuid4().hex[:14]}"
     conn.execute(
         "INSERT INTO source_conversations(id, provider,"
         " provider_conversation_id, title, created_at, updated_at,"
-        " first_import_batch_id, last_import_batch_id) VALUES(?,?,?,?,?,?,?,?)",
+        " first_import_batch_id, last_import_batch_id, summary)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
         (conv_id, provider, draft.provider_conversation_id, draft.title,
-         draft.created_at, draft.updated_at, batch_id, batch_id))
+         draft.created_at, draft.updated_at, batch_id, batch_id,
+         getattr(draft, "summary", None)))
     return conv_id
 
 

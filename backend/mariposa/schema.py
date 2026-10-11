@@ -1180,6 +1180,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_judge_policy_history_idem
   ON recall_judge_policy_history(idempotency_key)
   WHERE idempotency_key IS NOT NULL;
 """),
+    (36, """
+-- ===== 原文层会话摘要（2026-10-10）：官方导出的 summary 入库 =====
+-- 仅展示证据，不参与检索/绑定；已有库由导入回填（importer 在后续
+-- 导入时对已存在会话仅在 draft 带非空摘要时更新该列）。
+ALTER TABLE source_conversations ADD COLUMN summary TEXT;
+"""),
 ]
 
 

@@ -43,4 +43,7 @@ class ConversationDraft:
     created_at: str | None
     updated_at: str | None
     messages: list[Any] = field(default_factory=list)
+    # 官方导出的会话摘要（Claude.ai 自动生成的 Overview）；可选证据，
+    # 不参与检索/绑定，仅随会话详情展示
+    summary: str | None = None
 
