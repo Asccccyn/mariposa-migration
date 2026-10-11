@@ -620,7 +620,8 @@ _CONV_ORDER_BY = {
 
 def conversations_list(limit: int = 50, offset: int = 0,
                        provider: str | None = None,
-                       order: str | None = None) -> dict:
+                       order: str | None = None,
+                       titled: bool | None = None) -> dict:
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     order_by = _CONV_ORDER_BY.get(order or "updated_desc")
@@ -630,6 +631,11 @@ def conversations_list(limit: int = 50, offset: int = 0,
             code="INVALID_ARGUMENT", http_status=400)
     where = ["EXISTS (SELECT 1 FROM source_messages m WHERE"
              " m.conversation_id=source_conversations.id AND m.published=1)"]
+    if titled:
+        # 只留有标题会话；空标题壳（官方导出 name 为空）默认值是
+        # "(未命名对话)"，在 WHERE 层过滤保证 total/has_more 分页
+        # 计数与展示一致——不能只在展示层藏
+        where.append("title IS NOT NULL AND title != ''")
     params: list = []
     if provider:
         where.append("provider=?")

@@ -336,6 +336,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                    "properties": {"limit": {},
                                                     "offset": {},
                                                     "provider": {"type": "string"},
+                                                    "titled": {"type": "boolean"},
                                                     "order": {"type": "string",
                                                               "enum": [
         "updated_desc", "first_asc", "first_desc"]}}},

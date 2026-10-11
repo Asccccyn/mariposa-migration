@@ -1007,7 +1007,7 @@ def _source_conversation_get(principal: Principal, a: dict) -> dict:
 def _source_conversations_list(principal: Principal, a: dict) -> dict:
     return source_query.conversations_list(
         _int_arg(a, "limit", 50, 1, 200), _int_arg(a, "offset", 0, 0, 100000),
-        a.get("provider"), a.get("order"))
+        a.get("provider"), a.get("order"), a.get("titled"))
 
 
 def _source_bind(principal: Principal, a: dict) -> dict:
