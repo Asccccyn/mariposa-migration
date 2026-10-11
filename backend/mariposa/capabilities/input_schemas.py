@@ -335,7 +335,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                    "additionalProperties": False,
                                    "properties": {"limit": {},
                                                     "offset": {},
-                                                    "provider": {"type": "string"}}},
+                                                    "provider": {"type": "string"},
+                                                    "order": {"type": "string",
+                                                              "enum": [
+        "updated_desc", "first_asc", "first_desc"]}}},
     "source.import.batches": {"type": "object",
                                "additionalProperties": False,
                                "properties": {"limit": {}}},

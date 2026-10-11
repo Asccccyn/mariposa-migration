@@ -16,6 +16,8 @@ import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from ..errors import MariposaError
+
 _TZ = ZoneInfo("Asia/Shanghai")
 
 from .. import config, db
@@ -606,10 +608,26 @@ def get_conversation(conversation_id: str, after_seq=None,
     }
 
 
+# 排序白名单：order 只允许查表取片段，绝不拼进 SQL（防注入同
+# _escape_like 的理由）。first_* 按首条已发布消息时间；NULL（空会话
+# 壳）两种方向都排最后。
+_CONV_ORDER_BY = {
+    "updated_desc": "COALESCE(updated_at, created_at) DESC",
+    "first_asc": "first_message_at IS NULL, first_message_at ASC",
+    "first_desc": "first_message_at IS NULL, first_message_at DESC",
+}
+
+
 def conversations_list(limit: int = 50, offset: int = 0,
-                       provider: str | None = None) -> dict:
+                       provider: str | None = None,
+                       order: str | None = None) -> dict:
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
+    order_by = _CONV_ORDER_BY.get(order or "updated_desc")
+    if order_by is None:
+        raise MariposaError(
+            f"未知排序 {order!r}；可选：{'、'.join(_CONV_ORDER_BY)}",
+            code="INVALID_ARGUMENT", http_status=400)
     where = ["EXISTS (SELECT 1 FROM source_messages m WHERE"
              " m.conversation_id=source_conversations.id AND m.published=1)"]
     params: list = []
@@ -631,7 +649,7 @@ def conversations_list(limit: int = 50, offset: int = 0,
             f"  m.conversation_id=source_conversations.id AND m.published=1)"
             f" AS last_message_at"
             f" FROM source_conversations {cond}"
-            f" ORDER BY COALESCE(updated_at, created_at) DESC"
+            f" ORDER BY {order_by}"
             f" LIMIT ? OFFSET ?", params + [limit + 1, offset]).fetchall()
         total = conn.execute(
             f"SELECT COUNT(*) AS c FROM source_conversations {cond}",

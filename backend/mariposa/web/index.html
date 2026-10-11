@@ -645,7 +645,8 @@ $('judgeSave').onclick = async () => {
 };
 
 if (state.token) refreshAll();// ---------- 原文 Source Layer ----------
-const srcState = { conv: null, nextSeq: null, hasMore: false };
+const srcState = { conv: null, nextSeq: null, hasMore: false,
+                   order: 'first_asc', listOffset: 0 };
 
 function srcMd(raw) {
   // 安全 Markdown：先全量 HTML 转义，再做有限转换；链接不加 href（不跳转外部）
@@ -711,14 +712,25 @@ function srcMsgHtml(m) {
     body + `<div class="src-evidence">${evidence}</div></div>`;
 }
 
-async function loadSourceConvs() {
+async function loadSourceConvs(reset) {
   const box = $('srcConvList');
+  if (reset !== false) { srcState.listOffset = 0; }
   try {
-    const d = await api('source.conversations.list', { limit: 50 });
-    if (!d.conversations.length) {
+    const d = await api('source.conversations.list', {
+      limit: 50, offset: srcState.listOffset, order: srcState.order });
+    if (!d.conversations.length && !srcState.listOffset) {
       box.innerHTML = '<div class="empty">尚无原文：上传 Claude conversations.json 开始</div>'; return;
     }
-    box.innerHTML = '<h3 style="margin:14px 0 6px">原文会话（按更新时间）</h3>';
+    if (reset !== false) {
+      const dir = srcState.order === 'first_asc' ? '由早到晚' : '由晚到早';
+      box.innerHTML = `<div class="row" style="margin:14px 0 6px;align-items:center">` +
+        `<h3 style="flex:1;margin:0">原文会话（按首次消息时间·${dir}）</h3>` +
+        `<button id="srcOrderBtn">${srcState.order === 'first_asc' ? '↑ 最早在前' : '↓ 最新在前'}</button></div>`;
+      $('srcOrderBtn').onclick = () => {
+        srcState.order = srcState.order === 'first_asc' ? 'first_desc' : 'first_asc';
+        loadSourceConvs();
+      };
+    }
     for (const c of d.conversations) {
       const div = document.createElement('div');
       div.className = 'item src-conv';
@@ -728,6 +740,16 @@ async function loadSourceConvs() {
         `<code>${esc(c.provider_conversation_id)}</code></div>`;
       div.onclick = () => openSourceConv(c.id, null);
       box.appendChild(div);
+    }
+    srcState.listOffset += d.conversations.length;
+    const old = $('srcMoreBtn'); if (old) old.remove();
+    if (d.has_more) {
+      const more = document.createElement('button');
+      more.id = 'srcMoreBtn';
+      more.textContent = `加载更多（已显示 ${srcState.listOffset}/${d.total}）`;
+      more.style.margin = '8px 0';
+      more.onclick = () => loadSourceConvs(false);
+      box.appendChild(more);
     }
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
