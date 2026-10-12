@@ -366,7 +366,21 @@ async function searchMemories(q) {
         ((words.words || []).length ? `<div class="mem-detail"><em>我们的话：</em>${words.words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '') +
         ((recols.recollections || []).length ? `<div class="mem-detail"><em>回忆：</em>${recols.recollections.map(r => esc(r.author) + ': ' + esc(r.text)).join('；')}</div>` : '') +
         ((bindings.bindings || []).length ? `<div class="meta">原文绑定 ${bindings.bindings.length} 段（source.memory.open 查看）</div>` : '') +
-        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span></div>`;
+        `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(h.matched_by)}</code></span>` +
+        (state.principal === 'jiaming'
+          ? `<button data-directdel="${esc(mem.memory_id)}" data-title="${esc(mem.original_title || '')}" style="margin-left:10px;color:#c0392b">直删</button>`
+          : '') + `</div>`;
+      if (state.principal === 'jiaming')
+        div.querySelector('button[data-directdel]').onclick = async (ev) => {
+          const mid = ev.target.dataset.directdel;
+          const t = ev.target.dataset.title;
+          if (!confirm(`char直删「${t || mid}」？\nP-D02：无申请无审批，物理删除，不可恢复。`)) return;
+          try {
+            await api('memory.deletion.direct', { memory_id: mid });
+            setStatus(`已直删 ${mid}`);
+            refreshAll();
+          } catch (e) { setStatus('直删失败：' + e.message, true); }
+        };
       box.appendChild(div);
     }
     if (d.degraded) setStatus('语义检索未配置：' + d.degraded);

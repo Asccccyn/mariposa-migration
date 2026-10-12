@@ -270,6 +270,11 @@ def _register() -> dict[str, Capability]:
         description="读删除申请（含人类/拒绝理由；桶删除后仍可查）")
     add("memory.deletion.list", _del_list, _owners(), False,
         description="删除申请列表")
+    # P-D02 网页接通（她 2026-10-11 指令"让我用char身份删"）：
+    # 直删本就是 jiaming 的常备合同权利，此前只缺 capability/前端入口
+    add("memory.deletion.direct", _del_direct, {"jiaming"}, True,
+        description="char直删（P-D02）：无申请/理由/审批；关系硬门"
+                    "（P-D04）同样生效；pending 申请置 superseded")
     add("memory.tags.add", _tags_add, _owners(), True,
         description="加标签（情绪标签 whose 必填）")
     # R09（复审 2026-10-07，她裁定）：事件改类动作对 qiaosheng 开放
@@ -1167,6 +1172,21 @@ def _del_decide(principal: Principal, a: dict) -> dict:
         rejection_reason=a.get("rejection_reason"),
         operation_key=(str(a.get("operation_id"))
                        if a.get("operation_id") else None))
+
+
+def _del_direct(principal: Principal, a: dict) -> dict:
+    # P-D02 网页接通：与 decide(approve) 共用 _execute_delete 的物理删除
+    # 与关系硬门；幂等回执走 operation_id（带则原子重放）
+    memory_id = str(a.get("memory_id", ""))
+    op = str(a.get("operation_id") or "")
+    if op:
+        from ..relations.corrections import atomic_write
+        return atomic_write(principal.principal_id,
+                            "memory.deletion.direct", op,
+                            {"memory_id": memory_id},
+                            lambda conn: deletion.direct_delete(
+                                principal.principal_id, memory_id, conn=conn))
+    return deletion.direct_delete(principal.principal_id, memory_id)
 
 
 def _del_list(principal: Principal, a: dict) -> dict:

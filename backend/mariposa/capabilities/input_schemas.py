@@ -423,6 +423,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {"request_id": {"type": "string", "minLength": 1}},
     },
+    "memory.deletion.direct": {
+        "type": "object", "required": ["memory_id"],
+        "additionalProperties": False,
+        "properties": {"memory_id": {"type": "string", "minLength": 1},
+                       "operation_id": {"type": "string", "minLength": 1}},
+    },
     "memory.deletion.list": {
         "type": "object", "additionalProperties": False,
         "properties": {"status": {"type": "string"},

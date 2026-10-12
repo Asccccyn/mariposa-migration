@@ -142,7 +142,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "情绪补充召回（reserved，默认禁用）"
+      "description": "情绪补充召回（默认禁用）"
     },
     {
       "canonical_name": "episode.apply",
@@ -521,7 +521,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "一起听歌（reserved，未选供应商）"
+      "description": "一起听歌（未选供应商）"
     },
     {
       "canonical_name": "listening.sync",
@@ -622,7 +622,7 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "召回判断政策写入（expected_revision CAS + 幂等键；开启=所选 provider 判断，关闭=零判断调用+候选全集分页；仅 qiaosheng）"
+      "description": "召回判断政策写入（expected_revision CAS + 幂等键；开启=所选 provider 判断，关闭=零判断调用+候选全集分页；仅 qiaosheng，且仅网页登录会话可写——OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）"
     },
     {
       "canonical_name": "maintenance.semantic.warmup",
@@ -744,7 +744,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "按情绪查（结构化入口，遗忘桶仍可查）"
+      "description": "按情绪查（结构化入口；历史 forgotten_summary 仍可查）"
     },
     {
       "canonical_name": "memory.by_tag",
@@ -798,6 +798,16 @@
       "write": true,
       "idempotent": false,
       "description": "审批删除申请（仅char；approve 执行物理删除——CB-055：archive 已退役，描述与 v2.0 语义对齐）"
+    },
+    {
+      "canonical_name": "memory.deletion.direct",
+      "transport_name": "mariposa_memory_deletion_direct",
+      "allowed_principals": [
+        "jiaming"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "char直删（P-D02）：无申请/理由/审批；关系硬门（P-D04）同样生效；pending 申请置 superseded"
     },
     {
       "canonical_name": "memory.deletion.get",
@@ -862,7 +872,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "读取当前表示（遗忘桶只返回摘要）"
+      "description": "读取当前表示（历史 forgotten_summary 只返回审批摘要——LEGACY_CONTENT_GAP；v1.7 遗忘链已退役，无新遗忘产生）"
     },
     {
       "canonical_name": "memory.hold",
@@ -917,7 +927,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "记忆倒序列表（遗忘桶只给摘要表示）"
+      "description": "记忆倒序列表（历史 forgotten_summary 只给摘要表示）"
     },
     {
       "canonical_name": "memory.mood.vocab",
@@ -1225,7 +1235,7 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "修改桶正文（新版本，不就地覆盖；遗忘桶先恢复）"
+      "description": "修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）"
     },
     {
       "canonical_name": "memory.view.confirm",
@@ -1247,7 +1257,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "按 word_id 读单条话语（当前表示校验；遗忘=disabled）"
+      "description": "按 word_id 读单条话语（当前表示校验；历史 forgotten_summary 标 LEGACY_CONTENT_GAP）"
     },
     {
       "canonical_name": "memory.words.recall",
@@ -1269,7 +1279,7 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "[v1.1 薄实现] plan.cancel"
+      "description": "放弃计划（expected_version 乐观锁；state=cancelled；不物理删除）"
     },
     {
       "canonical_name": "plan.complete",
@@ -1280,7 +1290,7 @@
       ],
       "write": true,
       "idempotent": false,
-      "description": "[v1.1 薄实现] plan.complete"
+      "description": "标记计划完成（expected_version 乐观锁；state=done 的专用动作）"
     },
     {
       "canonical_name": "plan.create",
@@ -1302,7 +1312,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "[v1.1 薄实现] plan.get"
+      "description": "读取单个计划明细（含正文、状态与版本）"
     },
     {
       "canonical_name": "plan.list",
