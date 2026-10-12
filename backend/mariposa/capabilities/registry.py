@@ -108,12 +108,6 @@ def _register() -> dict[str, Capability]:
     add("memory.cards.batch", _cards_batch, _owners(), False,
         description="批量读卡片附加面（words/recollections/keepers/"
                     "bindings），≤100 桶一次返回")
-    # 桶修订（她 2026-10-11 裁定：她和char都可改；除原文不可修改外
-    # 其他都可修改）——标题/正文版本化修订，历史版本不可变
-    add("memory.revise", _revise, _owners(), True,
-        description="桶修订（版本化）：original_title/text 至少其一；"
-                    "expected_version 乐观锁；新版本行 origin_kind="
-                    "revision，投影同源重建")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
@@ -1268,7 +1262,8 @@ def _memory_update(principal: Principal, a: dict) -> dict:
         principal.principal_id, str(a.get("memory_id", "")),
         _int_arg(a, "expected_version", 0, 0, 1 << 31), a.get("text"),
         a["memory_date"] if "memory_date" in a else _UNSET,
-        a["date_confidence"] if "date_confidence" in a else _UNSET)
+        a["date_confidence"] if "date_confidence" in a else _UNSET,
+        a["original_title"] if "original_title" in a else _UNSET)
 
 
 def _rel_link(principal: Principal, a: dict) -> dict:
@@ -1480,28 +1475,6 @@ def _memory_list(principal: Principal, a: dict) -> dict:
     return listing.list_memories(a.get("state"),
                                  _int_arg(a, "limit", 50, 1, 500),
                                  cursor_date, cursor_id)
-
-
-def _revise(principal: Principal, a: dict) -> dict:
-    from ..memory import service as memory_service
-    from .. import db as _db
-    # 版本化修订与审计同事务；text 走 bytes 上限预检由 transport 层
-    # 统一承担（capability JSON 体积上限）
-    with _db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            out = memory_service.revise_in_tx(
-                conn, principal.principal_id,
-                str(a.get("memory_id", "")),
-                original_title=a.get("original_title"),
-                text=a.get("text"),
-                expected_version=a.get("expected_version"),
-                reason=a.get("reason"))
-            conn.execute("COMMIT")
-            return out
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
 
 
 def _cards_batch(principal: Principal, a: dict) -> dict:

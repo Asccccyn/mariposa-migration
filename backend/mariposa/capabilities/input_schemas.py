@@ -429,18 +429,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {"memory_id": {"type": "string", "minLength": 1},
                        "operation_id": {"type": "string", "minLength": 1}},
     },
-    "memory.revise": {
-        "type": "object", "required": ["memory_id"],
-        "additionalProperties": False,
-        "properties": {
-            "memory_id": {"type": "string", "minLength": 1},
-            "original_title": {"type": "string", "minLength": 1,
-                               "maxLength": 30},
-            "text": {"type": "string", "minLength": 1},
-            "expected_version": {"type": "integer", "minimum": 1},
-            "reason": {"type": "string", "maxLength": 500},
-        },
-    },
     "memory.cards.batch": {
         "type": "object", "required": ["memory_ids"],
         "additionalProperties": False,
@@ -542,6 +530,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "memory_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 1},
             "text": {"type": "string", "minLength": 1},
+            "original_title": {"type": "string", "minLength": 1,
+                               "maxLength": 30},
             "operation_id": {"type": "string"},
             "memory_date": {"anyOf": [{"type": "string"},
                                      {"type": "null"}]},

@@ -758,6 +758,17 @@
       "description": "按标签查（结构化入口）"
     },
     {
+      "canonical_name": "memory.cards.batch",
+      "transport_name": "mariposa_memory_cards_batch",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "批量读卡片附加面（words/recollections/keepers/bindings），≤100 桶一次返回"
+    },
+    {
       "canonical_name": "memory.categories.replace",
       "transport_name": "mariposa_memory_categories_replace",
       "allowed_principals": [
@@ -1203,17 +1214,6 @@
       "write": false,
       "idempotent": false,
       "description": "沿 continuation_of 追事件链"
-    },
-    {
-      "canonical_name": "memory.revise",
-      "transport_name": "mariposa_memory_revise",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "桶修订（版本化）：original_title/text 至少其一；expected_version 乐观锁；新版本行 origin_kind=revision，投影同源重建"
     },
     {
       "canonical_name": "memory.search",

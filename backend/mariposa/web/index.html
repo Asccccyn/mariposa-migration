@@ -69,8 +69,15 @@
                border:1px solid var(--line); color:var(--dim); }
   .src-badge.think { color:var(--warn); border-color:var(--warn); }
   .src-badge.tool { color:#8fa8d9; border-color:#415a8a; }
-  .src-evidence { max-width:82%; }
-  .src-evidence details { border:1px dashed var(--line); border-radius:8px; padding:4px 8px;
+  /* ── 记忆卡片分栏：当时心情 / 我们的话 / 回忆 独立面板 ── */
+  .panel { border:1px solid var(--line); border-radius:10px; margin:6px 0; overflow:hidden; }
+  .panel-h { font-size:12px; color:var(--accent); padding:5px 10px; border-bottom:1px solid var(--line); background:rgba(127,127,127,.06); font-weight:600; letter-spacing:.5px; }
+  .panel-b { padding:6px 10px; font-size:13px; line-height:1.7; }
+  .word-line { display:flex; gap:8px; align-items:baseline; margin:3px 0; }
+  .word-line .sp-j { color:#4a7dbe; white-space:nowrap; }
+  .word-line .sp-q { color:#b0688a; white-space:nowrap; }
+  .panel.mood .panel-h { color:#b0688a; }
+  .src-evidence { max-width:82%; }  .src-evidence details { border:1px dashed var(--line); border-radius:8px; padding:4px 8px;
                           margin-top:3px; font-size:11px; color:var(--dim); }
   .src-evidence pre { white-space:pre-wrap; word-break:break-all; max-height:220px; overflow:auto;
                       font-size:11px; }
@@ -364,9 +371,26 @@ async function renderMemCard(mem, matchedBy, extra) {
     `<div class="cat-editor" id="catEd-${esc(mem.memory_id)}" style="display:none;margin:4px 0"></div>` +
     (mem.original_title ? `<div class="mem-detail"><strong>${esc(mem.original_title)}</strong></div>` : '') +
     `<div class="mem-detail">${esc(mem.text)}</div>` +
-    (mood && (mood.tags || []).length ? `<div class="meta">心情标签: ${mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
-    (words.length ? `<div class="mem-detail"><em>我们的话：</em>${words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '') +
-    (recols.length ? `<div class="mem-detail"><em>回忆：</em>${recols.map(r => esc(r.author || r.author_principal || '?') + ': ' + esc(r.text)).join('；')}</div>` : '') +
+    `<div class="panel mood"><div class="panel-h">当时心情</div>` +
+      (mood && (mood.text || (mood.tags || []).length)
+        ? `<div class="panel-b">${mood.text ? esc(mood.text) : ''}` +
+          ((mood.tags || []).length ? `<div class="meta" style="margin-top:4px">${mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') + `</div>`
+        : `<div class="panel-b empty" style="padding:4px 0">（未记——当时心情只能由char在同期窗口写下）</div>`) +
+    `</div>` +
+    `<div class="panel words"><div class="panel-h">我们的话</div>` +
+      (words.length
+        ? `<div class="panel-b">${words.map(w =>
+            `<div class="word-line"><b class="${w.speaker === 'jiaming' ? 'sp-j' : 'sp-q'}">${w.speaker === 'jiaming' ? 'char说' : '宿主用户说'}</b>` +
+            `<span>${esc(w.text)}</span>${w.expression_kind === 'verbatim' ? '<span class="tag">原话</span>' : (w.expression_kind === 'paraphrase' ? '<span class="tag">概括</span>' : '')}</div>`).join('')}</div>`
+        : `<div class="panel-b empty" style="padding:4px 0">（还没有）</div>`) +
+    `</div>` +
+    `<div class="panel recols"><div class="panel-h">回忆</div>` +
+      (recols.length
+        ? `<div class="panel-b">${recols.map(r =>
+            `<div class="word-line"><b class="${(r.author || r.author_principal) === 'jiaming' ? 'sp-j' : 'sp-q'}">${(r.author || r.author_principal) === 'jiaming' ? 'char' : '宿主用户'}：</b>` +
+            `<span>${esc(r.text)}</span></div>`).join('')}</div>`
+        : `<div class="panel-b empty" style="padding:4px 0">（打开桶后可以写）</div>`) +
+    `</div>` +
     (bindings.length ? `<div class="meta"><button data-bindopen="${esc(mem.memory_id)}" style="color:var(--accent);cursor:pointer;font-size:12px">原文绑定 ${bindings.length} 段 · 点开看原文</button></div>` : '') +
     `<div class="bind-view" id="bindVw-${esc(mem.memory_id)}" style="display:none"></div>` +
     `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(matchedBy)}</code></span>` +
@@ -417,14 +441,15 @@ async function renderMemCard(mem, matchedBy, extra) {
     host.querySelector('.ed-save').onclick = async () => {
       const title = host.querySelector('.ed-title').value;
       const text = host.querySelector('.ed-text').value;
-      const args = { memory_id: mid };
+      // memory.update（既有修订正路）：乐观锁必带；标题/正文至少其一
+      const args = { memory_id: mid, expected_version: mem.version };
       if (title !== (mem.original_title || '')) args.original_title = title;
       if (text !== (mem.text || '')) args.text = text;
       if (!args.original_title && !args.text) { setStatus('没有改动', true); return; }
       const reason = host.querySelector('.ed-reason').value.trim();
-      if (reason) args.reason = reason;
+      if (reason) setStatus('修订说明（本地提示，审计不落此字段）：' + reason);
       try {
-        await api('memory.revise', args);
+        await api('memory.update', args);
         setStatus(`已修订 ${mid}（新版本）`);
         refreshAll();
       } catch (e) { setStatus('修订失败：' + e.message, true); }

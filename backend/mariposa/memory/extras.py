@@ -49,14 +49,19 @@ _UNSET = object()  # 字段缺席哨兵（WR-04：缺席≠显式 null 清空）
 
 def update_text(principal_id: str, memory_id: str, expected_version: int,
                 text: str | None = None,
-                memory_date=_UNSET, date_confidence=_UNSET) -> dict:
-    """修改桶正文：新版本，不就地覆盖（§4.5）。
+                memory_date=_UNSET, date_confidence=_UNSET,
+                original_title=_UNSET) -> dict:
+    """修改桶正文/标题：新版本，不就地覆盖（§4.5）。
 
     审计 F39：expected_version 校验在 BEGIN IMMEDIATE 写锁内执行——
     两个并发编辑同旧 revision，先提交者成功，后者得到结构化
     VERSION_CONFLICT，而不是裸 IntegrityError。
     审计 F04：正文/投影构造统一走 version_body / rebuild_full_projection，
     v2 记忆只改元数据不再让事件正文从检索消失。
+    original_title（2026-10-12 她 2026-10-11 裁定的标题修订）：_UNSET
+    哨兵与日期字段同语义——缺席保留现值；提供则校验（非空、≤30 字）
+    并写入新版本行。text 与 original_title 至少其一，纯看日期/无参
+    调用保持既有兼容（元数据-only 版本推进）。
     """
     with db.formal() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -86,12 +91,23 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             # A01 + F04：未提供新正文时，经统一入口延续当前 revision 正文
             #（event_text 优先，v1 旧数据回退 hold_text）
             new_event = text if text is not None else memory.version_body(v)
-            old_title = v["original_title"]
+            new_title = v["original_title"]
+            if original_title is not _UNSET:
+                t = str(original_title).strip()
+                if not t:
+                    raise Forbidden("original_title 不可修订为空",
+                                    code="ORIGINAL_TITLE_REQUIRED")
+                if len(t) > 30:
+                    raise Forbidden(
+                        f"标题超长（{len(t)} > 30 字符）",
+                        code="ORIGINAL_TITLE_TOO_LONG", length=len(t))
+                new_title = t
             old_schema = v["schema_version"] or 1
             # N01：hash 输入与 canonical 正文字段一致——v2 正文在
             # event_text，只 hash hold_text(NULL) 会让不同正文同指纹
             payload = {"representation": "full", "hold_text": new_text,
-                       "event_text": new_event, "origin": "update"}
+                       "event_text": new_event, "origin": "update",
+                       "original_title": new_title}
             conn.execute(
                 "INSERT INTO memory_versions(memory_id, version_no, representation,"
                 " hold_text, compressed_summary, authored_by, confirmed_by,"
@@ -99,7 +115,7 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
                 " event_text, schema_version)"
                 " VALUES(?,?,'full',?,NULL,?,NULL,'initial_hold',?,?,?,?,?)",
                 (memory_id, new_version, new_text, principal_id,
-                 memory.canonical_hash(payload), now, old_title, new_event,
+                 memory.canonical_hash(payload), now, new_title, new_event,
                  old_schema))
             conn.execute(
                 "UPDATE memories SET current_version_no=?, memory_date=?,"
