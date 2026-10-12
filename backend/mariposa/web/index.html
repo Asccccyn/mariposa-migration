@@ -117,6 +117,13 @@
       </select>
       <button id="newHoldBtn">写记忆</button>
     </div>
+    <script>
+      // 九分类中文名（holdCat 选项与卡片编辑条共用同一事实源）
+      const CAT_LABELS = {
+        daily: '日常', milestone: '重大转折', sad: '伤心的事', sweet: '甜蜜',
+        date: '约会', plan: '计划', sex: '做爱', anniversary: '纪念', reloplay: '剧本',
+      };
+    </script>
     <div class="row">
       <span class="empty">直达浏览：</span>
       <button id="catBrowseBtn">看分类</button>
@@ -350,9 +357,11 @@ async function renderMemCard(mem, matchedBy) {
     `<div class="meta"><span>${esc(mem.memory_id)}</span>` +
     `<span class="tag ${esc(mem.representation)}">${mem.representation === 'full' ? 'full' : '旧表示(' + mem.representation + ')'}</span>` +
     `<span>v${mem.version}</span><span>${esc(mem.memory_date || '日期未知')}</span>` +
-    (mem.categories || []).map(c => `<span class="tag">${esc(c)}</span>`).join('') +
+    (mem.categories || []).map(c => `<span class="tag">${esc(CAT_LABELS[c] || c)}</span>`).join('') +
+    `<button data-catedit="${esc(mem.memory_id)}" style="margin-left:4px;font-size:11px;color:var(--accent)">${(mem.categories || []).length ? '改分类' : '+ 分类'}</button>` +
     (keeps.active_keepers || []).map(k => `<span class="tag full">留·${esc(k)}</span>`).join('') +
     `</div>` +
+    `<div class="cat-editor" id="catEd-${esc(mem.memory_id)}" style="display:none;margin:4px 0"></div>` +
     (mem.original_title ? `<div class="mem-detail"><strong>${esc(mem.original_title)}</strong></div>` : '') +
     `<div class="mem-detail">${esc(mem.text)}</div>` +
     (mood && (mood.tags || []).length ? `<div class="meta">心情标签: ${mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
@@ -374,6 +383,31 @@ async function renderMemCard(mem, matchedBy) {
         refreshAll();
       } catch (e) { setStatus('直删失败：' + e.message, true); }
     };
+  // 行内九分类编辑（她 2026-10-11 补填迁移桶的分类）：toggle 多选 +
+  // memory.categories.replace 整组替换（至少一项——清空需走删除）
+  div.querySelector('button[data-catedit]').onclick = () => {
+    const mid = mem.memory_id;
+    const ed = div.querySelector(`#catEd-${CSS.escape(mid)}`);
+    if (ed.style.display !== 'none') { ed.style.display = 'none'; return; }
+    const chosen = new Set(mem.categories || []);
+    ed.innerHTML = Object.entries(CAT_LABELS).map(([k, label]) =>
+      `<button type="button" data-cat="${k}" class="tag" style="cursor:pointer;margin:2px;${chosen.has(k) ? 'border-color:var(--accent);color:var(--accent)' : ''}">${label}</button>`
+    ).join('') + `<button type="button" data-save="1" class="primary" style="margin-left:8px">保存</button>`;
+    ed.style.display = 'block';
+    ed.querySelectorAll('button[data-cat]').forEach(b => b.onclick = () => {
+      const c = b.dataset.cat;
+      if (chosen.has(c)) { chosen.delete(c); b.style.borderColor = ''; b.style.color = ''; }
+      else { chosen.add(c); b.style.borderColor = 'var(--accent)'; b.style.color = 'var(--accent)'; }
+    });
+    ed.querySelector('button[data-save]').onclick = async () => {
+      if (!chosen.size) { setStatus('至少选一个分类（replace 语义不支持清空）', true); return; }
+      try {
+        await api('memory.categories.replace', { memory_id: mid, categories: [...chosen] });
+        setStatus(`分类已更新：${mid} → ${[...chosen].map(c => CAT_LABELS[c]).join('、')}`);
+        refreshAll();
+      } catch (e) { setStatus('分类保存失败：' + e.message, true); }
+    };
+  };
   return div;
 }
 
