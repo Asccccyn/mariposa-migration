@@ -102,6 +102,12 @@ def _register() -> dict[str, Capability]:
         description="按 operation_id 查 hold 完成回执（历史成功与当前"
                     "资源状态分列；无记录=尚无提交证据）")
     add("memory.get", _get, _owners(), False, description="读取当前表示（历史 forgotten_summary 只返回审批摘要——LEGACY_CONTENT_GAP；v1.7 遗忘链已退役，无新遗忘产生）")
+    # 卡片批量附加数据（2026-10-12）：前端一页 50 卡若逐卡拉 5 个
+    # list 会瞬间打爆读档限速（GATE-01 429 刷屏——她翻页即失效的
+    # 根因）。单 capability 内部聚合，限速只按调用次数计。
+    add("memory.cards.batch", _cards_batch, _owners(), False,
+        description="批量读卡片附加面（words/recollections/keepers/"
+                    "bindings），≤100 桶一次返回")
     # 桶修订（她 2026-10-11 裁定：她和char都可改；除原文不可修改外
     # 其他都可修改）——标题/正文版本化修订，历史版本不可变
     add("memory.revise", _revise, _owners(), True,
@@ -1496,6 +1502,32 @@ def _revise(principal: Principal, a: dict) -> dict:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+
+def _cards_batch(principal: Principal, a: dict) -> dict:
+    from ..memory import our_words as ow, recollections as rc, keep as kp
+    from ..source import binding as sb
+    ids = a.get("memory_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise Forbidden("memory_ids 必须为非空数组", code="INVALID_ARGUMENT")
+    if len(ids) > 100:
+        raise Forbidden("memory_ids 至多 100 个/次", code="INVALID_ARGUMENT")
+    ids = [str(x) for x in ids][:100]
+    cards = {}
+    for mid in dict.fromkeys(ids):
+        if not mid:
+            continue
+        cards[mid] = {
+            "words": ow.list_for(mid),
+            "recollections": rc.list_for(mid),
+            "active_keepers": kp.active_keepers(mid),
+            "bindings": [{"binding_id": b["binding_id"],
+                          "conversation_id": b["conversation_id"],
+                          "start_message_id": b["start_message_id"],
+                          "end_message_id": b["end_message_id"]}
+                         for b in sb.ranges_of(mid)],
+        }
+    return {"cards": cards}
 
 
 def _by_date(principal: Principal, a: dict) -> dict:

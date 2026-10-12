@@ -441,6 +441,14 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "reason": {"type": "string", "maxLength": 500},
         },
     },
+    "memory.cards.batch": {
+        "type": "object", "required": ["memory_ids"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_ids": {"type": "array", "minItems": 1, "maxItems": 100,
+                           "items": {"type": "string", "minLength": 1}},
+        },
+    },
     "memory.deletion.list": {
         "type": "object", "additionalProperties": False,
         "properties": {"status": {"type": "string"},
