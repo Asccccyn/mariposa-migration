@@ -1205,6 +1205,17 @@
       "description": "沿 continuation_of 追事件链"
     },
     {
+      "canonical_name": "memory.revise",
+      "transport_name": "mariposa_memory_revise",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "idempotent": false,
+      "description": "桶修订（版本化）：original_title/text 至少其一；expected_version 乐观锁；新版本行 origin_kind=revision，投影同源重建"
+    },
+    {
       "canonical_name": "memory.search",
       "transport_name": "mariposa_memory_search",
       "allowed_principals": [

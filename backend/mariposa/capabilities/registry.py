@@ -102,6 +102,12 @@ def _register() -> dict[str, Capability]:
         description="按 operation_id 查 hold 完成回执（历史成功与当前"
                     "资源状态分列；无记录=尚无提交证据）")
     add("memory.get", _get, _owners(), False, description="读取当前表示（历史 forgotten_summary 只返回审批摘要——LEGACY_CONTENT_GAP；v1.7 遗忘链已退役，无新遗忘产生）")
+    # 桶修订（她 2026-10-11 裁定：她和char都可改；除原文不可修改外
+    # 其他都可修改）——标题/正文版本化修订，历史版本不可变
+    add("memory.revise", _revise, _owners(), True,
+        description="桶修订（版本化）：original_title/text 至少其一；"
+                    "expected_version 乐观锁；新版本行 origin_kind="
+                    "revision，投影同源重建")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
@@ -1468,6 +1474,28 @@ def _memory_list(principal: Principal, a: dict) -> dict:
     return listing.list_memories(a.get("state"),
                                  _int_arg(a, "limit", 50, 1, 500),
                                  cursor_date, cursor_id)
+
+
+def _revise(principal: Principal, a: dict) -> dict:
+    from ..memory import service as memory_service
+    from .. import db as _db
+    # 版本化修订与审计同事务；text 走 bytes 上限预检由 transport 层
+    # 统一承担（capability JSON 体积上限）
+    with _db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            out = memory_service.revise_in_tx(
+                conn, principal.principal_id,
+                str(a.get("memory_id", "")),
+                original_title=a.get("original_title"),
+                text=a.get("text"),
+                expected_version=a.get("expected_version"),
+                reason=a.get("reason"))
+            conn.execute("COMMIT")
+            return out
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def _by_date(principal: Principal, a: dict) -> dict:

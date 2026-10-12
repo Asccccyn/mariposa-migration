@@ -445,8 +445,104 @@ def hold_in_tx(
     return {"memory_id": memory_id, "version": 1}
 
 
+def revise_in_tx(conn, principal_id: str, memory_id: str,
+                 *, original_title: str | None = None,
+                 text: str | None = None,
+                 expected_version: int | None = None,
+                 reason: str | None = None) -> dict:
+    """桶修订（版本化）：标题/正文至少改其一，历史版本不可变。
+
+    - 修订=追加新 memory_versions 行（origin_kind='revision'），当前
+      表示指针前移；绝不就地覆盖旧版本行。
+    - expected_version 乐观锁：给值时不匹配即拒（并发盲改防护）。
+    - 正文修订后投影统一走 rebuild_full_projection + 分字段投影
+      重建（与 hold 同源，防投影漂移）。
+    - 标题修订同样入版本行（original_title 属版本快照）。
+    """
+    from ..errors import Forbidden as _F
+    m = conn.execute("SELECT current_version_no, visibility FROM memories"
+                     " WHERE memory_id=?", (memory_id,)).fetchone()
+    if m is None:
+        raise NotFound("memory not found", memory_id=memory_id)
+    if m["visibility"] != "active":
+        raise _F("非 active 桶不可修订（先走对应恢复流程）",
+                 code="INVALID_ARGUMENT")
+    if original_title is None and text is None:
+        raise _F("标题与正文至少修订其一", code="INVALID_ARGUMENT")
+    if expected_version is not None and int(expected_version) != \
+            m["current_version_no"]:
+        raise _F(
+            f"expected_version={expected_version} 与当前 "
+            f"{m['current_version_no']} 不符（已被并发修订？刷新后重试）",
+            code="VERSION_CONFLICT", code_extra="expected_version")
+    new_title = original_title.strip() if original_title is not None else None
+    if original_title is not None and not new_title:
+        raise _F("标题不可修订为空", code="INVALID_ARGUMENT")
+    if new_title and len(new_title) > 30:
+        raise _F(f"标题超长（{len(new_title)} > 30 字符）",
+                 code="ORIGINAL_TITLE_TOO_LONG", length=len(new_title))
+    if text is not None and not str(text).strip():
+        raise _F("正文不可修订为空", code="INVALID_ARGUMENT")
+    v = conn.execute(
+        "SELECT * FROM memory_versions WHERE memory_id=? AND version_no=?",
+        (memory_id, m["current_version_no"])).fetchone()
+    if v is None:
+        raise NotFound("current version row missing", memory_id=memory_id)
+    now = _now()
+    new_no = m["current_version_no"] + 1
+    payload = {"representation": "full",
+               "hold_text": text if text is not None else v["hold_text"],
+               "authored_by": principal_id}
+    conn.execute(
+        "INSERT INTO memory_versions(memory_id, version_no,"
+        " representation, hold_text, compressed_summary,"
+        " authored_by, confirmed_by, origin_kind,"
+        " payload_hash, created_at, original_title, event_text,"
+        " schema_version)"
+        " VALUES(?,?,?,?,NULL,NULL,?,'revision',?,?,?,?,"
+        "COALESCE(?, 2))",
+        (memory_id, new_no, "full",
+         text if text is not None else v["hold_text"],
+         principal_id, canonical_hash(payload), now,
+         new_title if new_title is not None else v["original_title"],
+         text if text is not None else v["event_text"],
+         v["schema_version"]))
+    conn.execute(
+        "UPDATE memories SET current_version_no=?, updated_at=?"
+        " WHERE memory_id=?", (new_no, now, memory_id))
+    rebuild_full_projection(conn, memory_id)
+    from ..retrieval import field_projection as _fp
+    _fp.build_for_memory(conn, memory_id)
+    audit.record(
+        conn, "memory.revised", principal_id,
+        resource_id=memory_id, resource_version=new_no,
+        payload={"title_changed": original_title is not None,
+                 "text_changed": text is not None,
+                 "reason": reason,
+                 "from_version": m["current_version_no"]})
+    return {"memory_id": memory_id, "version": new_no}
+
+
+def revise(principal_id: str, memory_id: str, *,
+           original_title: str | None = None, text: str | None = None,
+           expected_version: int | None = None,
+           reason: str | None = None) -> dict:
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            out = revise_in_tx(conn, principal_id, memory_id,
+                               original_title=original_title, text=text,
+                               expected_version=expected_version,
+                               reason=reason)
+            conn.execute("COMMIT")
+            return out
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 def get(conn, memory_id: str) -> dict:
-    """默认尊重当前表示：遗忘桶只返回批准摘要与结构化字段（§8.4）。"""
+    """默认尊重当前表示：遗忘桶只返回批准摘要与缺席字段（§8.4）。"""
     m = conn.execute("SELECT * FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
     if m is None:
         raise NotFound("memory not found", memory_id=memory_id)

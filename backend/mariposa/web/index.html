@@ -367,11 +367,68 @@ async function renderMemCard(mem, matchedBy) {
     (mood && (mood.tags || []).length ? `<div class="meta">心情标签: ${mood.tags.map(x => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>` : '') +
     ((words.words || []).length ? `<div class="mem-detail"><em>我们的话：</em>${words.words.map(w => esc(w.speaker) + ': ' + esc(w.text)).join('；')}</div>` : '') +
     ((recols.recollections || []).length ? `<div class="mem-detail"><em>回忆：</em>${recols.recollections.map(r => esc(r.author) + ': ' + esc(r.text)).join('；')}</div>` : '') +
-    ((bindings.bindings || []).length ? `<div class="meta">原文绑定 ${bindings.bindings.length} 段（source.memory.open 查看）</div>` : '') +
+    ((bindings.bindings || []).length ? `<div class="meta"><button data-bindopen="${esc(mem.memory_id)}" style="color:var(--accent);cursor:pointer;font-size:12px">原文绑定 ${bindings.bindings.length} 段 · 点开看原文</button></div>` : '') +
+    `<div class="bind-view" id="bindVw-${esc(mem.memory_id)}" style="display:none"></div>` +
     `<div class="meta" style="margin-top:6px"><span>matched_by: <code>${esc(matchedBy)}</code></span>` +
+    `<button data-edit="${esc(mem.memory_id)}" style="margin-left:6px;font-size:11px;color:var(--accent)">编辑</button>` +
     (state.principal === 'jiaming'
-      ? `<button data-directdel="${esc(mem.memory_id)}" data-title="${esc(mem.original_title || '')}" style="margin-left:10px;color:#c0392b">直删</button>`
+      ? `<button data-directdel="${esc(mem.memory_id)}" data-title="${esc(mem.original_title || '')}" style="margin-left:6px;color:#c0392b">直删</button>`
       : '') + `</div>`;
+  div.querySelector('button[data-bindopen]').onclick = async () => {
+    const mid = mem.memory_id;
+    const vw = div.querySelector('#bindVw-' + CSS.escape(mid));
+    if (vw.style.display !== 'none') { vw.style.display = 'none'; return; }
+    vw.innerHTML = '<div class="meta">原文加载中…</div>';
+    vw.style.display = 'block';
+    try {
+      const d = await api('source.memory.open', { memory_id: mid });
+      const ranges = d.ranges || d.source_ranges || [];
+      if (!ranges.length) { vw.innerHTML = '<div class="empty">无绑定区间</div>'; return; }
+      vw.innerHTML = ranges.map((r, i) => {
+        if (!r.messages) return `<div class="meta" style="margin-top:8px">区间 ${i + 1}：绑定不可解析（${esc(r.reason || 'unresolvable')}）</div>`;
+        const head = `<div class="meta" style="margin-top:8px">区间 ${i + 1}：${esc(r.conversation?.title || '')} · ${r.messages.length} 条${r.version_drift ? ' · ⚠ 版本漂移' : ''}</div>`;
+        const PREVIEW = 24;
+        if (r.messages.length <= PREVIEW) return head + r.messages.map(srcMsgHtml).join('');
+        return head + r.messages.slice(0, PREVIEW).map(srcMsgHtml).join('') +
+          `<button data-more="${i}" style="margin:4px 0">展开全部 ${r.messages.length} 条</button>` +
+          `<div class="more" style="display:none">${r.messages.slice(PREVIEW).map(srcMsgHtml).join('')}</div>`;
+      }).join('');
+      vw.querySelectorAll('button[data-more]').forEach(b => b.onclick = () => {
+        b.nextElementSibling.style.display = 'block';
+        b.remove();
+      });
+    } catch (e) { vw.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  };
+  div.querySelector('button[data-edit]').onclick = () => {
+    const mid = mem.memory_id;
+    let host = div.querySelector('.edit-box');
+    if (host) { host.remove(); return; }
+    host = document.createElement('div');
+    host.className = 'edit-box';
+    host.style.cssText = 'margin:6px 0;padding:8px;border:1px dashed var(--line);border-radius:8px';
+    host.innerHTML =
+      `<div class="meta">修订（版本化，历史保留）</div>` +
+      `<input class="ed-title" placeholder="标题（≤30字）" value="${esc(mem.original_title || '')}" style="width:60%;margin:4px 0" />` +
+      `<textarea class="ed-text" style="width:100%;height:140px;margin:4px 0">${esc(mem.text || '')}</textarea>` +
+      `<div class="row"><button class="ed-save primary">保存修订</button>` +
+      `<input class="ed-reason" placeholder="改了什么（选填，进审计）" style="flex:1" /></div>`;
+    div.insertBefore(host, div.querySelector('.meta:last-child'));
+    host.querySelector('.ed-save').onclick = async () => {
+      const title = host.querySelector('.ed-title').value;
+      const text = host.querySelector('.ed-text').value;
+      const args = { memory_id: mid };
+      if (title !== (mem.original_title || '')) args.original_title = title;
+      if (text !== (mem.text || '')) args.text = text;
+      if (!args.original_title && !args.text) { setStatus('没有改动', true); return; }
+      const reason = host.querySelector('.ed-reason').value.trim();
+      if (reason) args.reason = reason;
+      try {
+        await api('memory.revise', args);
+        setStatus(`已修订 ${mid}（新版本）`);
+        refreshAll();
+      } catch (e) { setStatus('修订失败：' + e.message, true); }
+    };
+  };
   if (state.principal === 'jiaming')
     div.querySelector('button[data-directdel]').onclick = async (ev) => {
       const mid = ev.target.dataset.directdel;
