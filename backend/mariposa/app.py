@@ -741,4 +741,7 @@ if WEB_DIR.exists():
 
     @app.get("/")
     def index():
-        return FileResponse(str(WEB_DIR / "index.html"))
+        # no-cache=每次协商（304 也省流量）：前端单文件迭代频繁，
+        # 避免 Safari 启发式缓存让她看到旧页面（2026-10-11 她中过招）
+        return FileResponse(str(WEB_DIR / "index.html"),
+                            headers={"Cache-Control": "no-cache"})
