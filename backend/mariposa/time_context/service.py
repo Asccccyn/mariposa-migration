@@ -135,48 +135,4 @@ def presence_touch(principal_id: str, principal_kind: str) -> dict:
     return {"recorded": kind}
 
 
-def handoff_write(principal_id: str, entry_source: str | None, content: str) -> dict:
-    """char写给另一入口的短便签；不由 Worker/Host 代写（§12.3）。"""
-    if principal_id != "jiaming":
-        raise Forbidden("only jiaming writes handoffs", principal=principal_id)
-    if not content or not str(content).strip():
-        raise Forbidden("handoff content required")
-    hid = f"ho_{uuid.uuid4().hex[:10]}"
-    now = _now()
-    expires = now + timedelta(hours=HANDOFF_ACTIVE_HOURS)
-    # P1-04（2026-10-05 审计）：交接便签是跨入口的业务动作，与插入
-    # 同事务留审计（§19）
-    from ..audit import service as _audit
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "INSERT INTO handoffs(id, author, content, entry_source, created_at, expires_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (hid, principal_id, str(content), entry_source, now.isoformat(),
-                 expires.isoformat()),
-            )
-            _audit.record(conn, "handoff.written", principal_id,
-                          resource_id=hid,
-                          payload={"entry_source": entry_source})
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"handoff_id": hid, "expires_at": expires.isoformat()}
 
-
-def handoff_latest() -> dict:
-    """保留最新一条；过期只标注 expired，不物理删除。"""
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT * FROM handoffs ORDER BY created_at DESC LIMIT 1").fetchone()
-    if row is None:
-        return {"handoff": None}
-    expired = row["expires_at"] < _now().isoformat()
-    return {"handoff": {
-        "id": row["id"], "content": row["content"], "author": row["author"],
-        "created_at": row["created_at"], "expires_at": row["expires_at"],
-        "expired": expired,
-        "note": "过期便签不进默认检索；不自动 purge 正文",
-    }}

@@ -47,8 +47,6 @@ def _alias(spec_name: str):
 _ALIASES = {
     "activity.list": "maintenance.activity.list",
     "jobs.status": "maintenance.jobs.status",
-    "presence.handoff.latest": "handoff.latest",
-    "presence.handoff.write": "handoff.write",
     "settings.get": "maintenance.settings.get",
 }
 

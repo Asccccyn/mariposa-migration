@@ -167,8 +167,10 @@ class TestMigrationApplyAtomic:
         assert r2["ok"] and r2["applied"] == 0
         assert self._counts() == (1, 1)
 
-    def test_pinned_hidden_review_same_transaction(self, actors, tmp_path):
-        """pinned/hidden/needs_review 标记随 Memory 同事务落库。"""
+    def test_legacy_pinned_flag_ignored_after_dead_column_drop(
+            self, actors, tmp_path):
+        """2026-10-13 死列清理后：旧元数据里的 pinned 标记不再落库
+        （列已物理删除），导入本身不受影响。"""
         bucket = tmp_path / "bucket2"
         bucket.mkdir()
         note = bucket / "2026-02-02-note.md"
@@ -183,9 +185,9 @@ class TestMigrationApplyAtomic:
             r = migration.apply_from_report(str(out))
         assert r["ok"] and r["verified"] == 1
         with db.formal() as c:
-            row = c.execute(
-                "SELECT pinned FROM memories").fetchone()
-            assert row is not None and row["pinned"] == 1
+            cols = {x["name"] for x in c.execute(
+                "PRAGMA table_info(memories)")}
+            assert "pinned" not in cols, "死列应已在 migrate 时物理删除"
 
 
 # ---------------------------------------------------------------- CB-004

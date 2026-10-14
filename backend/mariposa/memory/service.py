@@ -487,8 +487,6 @@ def get(conn, memory_id: str) -> dict:
                 "reason": "empty_body",
                 "note": "当前 revision 无可读正文（v1 旧数据）"}}
            if not (body or "").strip() else {}),
-        "pinned": bool(m["pinned"]),
-        "protected": bool(m["protected"]),
         "creation_mode": m["creation_mode"],
         "held_at": m["held_at"],
         "occurred_start": m["occurred_start"],

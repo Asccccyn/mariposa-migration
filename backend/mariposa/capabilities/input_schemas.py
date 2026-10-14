@@ -189,9 +189,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                  "properties": {"plan_id": {"type": "string",
                                             "minLength": 1,
                                             "maxLength": 256}}},
-    "presence.handoff.latest": {"type": "object",
-                                "additionalProperties": False,
-                                "properties": {}},
     "settings.get": {"type": "object", "additionalProperties": False,
                      "properties": {}},
     # R13 占位：blocked/reserved 能力——参数被忽略、能力被拒，占位显式
@@ -233,8 +230,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "wishstar.write": {"type": "object"},
 "emotion.context.get": {"type": "object", "additionalProperties": False,
                              "properties": {}},
-    "handoff.latest": {"type": "object", "additionalProperties": False,
-                        "properties": {}},
     "listening.status": {"type": "object", "additionalProperties": False,
                           "properties": {}},
     "maintenance.activity.list": {
@@ -257,15 +252,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                                     "maxLength": 64}}},
     "media.list": {"type": "object", "additionalProperties": False,
                     "properties": {"limit": {}}},
-    "memory.by_tag": {"type": "object", "required": ["tag"],
-                       "additionalProperties": False,
-                       "properties": {"namespace": {"type": "string",
-                                                     "minLength": 1},
-                                      "tag": {"type": "string",
-                                               "minLength": 1},
-                                      "whose": {"type": "string",
-                                                 "enum": ["jiaming",
-                                                          "qiaosheng"]}}},
     "memory.keeps.list": {"type": "object", "additionalProperties": False,
                            "properties": {"memory_id": {"type": "string",
                                                          "minLength": 1}}},
@@ -320,6 +306,11 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     "source.binding.list": {"type": "object", "additionalProperties": False,
                              "properties": {"memory_id": {"type": "string",
                                                            "minLength": 1}}},
+    "source.bindings.of_conversation": {
+        "type": "object", "required": ["conversation_id"],
+        "additionalProperties": False,
+        "properties": {"conversation_id": {"type": "string",
+                                            "minLength": 1}}},
     "source.conversation.get": {"type": "object",
                                  "required": ["conversation_id"],
                                  "additionalProperties": False,
@@ -504,24 +495,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     # ===== CB-050（2026-10-02 审计 P2）：全部无 schema 的 write 能力
     # 补齐严格入参合同——错误布尔/类型形状在公开边界拒绝，不再被
     # handler 的 bool()/int() 强转静默改写正式标记 =====
-    "memory.pin": {
-        "type": "object", "required": ["memory_id"],
-        "additionalProperties": False,
-        "properties": {"memory_id": {"type": "string", "minLength": 1},
-                       "value": {"type": "boolean"}},
-    },
-    "memory.protect": {
-        "type": "object", "required": ["memory_id"],
-        "additionalProperties": False,
-        "properties": {"memory_id": {"type": "string", "minLength": 1},
-                       "value": {"type": "boolean"}},
-    },
-    "memory.anchor": {
-        "type": "object", "required": ["memory_id"],
-        "additionalProperties": False,
-        "properties": {"memory_id": {"type": "string", "minLength": 1},
-                       "value": {"type": "boolean"}},
-    },
     "memory.update": {
         "type": "object",
         "required": ["memory_id", "expected_version"],
@@ -566,14 +539,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "whose": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
             "limit": {},
             "next_cursor": {"type": "object"}},
-    },
-    "memory.tags.add": {
-        "type": "object", "required": ["memory_id", "tags"],
-        "additionalProperties": False,
-        "properties": {
-            "memory_id": {"type": "string", "minLength": 1},
-            "tags": {"type": "array", "minItems": 1, "maxItems": 20,
-                     "items": {"type": "string", "minLength": 1}}},
     },
     "memory.keep.revoke": {
         "type": "object", "required": ["mark_id"],
@@ -663,21 +628,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "plan_id": {"type": "string", "minLength": 1},
             "expected_version": {"type": "integer", "minimum": 1}},
     },
-    "handoff.write": {
-        "type": "object", "required": ["content"],
-        "additionalProperties": False,
-        "properties": {
-            "content": {"type": "string", "minLength": 1},
-            "topic": {"type": "string"}},
-    },
     "presence.touch": {
         "type": "object", "additionalProperties": False,
         "properties": {},
-    },
-    "presence.handoff.write": {
-        "type": "object", "required": ["content"],
-        "additionalProperties": False,
-        "properties": {"content": {"type": "string", "minLength": 1}},
     },
     "identity.bindings.revoke": {
         "type": "object", "required": ["binding_id"],

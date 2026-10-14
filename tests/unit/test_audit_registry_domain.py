@@ -107,36 +107,8 @@ class TestWriteSchemaCoverage:
                    if c.write and not input_schemas.schema_for(n)]
         assert missing == [], f"write 能力不得缺 schema：{missing}"
 
-    def test_pin_string_false_rejected(self, actors):
-        """审计反例 pin_string_false：value="false" 曾被 bool() 强转
-        真实写入 pinned=1。"""
-        m = _hold(actors)
-        with pytest.raises(Forbidden):
-            registry.invoke(actors["jiaming"], "memory.pin",
-                            {"memory_id": m["memory_id"],
-                             "value": "false"}, None)
-        from mariposa import db
-        with db.formal() as conn:
-            pinned = conn.execute(
-                "SELECT pinned FROM memories WHERE memory_id=?",
-                (m["memory_id"],)).fetchone()["pinned"]
-        assert pinned == 0, "被拒请求不得产生写副作用"
-
-    def test_pin_boolean_still_works(self, actors):
-        m = _hold(actors)
-        out = registry.invoke(actors["jiaming"], "memory.pin",
-                              {"memory_id": m["memory_id"],
-                               "value": True}, None)
-        assert out["ok"] is True
-        from mariposa import db
-        with db.formal() as conn:
-            pinned = conn.execute(
-                "SELECT pinned FROM memories WHERE memory_id=?",
-                (m["memory_id"],)).fetchone()["pinned"]
-        assert pinned == 1
 
 
-# ---------------------------------------------------------------- CB-051
 
 class TestRetiredTableResidue:
 

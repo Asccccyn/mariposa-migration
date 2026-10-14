@@ -1,4 +1,4 @@
-"""Phase 3/4：raw 幂等、quotes 独立检索、handoff、plans、calendar、bootstrap、time。"""
+"""Phase 3/4：raw 幂等、quotes 独立检索、plans、calendar、bootstrap、time。（handoff 2026-10-13 她裁定退役删除）"""
 from __future__ import annotations
 
 import uuid
@@ -44,18 +44,6 @@ def _conv_payload(n=35, channel="claude_export", external=None):
 
 
 
-
-class TestHandoff:
-    def test_only_jiaming_writes(self, actors):
-        r = time_ctx.handoff_write("jiaming", "claude_chat", "明天记得提醒她体检报告的事")
-        assert r["handoff_id"]
-        latest = time_ctx.handoff_latest()["handoff"]
-        assert latest["content"].startswith("明天")
-        assert latest["expired"] is False
-
-    def test_worker_rejected(self, actors):
-        with pytest.raises(Forbidden):
-            time_ctx.handoff_write("worker", "gpt_chat", "工具人不能代写便签")
 
 
 class TestPlansAndCalendar:

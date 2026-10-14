@@ -12,3 +12,7 @@ node_modules/
 .pytest_tmp/
 .DS_Store
 D:\\mariposa\\runtime\\models/
+
+# frontend（React 新前端 2026-10-13）：依赖与构建产物不入库
+frontend/node_modules/
+frontend/dist/

@@ -1,0 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700&family=Noto+Sans+SC:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #fbf7ee; color: #1e2a4a; }
+.serif { font-family: 'Noto Serif SC', serif; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+@keyframes flutter { 0%,100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-6px) rotate(4deg); } }
+.flutter { animation: flutter 5s ease-in-out infinite; }

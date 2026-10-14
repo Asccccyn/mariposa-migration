@@ -355,6 +355,32 @@ def memories_referencing(message_id: str) -> list[dict]:
     return out
 
 
+def bindings_of_conversation(conversation_id: str) -> list[dict]:
+    """§6.1 反查（会话方向，她 2026-10-13 点名）：这个会话被哪些
+    记忆桶绑定了、各覆盖哪段消息序。
+
+    与 memories_referencing 同一张有效绑定表、同一 JOIN 口径；不
+    做路径成员展开（这里按 start..end 区间如实外露 seq，供前端在
+    消息流上标注；覆盖语义的精确判定仍以 memories_referencing
+    为准）。conversation_id 可传行 id 或 provider id。
+    """
+    with db.formal() as conn:
+        conv = source_query._find_conversation(conn, conversation_id)
+        if conv is None:
+            raise NotFound("conversation not found",
+                           conversation_id=conversation_id)
+        rows = conn.execute(
+            "SELECT b.binding_id, b.memory_id, b.bind_confidence,"
+            " s.sequence AS start_seq, e.sequence AS end_seq"
+            " FROM memory_source_bindings b"
+            " JOIN source_messages s ON s.id=b.start_message_id"
+            " JOIN source_messages e ON e.id=b.end_message_id"
+            " WHERE b.conversation_id=?"
+            " ORDER BY s.sequence, b.binding_id",
+            (conv["id"],)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def correct(principal_id: str, binding_id: str,
             correction_action: str, note: str | None = None,
             replacement: dict | None = None, conn=None) -> dict:

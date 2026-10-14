@@ -1254,6 +1254,24 @@ def _drop_deleted_columns(conn) -> None:
     if "why_remember" in cols:
         conn.execute("ALTER TABLE memory_versions"
                      " DROP COLUMN why_remember")
+    # 2026-10-13 她裁定：死列清理——pinned/protected/anchor（遗忘
+    # 退役后无消费方）+ memory_tags 表（tags.add/by_tag 已删）
+    mcols = {r["name"] for r in conn.execute(
+        "PRAGMA table_info(memories)")}
+    for dead in ("pinned", "protected", "anchor"):
+        if dead in mcols:
+            conn.execute(f"ALTER TABLE memories DROP COLUMN {dead}")
+    if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+            " name='memory_tags'").fetchone():
+        conn.execute("DROP INDEX IF EXISTS idx_memory_tags")
+        conn.execute("DROP TABLE memory_tags")
+    # 2026-10-13 她裁定：handoffs 表删除（第一版遗留的交接便签，
+    # capability/服务已清，审计日志零真实调用）
+    if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+            " name='handoffs'").fetchone():
+        conn.execute("DROP TABLE handoffs")
 
 
 def _require_identity(conn, expected: str) -> None:
@@ -1608,6 +1626,17 @@ CREATE TABLE IF NOT EXISTS recall_page_cursors(
 );
 CREATE INDEX IF NOT EXISTS idx_recall_page_cursors_set
   ON recall_page_cursors(result_set_id);
+"""),
+    # ===== 2026-10-13 她裁定：死列清理（"DB 死列也删了"）=====
+    # memories.pinned / protected / anchor：遗忘机制 v1.7 退役后无消费方
+    # 的死开关列；memory_tags 表随 tags.add/by_tag 退役删除（读路径已
+    # 全部移除，唯一写方=旧库导入映射同批摘除）。
+    # 物理删除走 migrate() 内 _drop_deleted_columns（列存在才删，
+    # 新旧库同口径；迁移 1 的历史 DDL 不改写——已应用编号步不可变）。
+    (15, """
+-- 本步无 DDL：pinned/protected/anchor 三列与 memory_tags 表的
+-- 物理清理由 _drop_deleted_columns 幂等执行（同 2026-10-05
+-- why_remember 删除先例：裁定入链、删除走 pragma 实测分叉）。
 """),
 ]
 

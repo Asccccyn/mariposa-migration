@@ -472,20 +472,13 @@ def apply_from_report(report_path: str) -> dict:
                         creation_mode="retrospective",
                         categories=cats)
                     mid = out["memory_id"]
-                    if e["mapping"].get("pinned"):
-                        conn.execute("UPDATE memories SET pinned=1 WHERE memory_id=?",
-                                     (mid,))
+                    # 2026-10-13 死列清理：旧 pinned 标记不再落库（列已删，
+                    # 置顶语义随遗忘机制退役）；needs_review 标签表同批退役
                     if e.get("migrate_as_hidden"):
                         conn.execute("UPDATE memories SET visibility='hidden',"
                                      " updated_at=? WHERE memory_id=?",
                                      (_dt.utcnow().isoformat(), mid))
                         _pj.remove(conn, mid)  # 隐藏不进新检索（§20.3）
-                    if e.get("needs_migration_review"):
-                        conn.execute(
-                            "INSERT OR IGNORE INTO memory_tags(memory_id, namespace,"
-                            " tag, whose, confidence, created_by) VALUES(?,"
-                            " 'migration', 'needs_review', 'qiaosheng', 'system',"
-                            " 'migration')", (mid,))
                     conn.execute(
                         "INSERT INTO migration_id_map(legacy_id, source_type, new_id,"
                         " payload_hash, migrated_at) VALUES(?,?,?,?,?)",
@@ -506,12 +499,14 @@ def apply_from_report(report_path: str) -> dict:
             skipped_existing.append({"legacy_id": e["legacy_id"],
                                      "reason": "out_of_scope"})
             continue
-    # 逐项核对：新库可读、pinned 保留
+    # 逐项核对：新库可读（2026-10-13 死列清理后 pinned 列已删，
+    # 核对改按 memory_id 存在性）
     verified = 0
     for a in applied:
         with _db.formal() as conn:
-            row = conn.execute("SELECT pinned FROM memories WHERE memory_id=?",
-                               (a["new_id"],)).fetchone()
+            row = conn.execute(
+                "SELECT memory_id FROM memories WHERE memory_id=?",
+                (a["new_id"],)).fetchone()
         if row is not None:
             verified += 1
     result = {"ok": not problems, "applied": len(applied),

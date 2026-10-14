@@ -266,27 +266,6 @@
       "description": "[blocked] 扎西德勒 8787 未运行"
     },
     {
-      "canonical_name": "handoff.latest",
-      "transport_name": "mariposa_handoff_latest",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": false,
-      "idempotent": false,
-      "description": "最新便签（过期标注 expired）"
-    },
-    {
-      "canonical_name": "handoff.write",
-      "transport_name": "mariposa_handoff_write",
-      "allowed_principals": [
-        "jiaming"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "char写给另一入口的交接便签（72h 过期不删除）"
-    },
-    {
       "canonical_name": "i.get",
       "transport_name": "mariposa_i_get",
       "allowed_principals": [
@@ -703,17 +682,6 @@
       "description": "申请上传 token（字节走专用 HTTP 端点，不进工具参数）"
     },
     {
-      "canonical_name": "memory.anchor",
-      "transport_name": "mariposa_memory_anchor",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "锚定/取消"
-    },
-    {
       "canonical_name": "memory.by_category",
       "transport_name": "mariposa_memory_by_category",
       "allowed_principals": [
@@ -747,17 +715,6 @@
       "description": "按情绪查（结构化入口；历史 forgotten_summary 仍可查）"
     },
     {
-      "canonical_name": "memory.by_tag",
-      "transport_name": "mariposa_memory_by_tag",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": false,
-      "idempotent": false,
-      "description": "按标签查（结构化入口）"
-    },
-    {
       "canonical_name": "memory.cards.batch",
       "transport_name": "mariposa_memory_cards_batch",
       "allowed_principals": [
@@ -766,7 +723,7 @@
       ],
       "write": false,
       "idempotent": false,
-      "description": "批量读卡片附加面（words/recollections/keepers/bindings），≤100 桶一次返回"
+      "description": "批量读卡片附加面（words/recollections/keepers/bindings/relations），≤100 桶一次返回"
     },
     {
       "canonical_name": "memory.categories.replace",
@@ -996,28 +953,6 @@
       "description": "纠错话语来源引用（旧证据/指纹随之失效）"
     },
     {
-      "canonical_name": "memory.pin",
-      "transport_name": "mariposa_memory_pin",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "置顶/取消（排除自动候选）"
-    },
-    {
-      "canonical_name": "memory.protect",
-      "transport_name": "mariposa_memory_protect",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "保护/取消"
-    },
-    {
       "canonical_name": "memory.recall",
       "transport_name": "mariposa_memory_recall",
       "allowed_principals": [
@@ -1227,17 +1162,6 @@
       "description": "关键词检索有效投影"
     },
     {
-      "canonical_name": "memory.tags.add",
-      "transport_name": "mariposa_memory_tags_add",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "加标签（情绪标签 whose 必填）"
-    },
-    {
       "canonical_name": "memory.update",
       "transport_name": "mariposa_memory_update",
       "allowed_principals": [
@@ -1359,27 +1283,6 @@
       "description": "修改计划（expected_version 乐观锁）"
     },
     {
-      "canonical_name": "presence.handoff.latest",
-      "transport_name": "mariposa_presence_handoff_latest",
-      "allowed_principals": [
-        "jiaming",
-        "qiaosheng"
-      ],
-      "write": false,
-      "idempotent": false,
-      "description": "[规格别名] 最新便签（过期标注 expired）"
-    },
-    {
-      "canonical_name": "presence.handoff.write",
-      "transport_name": "mariposa_presence_handoff_write",
-      "allowed_principals": [
-        "jiaming"
-      ],
-      "write": true,
-      "idempotent": false,
-      "description": "[规格别名] char写给另一入口的交接便签（72h 过期不删除）"
-    },
-    {
       "canonical_name": "presence.status",
       "transport_name": "mariposa_presence_status",
       "allowed_principals": [
@@ -1491,6 +1394,17 @@
       "write": false,
       "idempotent": false,
       "description": "memory 的原文绑定列表"
+    },
+    {
+      "canonical_name": "source.bindings.of_conversation",
+      "transport_name": "mariposa_source_bindings_of_conversation",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "idempotent": false,
+      "description": "§6.1 反查（会话方向）：该会话被哪些记忆桶绑定、各覆盖哪段消息序（前端原文页点击跳桶用）"
     },
     {
       "canonical_name": "source.conversation.get",

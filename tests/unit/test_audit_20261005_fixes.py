@@ -155,13 +155,11 @@ class TestAuditTrailOnSensitiveActions:
         types = self._event_types()
         assert {"deletion.withdrawn", "deletion.rejected"} <= types
 
-    def test_revoke_binding_and_handoff_audited(self, actors):
-        """P1-04：凭证撤销与交接便签留痕。"""
+    def test_revoke_binding_audited(self, actors):
+        """P1-04：凭证撤销留痕。（handoff 2026-10-13 退役删除）"""
         identity.revoke_binding("qiaosheng", "binding_worker")
-        from mariposa.time_context import service as tctx
-        tctx.handoff_write("jiaming", "claude_chat", "审计回归便签")
         types = self._event_types()
-        assert {"binding.revoked", "handoff.written"} <= types
+        assert {"binding.revoked"} <= types
 
 
 def _request(memory_id: str) -> str:

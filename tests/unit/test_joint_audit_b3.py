@@ -336,14 +336,6 @@ class TestFJ26DeletionIdempotency:
 
 
 # —— F-J-20：网页心情输入框只引导现行大类 ——
-class TestFJ20Placeholder:
-    def test_placeholder_no_retired_word(self):
-        html = (Path(__file__).resolve().parents[2]
-                / "backend/mariposa/web/index.html").read_text(
-                    encoding="utf-8")
-        assert "亲密" not in html.split("browseMood")[1].split("\n")[0], \
-            "placeholder 不应引导已废子心情词（输入必被拒）"
-
 
 class TestD5PublishedKinds:
     """D5（她批 2026-10-06）：贴纸/语音消息扩展归档合同。"""

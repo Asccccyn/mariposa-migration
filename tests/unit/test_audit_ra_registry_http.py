@@ -95,12 +95,8 @@ class TestMcpSerialization:
 
 class TestDeadHandlersRewired:
 
-    def test_tags_add_and_by_emotion(self, actors):
-        m = _hold(actors)
-        out = registry.invoke(actors["jiaming"], "memory.tags.add", {
-            "memory_id": m["memory_id"],
-            "tags": ["registry测试"]}, None)
-        assert out["ok"] is True
+    def test_by_emotion_no_name_error(self, actors):
+        # tags.add 2026-10-13 退役删除；by_emotion（RA-010 修复对象）保留
         found = registry.invoke(actors["jiaming"], "memory.by_emotion", {
             "tag": "开心"}, None)  # by_emotion 按大类筛
         assert found["ok"] is True, "by_emotion 不再 NameError（RA-010）"

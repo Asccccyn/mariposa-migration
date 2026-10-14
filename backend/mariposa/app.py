@@ -25,9 +25,11 @@ from .identity import Principal, service as identity
 
 # 静态资源相对代码树定位（而非 MARIPOSA_ROOT 数据根）：
 # 测试/隔离根只隔离数据库，代码与构建产物位置不变
+# 2026-10-13 她裁定：旧调试风单文件前端退役删除；正式前端=frontend/
+# （React+Vite 设计稿接入），此路由改 serve 其构建产物 dist/
 from pathlib import Path as _Path
 _SOURCE_ROOT = _Path(__file__).resolve().parents[2]
-WEB_DIR = _SOURCE_ROOT / "backend" / "mariposa" / "web"
+WEB_DIR = _SOURCE_ROOT / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -737,11 +739,21 @@ async def source_upload(request: Request):
 
 
 if WEB_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+    # Vite 构建产物：assets/ 哈希名可长缓存；index.html 保持 no-cache
+    # 协商（Safari 启发式缓存旧页的坑，2026-10-11 她中过招）
+    app.mount("/assets", StaticFiles(directory=str(WEB_DIR / "assets")),
+              name="assets")
 
     @app.get("/")
     def index():
-        # no-cache=每次协商（304 也省流量）：前端单文件迭代频繁，
-        # 避免 Safari 启发式缓存让她看到旧页面（2026-10-11 她中过招）
         return FileResponse(str(WEB_DIR / "index.html"),
                             headers={"Cache-Control": "no-cache"})
+else:
+    @app.get("/")
+    def index_not_built():
+        # 前端未构建时的诚实提示（不冒充空白站）
+        return HTMLResponse(
+            "<meta charset='utf-8'><body style='font-family:system-ui;"
+            "padding:3rem;line-height:1.8'>mariposa 前端未构建："
+            "cd frontend && pnpm install && pnpm build"
+            "</body>", status_code=503)

@@ -1,0 +1,10 @@
+{
+  "description": "Organizes and displays personal memory entries with intuitive navigation and responsive design for seamless browsing on iPhone and web platforms.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

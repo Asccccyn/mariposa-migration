@@ -106,15 +106,15 @@ def _register() -> dict[str, Capability]:
     # list 会瞬间打爆读档限速（GATE-01 429 刷屏——她翻页即失效的
     # 根因）。单 capability 内部聚合，限速只按调用次数计。
     add("memory.cards.batch", _cards_batch, _owners(), False,
-        description="批量读卡片附加面（words/recollections/keepers/"
-                    "bindings），≤100 桶一次返回")
+        description="批量读卡片附加面（words/recollections/keepers"
+                    "/bindings/relations），≤100 桶一次返回")
     add("memory.open", _open, _owners(), True,
         description="明确打开：返回当前表示并签发一次性查看票据（不自动确认）")
     add("memory.view.confirm", _view_confirm, _owners(), True, True,
         description="确认本次明确查看（明开回温：explicit-open basis，刷新回温基准；plan 不适用）")
     # WR-01（2026-10-04 全量审计）：追加语义每调一次新增一条——
     # 公开 idempotentHint 必须为 false（此前误标 true，同参重放会
-    # 得到第二条回忆和 keep）
+    # 得到第二条回忆）
     add("memory.recollections.append", _recollect_append, _owners(), True,
         False,
         description="凭有效查看回执追加本人回忆（不索引；触发保留线索）")
@@ -122,6 +122,8 @@ def _register() -> dict[str, Capability]:
         description="修订本人回忆（原话留底，supersedes 链）")
     add("memory.recollections.list", _recollect_list, _owners(), False,
         description="列出桶的回忆（当前版；include_history 含修订历史）")
+    # keep 保留（2026-10-13 勘误）：phase_of 读 memory_keeps——keep 标记
+    # 把桶钉在 WIDE（全字段可检索），是阶段字段矩阵的活输入，不是死代码
     add("memory.keep.revoke", _keep_revoke, _owners(), True,
         description="撤销本人的「留」标记（谁留谁撤；撤销不重置年龄）")
     add("memory.keeps.list", _keeps_list, _owners(), False,
@@ -234,10 +236,10 @@ def _register() -> dict[str, Capability]:
         description="memory 的原文绑定列表")
     add("source.memory.open", _source_memory_open, _owners(), False,
         description="按 memory 动态打开其绑定的原文区间（原文不复制进记忆）")
-    add("handoff.write", _handoff_write, {"jiaming"}, True,
-        description="char写给另一入口的交接便签（72h 过期不删除）")
-    add("handoff.latest", _handoff_latest, _owners(), False,
-        description="最新便签（过期标注 expired）")
+    add("source.bindings.of_conversation",
+        _source_bindings_of_conversation, _owners(), False,
+        description="§6.1 反查（会话方向）：该会话被哪些记忆桶绑定、"
+                    "各覆盖哪段消息序（前端原文页点击跳桶用）")
     add("plan.create", _plan_create, _owners(), True,
         description="创建计划（唯一真源，记忆经链接引用）")
     add("plan.update", _plan_update, _owners(), True,
@@ -281,8 +283,11 @@ def _register() -> dict[str, Capability]:
     add("memory.deletion.direct", _del_direct, {"jiaming"}, True,
         description="char直删（P-D02）：无申请/理由/审批；关系硬门"
                     "（P-D04）同样生效；pending 申请置 superseded")
-    add("memory.tags.add", _tags_add, _owners(), True,
-        description="加标签（情绪标签 whose 必填）")
+    # 2026-10-13 她裁定清理：memory.tags.add / memory.pin /
+    # memory.protect / memory.anchor / memory.by_tag / keep 双接口
+    # 退役删除——遗忘机制 v1.7 退役后这些是无消费方的死开关（多轮
+    # 审计只有规格→代码对照、缺代码→规格反查，故漏报；本批连
+    # extras.set_flag/keep.py/handler/输入 schema 一并清除）
     # R09（复审 2026-10-07，她裁定）：事件改类动作对 qiaosheng 开放
     # （start=写仍仅 jiaming——动作级门在 episodes/service._authorize）
     add("episode.apply", _episode_apply, {"jiaming", "qiaosheng"}, True,
@@ -297,16 +302,6 @@ def _register() -> dict[str, Capability]:
         description="按情绪查（结构化入口；历史 forgotten_summary 仍可查）")
     add("memory.update", _memory_update, _owners(), True,
         description="修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）")
-    add("memory.pin", lambda pr, a: extras.set_flag(
-        pr.principal_id, str(a.get("memory_id", "")), "pin",
-        bool(a.get("value", True))), _owners(), True,
-        description="置顶/取消（排除自动候选）")
-    add("memory.protect", lambda pr, a: extras.set_flag(
-        pr.principal_id, str(a.get("memory_id", "")), "protect",
-        bool(a.get("value", True))), _owners(), True, description="保护/取消")
-    add("memory.anchor", lambda pr, a: extras.set_flag(
-        pr.principal_id, str(a.get("memory_id", "")), "anchor",
-        bool(a.get("value", True))), _owners(), True, description="锚定/取消")
     add("memory.relations.link", _rel_link, _owners(), True,
         description="建立关联（单向存储，显式反向查询）")
     add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
@@ -353,7 +348,6 @@ def _register() -> dict[str, Capability]:
         description="按事件发生日期直达（标题优先）")
     add("memory.by_category", _by_category, _owners(), False,
         description="按分类直达（标题优先，不进召回）")
-    add("memory.by_tag", _by_tag, _owners(), False, description="按标签查（结构化入口）")
     add("maintenance.rebuild_index", _rebuild_index, _ops_maintainers(), True,
         description="按当前版本重建全部派生索引（旧投影+分字段+words+source）")
     add("maintenance.source.cleanup", _source_cleanup, _ops_maintainers(), True,
@@ -901,6 +895,11 @@ def _judge_policy_update(principal: Principal, a: dict) -> dict:
     return out
 
 
+
+
+
+
+
 def _keep_revoke(principal: Principal, a: dict) -> dict:
     from ..memory import keep as keep_mod
     return keep_mod.revoke(principal, str(a.get("mark_id", "")))
@@ -911,9 +910,6 @@ def _keeps_list(principal: Principal, a: dict) -> dict:
     return {"marks": keep_mod.marks_of(str(a.get("memory_id", ""))),
             "active_keepers": keep_mod.active_keepers(
                 str(a.get("memory_id", "")))}
-
-
-
 
 
 # ===== Source Layer handlers =====
@@ -1045,16 +1041,14 @@ def _source_memory_open(principal: Principal, a: dict) -> dict:
         include_content=bool(a.get("include_content")))
 
 
+def _source_bindings_of_conversation(principal: Principal,
+                                     a: dict) -> dict:
+    # §6.1 反查会话方向（她 2026-10-13 点名前端要用）：会话→桶绑定
+    return {"bindings": source_binding.bindings_of_conversation(
+        str(a.get("conversation_id", "")))}
 
 
 
-def _handoff_write(principal: Principal, a: dict) -> dict:
-    return time_ctx.handoff_write(principal.principal_id, principal.entry_source,
-                                  str(a.get("content", "")))
-
-
-def _handoff_latest(principal: Principal, a: dict) -> dict:
-    return time_ctx.handoff_latest()
 
 
 def _plan_create(principal: Principal, a: dict) -> dict:
@@ -1207,12 +1201,6 @@ def _del_get(principal: Principal, a: dict) -> dict:
 
 
 
-def _tags_add(principal: Principal, a: dict) -> dict:
-    tags = a.get("tags") or []
-    if not isinstance(tags, list):
-        raise Forbidden("tags must be a list")
-    return listing.tags_add(principal.principal_id,
-                            str(a.get("memory_id", "")), tags)
 
 
 def _mood_vocab(principal: Principal, a: dict) -> dict:
@@ -1478,7 +1466,7 @@ def _memory_list(principal: Principal, a: dict) -> dict:
 
 
 def _cards_batch(principal: Principal, a: dict) -> dict:
-    from ..memory import our_words as ow, recollections as rc, keep as kp
+    from ..memory import our_words as ow, recollections as rc
     from ..source import binding as sb
     ids = a.get("memory_ids") or []
     if not isinstance(ids, list) or not ids:
@@ -1486,6 +1474,26 @@ def _cards_batch(principal: Principal, a: dict) -> dict:
     if len(ids) > 100:
         raise Forbidden("memory_ids 至多 100 个/次", code="INVALID_ARGUMENT")
     ids = [str(x) for x in ids][:100]
+    # 关系边一并批量带回（2026-10-13 前端关系页要用；一张卡再拉
+    # memory.relations.list 就是逐卡 N+1 打限速——同 batch 语义）
+    rel_edges: dict[str, list[dict]] = {}
+    with db.formal() as conn:
+        marks = ",".join("?" * len(ids))
+        for r in conn.execute(
+                "SELECT relation_id, from_memory, to_memory, relation_type,"
+                " custom_label FROM memory_relations WHERE from_memory IN"
+                f" ({marks}) OR to_memory IN ({marks})",
+                ids + ids).fetchall():
+            for side, key in (("out", r["from_memory"]),
+                              ("in", r["to_memory"])):
+                if key in ids:
+                    rel_edges.setdefault(key, []).append({
+                        "relation_id": r["relation_id"],
+                        "direction": side,
+                        "other_memory": (r["to_memory"] if side == "out"
+                                         else r["from_memory"]),
+                        "relation_type": r["relation_type"],
+                        "custom_label": r["custom_label"]})
     cards = {}
     for mid in dict.fromkeys(ids):
         if not mid:
@@ -1493,12 +1501,12 @@ def _cards_batch(principal: Principal, a: dict) -> dict:
         cards[mid] = {
             "words": ow.list_for(mid),
             "recollections": rc.list_for(mid),
-            "active_keepers": kp.active_keepers(mid),
             "bindings": [{"binding_id": b["binding_id"],
                           "conversation_id": b["conversation_id"],
                           "start_message_id": b["start_message_id"],
                           "end_message_id": b["end_message_id"]}
                          for b in sb.ranges_of(mid)],
+            "relations": rel_edges.get(mid, []),
         }
     return {"cards": cards}
 
@@ -1522,9 +1530,6 @@ def _by_category(principal: Principal, a: dict) -> dict:
         cursor_id=(cur or {}).get("memory_id"))
 
 
-def _by_tag(principal: Principal, a: dict) -> dict:
-    return listing.by_tag(str(a.get("namespace", "tag")), str(a.get("tag", "")),
-                          a.get("whose"))
 
 
 

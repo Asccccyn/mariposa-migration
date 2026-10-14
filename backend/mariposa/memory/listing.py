@@ -137,52 +137,8 @@ def by_category(category: str, limit: int = 50,
     return out
 
 
-def by_tag(namespace: str, tag: str, whose: str | None = None) -> dict:
-    q = ("SELECT t.memory_id, t.whose FROM memory_tags t JOIN memories m"
-         " ON m.memory_id = t.memory_id WHERE t.namespace=? AND t.tag=?"
-         " AND m.visibility='active'")
-    params: list = [namespace, tag]
-    if whose:
-        if whose not in ("jiaming", "qiaosheng"):
-            raise Forbidden("whose must be jiaming or qiaosheng")
-        q += " AND t.whose=?"
-        params.append(whose)
-    with db.formal() as conn:
-        rows = conn.execute(q, params).fetchall()
-        items = [dict(memory.get(conn, r["memory_id"]),
-                      tag_whose=r["whose"]) for r in rows]
-    return {"namespace": namespace, "tag": tag, "items": items,
-            "matched_by": "tag"}
-
-
-def tags_add(principal_id: str, memory_id: str, tags: list[str]) -> dict:
-    """RA-010（2026-10-02 复审 P2）：现行 tags 写入——此前 handler 引用
-    不存在的 content 模块（NameError）。namespace 固定 free/whose 按
-    主体；幂等（OR IGNORE）。"""
-    if not tags:
-        raise Forbidden("tags must be a non-empty list")
-    whose = "jiaming" if principal_id == "jiaming" else "qiaosheng"
-    now = _now()
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # P1-4：存在性检查在写锁内
-            if not conn.execute(
-                    "SELECT 1 FROM memories WHERE memory_id=?",
-                    (memory_id,)).fetchone():
-                raise NotFound("memory not found", memory_id=memory_id)
-            for t in tags:
-                conn.execute(
-                    "INSERT OR IGNORE INTO memory_tags(memory_id,"
-                    " namespace, tag, whose, confidence, created_by)"
-                    " VALUES(?,?,?,?,?,?)",
-                    (memory_id, "free", str(t), whose, "human",
-                     principal_id))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"memory_id": memory_id, "added": len(tags)}
+# 2026-10-13 她裁定退役删除：by_tag / tags_add（自由标签面——九分类
+# 平行多选后无前端/调用方，属死代码；memory_tags 表留待迁移批）
 
 
 def by_emotion(tag: str, whose: str | None = None, limit: int = 50,

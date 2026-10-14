@@ -168,18 +168,6 @@ class TestStaleReceipt:
 
 class TestLockInChecks:
 
-    def test_tags_add_after_delete_structured(self, actors, monkeypatch):
-        """锁外检查窗口遇删除 → 结构化 NotFound（非 FK 500）。
-        （mood.write 已按 2026-10-05 终裁删除——心情不能补写。）"""
-        m = _hold(actors, "心情锁内检查")
-        with db.formal() as c2:
-            c2.execute("PRAGMA foreign_keys=OFF")
-            c2.execute("DELETE FROM memory_our_words WHERE memory_id=?",
-                       (m["memory_id"],))
-            c2.execute("DELETE FROM memories WHERE memory_id=?",
-                       (m["memory_id"],))
-        with pytest.raises(NotFound):
-            listing.tags_add("jiaming", m["memory_id"], ["t"])
 
     def test_pin_deleted_memory_no_fake_success(self, actors):
         m = _hold(actors, "假回执检查")

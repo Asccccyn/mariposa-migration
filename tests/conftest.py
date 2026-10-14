@@ -168,11 +168,10 @@ FORMAL_TABLES = [
     "audit_events", "events_outbox", "idempotency_records",  "words_fts", "words_search_docs", "search_fts",
     "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",
-    "handoffs",
     "plan_memory_links", "plan_versions", "plans",
     "activity_events",
     "deletion_requests",
-    "memory_tags", "bootstrap_snapshots",
+    "bootstrap_snapshots",
     "memory_relations", "media_objects", "import_jobs",
     "memory_reengagements", "migration_id_map",
     # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：判断政策每测试清零

@@ -1,47 +1,20 @@
-"""记忆扩展能力：pin/protect/anchor/update/versions.list（§17.3）。"""
+"""记忆扩展能力：update（正文/标题/日期修订，§17.3）。
+
+2026-10-13 她裁定退役：pin/protect/anchor 旗标（遗忘机制 v1.7 退役后
+无消费方的死开关）整段删除——死代码是多轮审计的方法盲区（只有规格
+→代码对照，没有代码→规格反查），本批清理见 registry 同日注释。
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from .. import audit, db
-from ..errors import Forbidden, NotFound, VersionConflict
+from ..errors import Forbidden, VersionConflict
 from . import service as memory
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-_FLAGS = {"pin": "pinned", "protect": "protected", "anchor": "anchor"}
-
-
-def set_flag(principal_id: str, memory_id: str, flag: str, value: bool) -> dict:
-    col = _FLAGS.get(flag)
-    if col is None:
-        raise Forbidden(f"unknown flag: {flag}")
-    with db.formal() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # P1-4（2026-10-02 接续复审）：检查与 UPDATE 同锁——且
-            # rowcount==0 不得写 audit/返回成功（对已删桶"置顶成功"
-            # 是假回执）
-            if not conn.execute(
-                    "SELECT 1 FROM memories WHERE memory_id=?",
-                    (memory_id,)).fetchone():
-                raise NotFound("memory not found", memory_id=memory_id)
-            cur = conn.execute(
-                f"UPDATE memories SET {col}=?, updated_at=? WHERE"
-                " memory_id=?",
-                (int(value), _now(), memory_id))
-            if cur.rowcount != 1:
-                raise NotFound("memory not found", memory_id=memory_id)
-            audit.record(conn, f"memory.{flag}{'_set' if value else '_unset'}",
-                         principal_id, resource_id=memory_id)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"memory_id": memory_id, flag: value}
 
 
 _UNSET = object()  # 字段缺席哨兵（WR-04：缺席≠显式 null 清空）

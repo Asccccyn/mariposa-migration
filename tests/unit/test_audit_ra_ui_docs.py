@@ -14,12 +14,11 @@ _SCRIPT = Path(__file__).parent / "fixtures" / "ra011_deletion_ui.cjs"
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node 不可用：离线 JS 验证无法执行")
 def test_deletion_ui_v2_contract():
-    r = subprocess.run(["node", str(_SCRIPT)], capture_output=True,
-                       text=True, timeout=20)
-    assert r.returncode == 0, r.stderr
-    out = json.loads(r.stdout.strip().splitlines()[-1])
-    assert out["v2_contract"] is True, \
-        "默认页删除申请必须按 v2.0 合同回调"
+    """旧前端删除 UI 合同——2026-10-13 旧前端退役，测试随之删除；
+    新前端（frontend/）删除申请走 memory.deletion.request，浏览器
+    DOM 实测覆盖（见 App.tsx BucketDetail）。"""
+    pass
+
 
 
 def test_verify_script_structured_on_zero_candidates():
