@@ -173,7 +173,7 @@ FORMAL_TABLES = [
     "deletion_requests",
     "bootstrap_snapshots",
     "memory_relations", "media_objects", "import_jobs",
-    "memory_reengagements", "migration_id_map",
+    "migration_id_map",
     # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08）：判断政策每测试清零
     # ——清零后首个 effective() 按当测 config 属性重新导入，保留
     # 旧测试"改 config.RECALL_JUDGE_PROVIDER + 注入 fake"的模式

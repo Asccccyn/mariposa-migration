@@ -44,12 +44,8 @@ class TestR13SchemaCoverage:
         sc.validate("memory.by_tag", {"tag": "daily", "namespace": "tag"},
                     )  # 显式等价值同样合法
 
-    def test_blocked_capability_placeholder_shape(self, actors):
-        """blocked 能力：占位 schema 放行形状，handler 的 blocked 权威。"""
-        out = registry.invoke(actors["jiaming"], "chat.send",
-                              {"anything": "ignored"}, None)
-        assert out["ok"] is True
-        assert out["data"]["status"] == "blocked"
+    # 2026-10-13 她裁定：blocked 占位全家桶（chat/voice/group/wishstar/
+    # wakeup/listening/settings.update 共 36 项）退役删除，本用例随之移除。
 
     def test_real_registry_full_coverage(self):
         missing = [n for n in registry.REGISTRY

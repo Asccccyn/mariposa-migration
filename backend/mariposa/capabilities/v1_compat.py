@@ -50,54 +50,15 @@ _ALIASES = {
     "settings.get": "maintenance.settings.get",
 }
 
-_BLOCKED_CAPS = {
-    # chat.*：CC 依赖
-    "chat.conversations.list": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.conversations.create": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.conversations.get": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.conversations.messages": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.messages.list": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.send": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    "chat.cancel": ("claude CLI 未安装", "安装官方 Claude Code CLI 并核验订阅"),
-    # voice.*：Siren
-    "voice.send": ("Siren 未接入（其语音 provider 亦为 dev 回退）", "提供 Siren 服务凭据"),
-    "voice.call.start": ("Siren 未接入", "提供 Siren 服务凭据"),
-    "voice.call.get": ("Siren 未接入", "提供 Siren 服务凭据"),
-    "voice.call.end": ("Siren 未接入", "提供 Siren 服务凭据"),
-    "voice.status": ("Siren 未接入", "提供 Siren 服务凭据"),
-    # group.*：扎西德勒
-    "group.list": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.history": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.archive.list": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.archive.get": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.send": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.send_message": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.profile": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    "group.status": ("扎西德勒 8787 未运行", "启动服务后核验契约"),
-    # wishstar.*：Superposition
-    "wishstar.list": ("Superposition 写入凭据未配置", "为 mariposa 建独立服务凭据"),
-    "wishstar.get": ("Superposition 写入凭据未配置", "为 mariposa 建独立服务凭据"),
-    "wishstar.write": ("Superposition 写入凭据未配置", "为 mariposa 建独立服务凭据"),
-    "wishstar.respond": ("Superposition 写入凭据未配置", "为 mariposa 建独立服务凭据"),
-    # wakeup
-    "wakeup.status": ("AUTO_WAKEUP_ENABLED=false（§21 默认）", "配置并真实验收后开启"),
-    "wakeup.configure": ("AUTO_WAKEUP_ENABLED=false（§21 默认）", "配置并真实验收后开启"),
-    # 其他
-    "settings.update": ("配置修改走部署参数（policy version 入审计）",
-                        "需要在线配置面板时另做产品修订"),
-}
+# 2026-10-13 她裁定退役清空：blocked 27 项（chat/voice/group/wishstar/
+# wakeup/settings.update）与 reserved 9 项（listening）全部删除——这些是
+# 2026-09-22 v1.1"150 项最低契约"凑全覆盖的占位壳，从未接通（功能在
+# estómago/Siren/扎西德勒/Superposition 各自项目实现，est 侧对本层零引用）。
+# emotion.context.get 是主表 capability（非本层），按她裁定保留并改薄实现
+# （情绪引擎将来取心情数据）。
+_BLOCKED_CAPS: dict[str, tuple[str, str]] = {}
 
-_RESERVED_CAPS = {
-    "listening.play": "一起听歌未选供应商；不承诺第三方曲库",
-    "listening.queue": "同上",
-    "listening.seek": "同上",
-    "listening.pause": "同上",
-    "listening.enqueue": "同上",
-    "listening.join": "同上",
-    "listening.status": "同上",  # 与既有 listening.status 重名时由既有优先
-    "listening.sync": "同上",
-    "listening.leave": "同上",
-}
+_RESERVED_CAPS: dict[str, str] = {}
 
 _OWNERS = {"qiaosheng", "jiaming"}
 

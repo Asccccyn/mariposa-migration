@@ -1266,7 +1266,13 @@ def _drop_deleted_columns(conn) -> None:
             " name='memory_tags'").fetchone():
         conn.execute("DROP INDEX IF EXISTS idx_memory_tags")
         conn.execute("DROP TABLE memory_tags")
-    # 2026-10-13 她裁定：handoffs 表删除（第一版遗留的交接便签，
+    # 2026-10-13 她裁定：memory_reengagements 表删除（第一版"回访
+    # 记录"概念：生产 0 行 0 调用，capability/服务同批清除）
+    if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND"
+            " name='memory_reengagements'").fetchone():
+        conn.execute("DROP TABLE memory_reengagements")
+    # 2026-10-13 她裁定：handoffs 表删除（第一版遗留的交接便言，
     # capability/服务已清，审计日志零真实调用）
     if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND"

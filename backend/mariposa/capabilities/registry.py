@@ -24,7 +24,7 @@ from ..plans import service as plans
 from ..time_context import service as time_ctx
 from ..bootstrap import service as bootstrap
 from ..deletion import service as deletion
-from ..memory import extras, listing, relations, reengagement
+from ..memory import extras, listing, relations
 from ..memory import service as memory
 from ..retrieval import rebuild as rebuild_mod
 from ..maintenance import service as maintenance
@@ -254,8 +254,6 @@ def _register() -> dict[str, Capability]:
         description="标记计划完成（expected_version 乐观锁；state=done 的专用动作）")
     add("plan.cancel", _plan_set_cancelled, _owners(), True,
         description="放弃计划（expected_version 乐观锁；state=cancelled；不物理删除）")
-    add("memory.reengagement.record", _reengage, _owners(), True,
-        description="记录真实再提起（按证据原时刻；扫描/访问不算）")
     add("identity.bindings.revoke", _binding_revoke, {"qiaosheng"}, True,
         description="撤销客户端绑定（旧 token 立即失效）")
     add("bootstrap.get", _bootstrap, {"jiaming"}, False,
@@ -374,10 +372,8 @@ def _register() -> dict[str, Capability]:
                     "开启=所选 provider 判断，关闭=零判断调用+候选全集"
                     "分页；仅 qiaosheng，且仅网页登录会话可写——"
                     "OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）")
-    add("emotion.context.get", _emotion_reserved, _owners(), False,
+    add("emotion.context.get", _emotion_context, _owners(), False,
         description="情绪补充召回（默认禁用）", status="reserved")
-    add("listening.status", _listening_reserved, _owners(), False,
-        description="一起听歌（未选供应商）", status="reserved")
     return caps
 
 
@@ -1097,12 +1093,6 @@ def _plan_set_cancelled(principal: Principal, a: dict) -> dict:
 
 
 
-def _reengage(principal: Principal, a: dict) -> dict:
-    return reengagement.record(
-        principal.principal_id, str(a.get("memory_id", "")),
-        str(a.get("evidence_kind", "")), str(a.get("occurred_at", "")),
-        a.get("evidence_ref"))
-
 
 def _binding_revoke(principal: Principal, a: dict) -> dict:
     return identity.revoke_binding(principal.principal_id,
@@ -1584,19 +1574,34 @@ def _settings_get(principal: Principal, a: dict) -> dict:
 
 
 
-def _emotion_reserved(principal: Principal, a: dict) -> dict:
-    return {"enabled": False, "status": "reserved",
-            "note": "EMOTION_RETRIEVAL_ENABLED 默认 false；启用也只调整补充召回，"
-                    "不篡改基础时间/原文/三天桶/计划",
-            "config_key": "EMOTION_RETRIEVAL_ENABLED", "configured": False}
+def _emotion_context(principal: Principal, a: dict) -> dict:
+    """情绪引擎薄接口（她 2026-10-13 裁定保留：后面做情绪引擎取心情数据）。
+
+    只读心情数据面：七大类词表 + 每类有效桶计数 + 心情文字条数。不参与
+    检索、不改召回——EMOTION_RETRIEVAL_ENABLED 语义维持原样（默认 false，
+    开启也只影响补充召回，见 config）。情绪引擎自行决定怎么消费。
+    """
+    from ..memory.service import MOOD_CATEGORIES
+    from .. import config as _cfg, db as _db
+    with _db.formal() as conn:
+        counts = {r["tag"]: r["n"] for r in conn.execute(
+            "SELECT t.tag, COUNT(*) n FROM memory_mood_tags t"
+            " JOIN memories m ON m.memory_id=t.memory_id"
+            " WHERE m.visibility='active' GROUP BY t.tag")}
+        mood_text_n = conn.execute(
+            "SELECT COUNT(*) n FROM memory_moods m2"
+            " JOIN memories m ON m.memory_id=m2.memory_id"
+            " WHERE m.visibility='active'").fetchone()["n"]
+    return {
+        "vocabulary": list(MOOD_CATEGORIES),
+        "mood_tag_counts": {c: counts.get(c, 0) for c in MOOD_CATEGORIES},
+        "mood_text_memories": mood_text_n,
+        "retrieval_enabled": getattr(
+            _cfg, "EMOTION_RETRIEVAL_ENABLED", False),
+        "note": "只读心情数据面；不参与检索不改召回（情绪引擎预留）",
+    }
 
 
-def _listening_reserved(principal: Principal, a: dict) -> dict:
-    return {"status": "reserved", "provider": None,
-            "note": "一起听歌未选供应商；不承诺第三方曲库；capability 标 reserved"}
-
-
-# ---------- episode handlers（她批 2026-10-07"做吧"） ----------
 
 def _episode_apply(principal: Principal, a: dict) -> dict:
     from ..episodes import service as _ep

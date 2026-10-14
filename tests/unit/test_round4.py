@@ -152,11 +152,13 @@ class TestMedia:
 
 
 class TestReservedContracts:
-    def test_emotion_and_listening_reserved(self, actors):
+    def test_emotion_context_thin_mood_data(self, actors):
+        """2026-10-13：emotion.context.get 改薄实现（情绪引擎取心情数据）；
+        listening.* 保留壳已随占位全家桶退役删除。"""
         from mariposa.capabilities import registry
         emo = registry.invoke(actors["qiaosheng"], "emotion.context.get", {}, None)
-        assert emo["data"]["status"] == "reserved"
-        assert emo["data"]["enabled"] is False
-        lis = registry.invoke(actors["qiaosheng"], "listening.status", {}, None)
-        assert lis["data"]["status"] == "reserved"
-        assert lis["data"]["provider"] is None
+        assert emo["ok"] is True
+        assert isinstance(emo["data"]["vocabulary"], list) \
+            and emo["data"]["vocabulary"]
+        assert isinstance(emo["data"]["mood_tag_counts"], dict)
+        assert "开心" in emo["data"]["mood_tag_counts"]

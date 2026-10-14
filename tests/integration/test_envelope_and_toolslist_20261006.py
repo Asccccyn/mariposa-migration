@@ -60,24 +60,6 @@ class TestEnvelopeNegotiation:
         assert "content_envelope" in instr
 
 
-class TestToolsListNoise:
-    def test_blocked_reserved_hidden_from_mcp(self, c):
-        """占位工具不进 MCP 发现面；HTTP capabilities.list 仍可见
-        （能力未注销，负测可验证）。"""
-        r = c.post("/mcp", json={"jsonrpc": "2.0", "id": 2,
-                                 "method": "tools/list", "params": {}},
-                   headers={"Authorization": f"Bearer {TOKENS['qiaosheng']}"})
-        names = [t["name"] for t in r.json()["result"]["tools"]]
-        from mariposa.capabilities.mcp_adapter import _transport_name
-        placeholders = {_transport_name(cap.name)
-                        for cap in registry.REGISTRY.values()
-                        if cap.description.startswith(("[blocked]",
-                                                        "[reserved]"))}
-        assert placeholders, "前提：v1_compat 注册了占位"
-        assert not (set(names) & placeholders), \
-            f"MCP 发现面不得含占位：{set(names) & placeholders}"
-
-
 class TestWorkspaceMigration8:
     def test_fresh_db_single_migration_zero_dead_tables(self, tmp_path):
         """fresh 库：WORKSPACE 链只剩迁移 8，净效果=零死表。

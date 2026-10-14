@@ -22,7 +22,7 @@ LIFETIME_PER_MEMORY = 5    # 人类申请：每桶一生成功提交数（P-D03�
 DAILY_LIMIT = 10           # 人类申请：每上海自然日提交数
 _SUB_TABLES = ("memory_categories", "memory_moods",
                "memory_mood_tags", "memory_our_words", "memory_recollections",
-               "memory_view_receipts", "memory_reengagements", "memory_keeps",
+               "memory_view_receipts", "memory_keeps",
                "field_search_docs", "field_fts", "search_fts",
                "retrieval_documents", "memory_versions",
                "memory_embeddings")
