@@ -111,11 +111,69 @@ def update_text(principal_id: str, memory_id: str, expected_version: int,
             _fp.build_for_memory(conn, memory_id)
             memory.rebuild_full_projection(conn, memory_id)
             audit.record(conn, "memory.updated", principal_id,
-                         resource_id=memory_id, resource_version=new_version)
+                         resource_id=memory_id, resource_version=new_version,
+                         payload={"title_changed": original_title is not _UNSET
+                                  and new_title != v["original_title"],
+                                  "text_changed": text is not None})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return {"memory_id": memory_id, "version": new_version}
+
+
+def update_mood(principal_id: str, memory_id: str, mood: dict) -> dict:
+    """当时心情单独修订（2026-10-12）：不推进正文版本行。
+
+    八栏口径：当时心情=感受+为什么记得+想说没说+标签。合同校验复用
+    hold 时的 _validate_mood——仅 jiaming、仅 contemporaneous 桶（
+    V2-REC-09/04）。已有心情行覆盖更新（mood 是当前态不是历史栈，
+    修订留审计不留版本行）；标签整组重建。
+    """
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            m = conn.execute("SELECT creation_mode FROM memories"
+                             " WHERE memory_id=?",
+                             (memory_id,)).fetchone()
+            if m is None:
+                raise NotFound("memory not found", memory_id=memory_id)
+            from ..identity import Principal as _Principal
+            mood_data = memory._validate_mood(
+                _Principal(principal_id=principal_id,
+                           display_name=principal_id,
+                           kind="ai" if principal_id == "jiaming"
+                           else "human",
+                           entry_source="web", binding_id=""),
+                mood if isinstance(mood, dict) else {}, m["creation_mode"])
+            now = memory._now()
+            exists = conn.execute(
+                "SELECT 1 FROM memory_moods WHERE memory_id=?",
+                (memory_id,)).fetchone()
+            if exists:
+                conn.execute(
+                    "UPDATE memory_moods SET mood_text=?, captured_at=?"
+                    " WHERE memory_id=?",
+                    (mood_data["text"], now, memory_id))
+            else:
+                conn.execute(
+                    "INSERT INTO memory_moods(memory_id, mood_text, author,"
+                    " captured_session, captured_at, evidence_state)"
+                    " VALUES(?,?, 'jiaming', 'web', ?, 'contemporaneous')",
+                    (memory_id, mood_data["text"], now))
+            conn.execute("DELETE FROM memory_mood_tags WHERE memory_id=?",
+                         (memory_id,))
+            for tag in mood_data["tags"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_mood_tags(memory_id, tag)"
+                    " VALUES(?,?)", (memory_id, tag))
+            audit.record(conn, "memory.mood_updated", principal_id,
+                         resource_id=memory_id,
+                         payload={"tags": mood_data["tags"]})
+            conn.execute("COMMIT")
+            return {"memory_id": memory_id, "mood": mood_data}
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
