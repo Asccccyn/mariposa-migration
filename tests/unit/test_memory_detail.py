@@ -194,6 +194,34 @@ class TestDetailRead:
             _read(actors["jiaming"])
         assert "DETAIL_NOT_FOUND" in str(ei.value)
 
+    def test_detail_never_recalls_or_judges(self, actors, tmp_path, monkeypatch):
+        """docs/05 接线合同：detail 路径 recall/judge/向量/BM25 全零（spy）。"""
+        mem_id, _ = _seed(tmp_path, actors)
+        _receipt_with_detail(mem_id, LONG_TEXT)
+        calls = {"n": 0}
+
+        def _boom(*a, **kw):
+            calls["n"] += 1
+            raise AssertionError("detail 路径不得触发检索/判断")
+
+        import mariposa.recall.service as recall_svc
+        import mariposa.recall.round2 as round2_mod
+        import mariposa.retrieval.semantic as sem_mod
+        import mariposa.recall.pipeline as pipe_mod
+        import mariposa.recall.judge_policy as jp_mod
+        for fn in ("start", "refine", "navigate", "accept", "reject"):
+            monkeypatch.setattr(recall_svc, fn, _boom, raising=True)
+        monkeypatch.setattr(round2_mod, "round2", _boom, raising=True)
+        monkeypatch.setattr(sem_mod, "semantic_search", _boom, raising=True)
+        monkeypatch.setattr(pipe_mod, "round1_lexical_hits", _boom, raising=True)
+        # judge 政策读可以（只读），但 judge provider 构造/调用必须零
+        import mariposa.surfacing.judge as sj
+        monkeypatch.setattr(sj, "set_transport_for_tests",
+                            lambda fn: _boom(), raising=True)
+        page = _read(actors["jiaming"])
+        assert page["memory_id"] == mem_id
+        assert calls["n"] == 0
+
     def test_unseen_ref_rejected(self, actors, tmp_path):
         _seed(tmp_path, actors)
         with pytest.raises(Exception) as ei:

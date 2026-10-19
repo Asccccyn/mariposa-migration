@@ -54,9 +54,15 @@ def _surface_gates(policy: dict) -> tuple[dict | None, str | None]:
     usage = store.judge_usage_today()
     if int(usage["requests"]) >= int(policy["daily_judge_request_cap"]):
         return None, "SURFACE_BUDGET_EXHAUSTED"
-    if policy["daily_judge_cost_cap_usd"] is None:
-        # 费用上限 null 不是无限：有付费出站即 blocked（显式批准后配置）
+    cap_usd = policy["daily_judge_cost_cap_usd"]
+    if cap_usd is None:
+        # 费用上限 None 不是无限：有付费出站即 blocked（显式批准后配置）
         return None, "SURFACE_BUDGET_UNCONFIGURED"
+    if (usage["est_cost_usd"] is not None
+            and float(usage["est_cost_usd"]) >= float(cap_usd)):
+        # 金额硬上限（需价格核验后台账才有 est_cost；未核验=恒 None，
+        # 由次数上限兜底——如实不伪造金额）
+        return None, "SURFACE_BUDGET_EXHAUSTED"
     return jp, None
 
 
