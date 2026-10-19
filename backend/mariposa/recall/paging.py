@@ -32,14 +32,16 @@ PAGE_ENVELOPE_MAX_BYTES = 24576
 _FRAGMENT_CHARS_START = 4000
 
 #: 冻结投影白名单（shared._finalize_cards 同源 + 关闭模式正文载体）：
-#: 不含 _row/judge 分值（关闭模式不伪造判分）等内部字段
-_CARD_FIELDS = ("resource_ref", "candidate_ref", "channel", "representation",
-                "content_version", "representation_version",
-                "projection_version", "memory_id", "word_id", "ordinal",
+#: 不含 _row/judge 分值（关闭模式不伪造判分）等内部字段。
+#: 2026-10-19 她裁定（JSON 瘦身）：与 _finalize_cards 同步收窄——
+#: 单 ref、单版本字段、无 rrf_score/_matched。
+_CARD_FIELDS = ("resource_ref", "channel",
+                "content_version",
+                "memory_id", "word_id", "ordinal",
                 "speaker", "source_ref", "source_binding_version",
                 "memory_date", "matched_by",
                 "matched_fields", "excerpt", "truncated", "evidence",
-                "version_receipt", "rrf_score", "_matched",
+                "version_receipt",
                 "evidence_requirement_met")
 
 

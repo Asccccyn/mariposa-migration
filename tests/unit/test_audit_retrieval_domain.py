@@ -156,7 +156,7 @@ class TestNavigateScopeAndReject:
                                "categories": ["sweet"]}},
             "operation_id": "cb041-s"}, None)["data"]
         sid = r1["recall_session_id"]
-        anchor = r1["candidates"][0]["candidate_ref"] if r1[
+        anchor = r1["candidates"][0]["resource_ref"] if r1[
             "candidates"] else None
         assert anchor, "前置：sweet 范围有锚点"
         nav = registry.invoke(actors["jiaming"], "memory.recall.navigate", {

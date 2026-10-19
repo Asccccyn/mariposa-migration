@@ -27,7 +27,9 @@ PYTHONPATH=backend MARIPOSA_ROOT=<数据根> .venv/bin/python -m uvicorn maripos
   读流上限预检属原文分页在途批的既有失败，与本批无关）——本批=
   我们的话只剩原文（删 expression_kind 全链+迁移 39）+ memory.update
   就地改（版本计数器仍递进，票据防串改依赖）+ 话语新增/修改并入
-  （说话人随出处、逐字核验连续片段）
+  （说话人随出处、逐字核验连续片段）。该批 **已部署**（2026-10-19：
+  estómago 先重启→迁移 39+mariposa 重启，451 记忆/86 话语完好；commit
+  8c8f131 已 push，含她在途心情修订/原文分页同树批）
 
 ```bash
 # 前台、单文件、120 秒硬超时；无字节码或 pytest 缓存写入仓库

@@ -111,7 +111,7 @@ class TestJ03CodexJudge:
         assert len(refs_seen.get("refs") or []) == 4, "全部候选送 Codex"
         # 正文由 Mariposa 装配：交付卡 evidence 来自本地记录（含原始 snippet）
         assert packet["judged_count"] >= 1
-        assert all(c.get("candidate_ref") for c in packet["candidates"])
+        assert all(c["resource_ref"] for c in packet["candidates"])
 
     def test_j03_same_material_as_jev(self, actors, monkeypatch):
         """J03：同一批候选分别给 Jev/Codex——送判集合一致（同材料不接力）。"""

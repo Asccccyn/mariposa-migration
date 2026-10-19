@@ -1178,8 +1178,13 @@ def reject(principal, a: dict, op_ctx: dict | None = None) -> dict:
     if target not in REJECT_TARGETS:
         raise Forbidden(f"reject_target 必须是 {list(REJECT_TARGETS)}",
                         code="INVALID_ARGUMENT")
+    # 回执 resource_ref 从会话候选行反查（2026-10-19 卡片瘦身后交付卡
+    # 只带 resource_ref，调用方常只回传它——两个方向都补全成对字段）
+    _cand_row = next((c for c in store.list_candidates(a["session_id"])
+                      if c["candidate_ref"] == candidate_ref), None)
     result = {"candidate_ref": candidate_ref,
-              "resource_ref": a.get("resource_ref") or "",
+              "resource_ref": a.get("resource_ref")
+              or (_cand_row["resource_ref"] if _cand_row else ""),
               "reject_target": target, "scope": "session_local"}
     out = {"rejected": result, "session_id": a["session_id"],
            "revision": session["current_revision"]}

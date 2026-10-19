@@ -454,7 +454,7 @@ class TestP101ActionOperationAtomicity:
         self._hold(actors, "接受幂等场景搬家正文")
         p = self._start(actors)
         sid = p["data"]["recall_session_id"]
-        cand = p["data"]["candidates"][0]["candidate_ref"]
+        cand = p["data"]["candidates"][0]["resource_ref"]
         args = {"session_id": sid, "candidate_ref": cand, "close": True,
                 "operation_id": "idem-p1-accept"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.accept",
@@ -494,13 +494,13 @@ class TestP101ActionOperationAtomicity:
         p = self._start(actors)
         sid = p["data"]["recall_session_id"]
         cand = p["data"]["candidates"][0]
-        args = {"session_id": sid, "candidate_ref": cand["candidate_ref"],
+        args = {"session_id": sid, "candidate_ref": cand["resource_ref"],
                 "reject_target": "candidate",
                 "operation_id": "idem-p1-reject"}
         r1 = registry.invoke(actors["jiaming"], "memory.recall.reject",
                              args, None)
-        assert r1["data"]["rejected"]["candidate_ref"] == \
-            cand["candidate_ref"]
+        assert r1["data"]["rejected"]["resource_ref"] == \
+            cand["resource_ref"]
         r2 = registry.invoke(actors["jiaming"], "memory.recall.reject",
                              args, "idem-p1-reject")
         assert r2["data"].get("idempotent_replay") is True

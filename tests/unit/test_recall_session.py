@@ -74,7 +74,7 @@ class TestSessionActions:
         # accept + close
         out = recall_service.accept(actors["jiaming"], {
             "session_id": sid,
-            "candidate_ref": nav["candidates"][0]["candidate_ref"],
+            "candidate_ref": nav["candidates"][0]["resource_ref"],
             "close": True})
         assert out["status"] == "RESOLVED"
         # 终态不可再动：close/refine 均拒绝
@@ -249,7 +249,7 @@ class TestScopesAndTTL:
         # 静默失效退化为全量导航）——用最晚候选作锚，earlier 返回更早者
         anchor = max(p["candidates"],
                      key=lambda c: c.get("memory_date") or ""
-                     )["candidate_ref"]
+                     )["resource_ref"]
         nav = recall_service.navigate(actors["jiaming"], {
             "session_id": sid, "direction": "earlier",
             "anchor_candidate_ref": anchor})
@@ -282,7 +282,7 @@ class TestScopesAndTTL:
         word_cand = next(c for c in p["candidates"]
                          if c["channel"] == "words")
         recall_service.reject(actors["jiaming"], {
-            "session_id": sid, "candidate_ref": word_cand["candidate_ref"],
+            "session_id": sid, "candidate_ref": word_cand["resource_ref"],
             "reject_target": "word"})
         p2 = recall_service.refine(actors["jiaming"], {
             "session_id": sid, "query_plan": {

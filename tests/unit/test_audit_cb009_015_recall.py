@@ -100,7 +100,7 @@ def _grant_source_excerpt():
 
         def judge(self, plan, candidates, ctx):
             items = [jb.JudgeItem(
-                candidate_ref=c.get("candidate_ref") or c["resource_ref"],
+                candidate_ref=c["resource_ref"],
                 candidate_version=str(c.get("content_version") or ""),
                 relevance_signal=0.8,
                 evaluation_status="evaluated", model_id=self.name,
@@ -195,7 +195,7 @@ class TestCommitTimeRevalidation:
         _seed_word(actors["jiaming"])
         r1 = _start(actors, op="op-f03-rej")
         sid = r1["data"]["recall_session_id"]
-        cand = r1["data"]["candidates"][0]["candidate_ref"]
+        cand = r1["data"]["candidates"][0]["resource_ref"]
         original = recall_service.require_owned_session
         armed = [True]
 
@@ -435,7 +435,7 @@ class TestJudgeProofValidity:
 
             def judge(self, plan, candidates, ctx):
                 items = [jb.JudgeItem(
-                    candidate_ref=c.get("candidate_ref")
+                    candidate_ref=c["resource_ref"]
                     or c["resource_ref"],
                     candidate_version="999",  # 恒错版本
                     relevance_signal=0.8,
@@ -488,7 +488,7 @@ class TestJudgeProofValidity:
                 if not raw_only:
                     # Round1 正常判断（words 候选），不触发基数违例
                     items = [jb.JudgeItem(
-                        candidate_ref=c.get("candidate_ref")
+                        candidate_ref=c["resource_ref"]
                         or c["resource_ref"],
                         candidate_version=str(
                             c.get("content_version") or ""),
@@ -609,7 +609,7 @@ class TestReplayGuards:
                 "前置：round2 交付了 source 卡"
             registry.invoke(actors["jiaming"], "memory.recall.reject", {
                 "session_id": sid,
-                "candidate_ref": next(c["candidate_ref"]
+                "candidate_ref": next(c["resource_ref"]
                                       for c in saved["candidates"]
                                       if c["resource_ref"].startswith(
                                           "source_msg:")),

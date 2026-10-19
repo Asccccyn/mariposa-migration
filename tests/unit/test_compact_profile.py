@@ -132,7 +132,7 @@ class TestRecallCompact:
         # 候选合同字段逐项等价
         for cf, cc in zip(full["candidates"], cp["candidates"]):
             assert cc["resource_ref"] == cf["resource_ref"]
-            assert cc["candidate_ref"] == cf["candidate_ref"]
+            assert cc["resource_ref"] == cf["resource_ref"]
             assert cc["content_version"] == cf["content_version"]
             assert cc["evidence"] == cf["evidence"], "证据链必须逐值保留"
             if cf.get("excerpt") == (cf.get("evidence") or [{}])[0].get(

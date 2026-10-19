@@ -199,16 +199,18 @@ def _enforce_output_budget(packet: dict) -> dict:
 def _finalize_cards(cards: list[dict]) -> list[dict]:
     out = []
     for c in cards:
+        # 2026-10-19 她裁定（JSON 瘦身）：候选卡只留模型消费的字段——
+        # candidate_ref/resource_ref 二选一；三版本字段只留 content_version；
+        # rrf_score/_matched 是排序与判断器内部量，不出站。
         card = {k: v for k, v in c.items()
-                if k in ("resource_ref", "candidate_ref", "channel",
-                         "representation", "content_version",
-                         "representation_version", "projection_version",
+                if k in ("resource_ref", "channel",
+                         "content_version",
                          "memory_id", "word_id", "ordinal", "speaker",
                          "source_ref", "source_binding_version",
                          "memory_date", "matched_by",
                          "matched_fields", "excerpt", "truncated", "evidence",
-                         "judge", "version_receipt", "rrf_score",
-                         "_matched")}  # 复审#1：检索层真实命中窗
+                         "judge", "version_receipt",
+                         "evidence_requirement_met")}
         card["evidence_requirement_met"] = evidence_mod.meets_requirement(
             card.get("evidence") or [], "verbatim_required")
         out.append(card)

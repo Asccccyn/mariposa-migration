@@ -111,7 +111,7 @@ class TestP13Round2ReasonFacts:
             def judge(self, plan, cs, ctx):
                 return jb.JudgeBatchResult(
                     items=[jb.JudgeItem(
-                        c.get("candidate_ref") or c["resource_ref"],
+                        c["resource_ref"],
                         c.get("content_version"), relevance_signal=0.8,
                         evaluation_status="evaluated",
                         model_id=self.name, prompt_version="t")
@@ -225,7 +225,7 @@ class TestP14WordsIdentityAndEnvelope:
                 cap["payload"] = inner._payload(plan, candidates)
                 return jb.JudgeBatchResult(
                     items=[jb.JudgeItem(
-                        c.get("candidate_ref") or c["resource_ref"],
+                        c["resource_ref"],
                         c.get("content_version"), relevance_signal=0.8,
                         evaluation_status="evaluated", model_id="c",
                         prompt_version="t") for c in candidates],
@@ -257,7 +257,7 @@ class TestP14WordsIdentityAndEnvelope:
                 "前置失败：event 通道应命中 our_words 字段卡（WIDE 阶段）"
             cands = {c["candidate_ref"]: c
                      for c in cap["payload"]["state"]["candidates"]}
-            word_ref = word_cards[0]["candidate_ref"]
+            word_ref = word_cards[0]["resource_ref"]
             segs = cands[word_ref]["segments"]
             word_segs = [s for s in segs if s["field"] == "our_words"]
             ev_segs = [s for s in segs if s["field"] == "event_text"]
@@ -372,7 +372,7 @@ class TestP26ReplayKeepsSourceMsg:
             def judge(self, plan, cs, ctx):
                 return jb.JudgeBatchResult(
                     items=[jb.JudgeItem(
-                        c.get("candidate_ref") or c["resource_ref"],
+                        c["resource_ref"],
                         c.get("content_version"), relevance_signal=0.8,
                         evaluation_status="evaluated",
                         model_id=self.name, prompt_version="t")
