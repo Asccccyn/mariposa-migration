@@ -608,6 +608,18 @@
       "description": "撤回 pending 删除申请"
     },
     {
+      "canonical_name": "memory.detail.read",
+      "transport_name": "mariposa_memory_detail_read",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "status": "available",
+      "idempotent": false,
+      "description": "按已见 detail_ref 直读该桶当前完整内容与五域关系（分页快照；绝不 recall；不建 view_receipt、不确认明确打开）"
+    },
+    {
       "canonical_name": "memory.find_words",
       "transport_name": "mariposa_memory_find_words",
       "allowed_principals": [
@@ -980,6 +992,42 @@
       "description": "关键词检索有效投影"
     },
     {
+      "canonical_name": "memory.surfacing.check",
+      "transport_name": "mariposa_memory_surfacing_check",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": false,
+      "status": "available",
+      "idempotent": false,
+      "description": "纯本地版本/权限/政策校验（无检索、无 judge、无网络；最终冻结前 as-of 复核，回执绑目标消息/修订/窗口）"
+    },
+    {
+      "canonical_name": "memory.surfacing.prepare",
+      "transport_name": "mariposa_memory_surfacing_prepare",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "status": "available",
+      "idempotent": false,
+      "description": "自动浮现准备：既有候选生成→事件分组→严格 prepare 判断→每事件唯一赢家（快照入 surface 运行库；judge 费用独立台账；默认 SURFACE_ENABLED=false 时 blocked）"
+    },
+    {
+      "canonical_name": "memory.surfacing.validate",
+      "transport_name": "mariposa_memory_surfacing_validate",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "status": "available",
+      "idempotent": false,
+      "description": "投递前复核：目标消息当前相关性+版本/域向量复核+验证回执签发（不检索；不改原赢家；deadline 内有界）"
+    },
+    {
       "canonical_name": "memory.update",
       "transport_name": "mariposa_memory_update",
       "allowed_principals": [
@@ -989,7 +1037,7 @@
       "write": true,
       "status": "available",
       "idempotent": false,
-      "description": "修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）"
+      "description": "修改桶（2026-10-18 她裁定：就地更新当前版本，不留历史版本；CAS 锁与审计保留）；可同时改正文/标题/日期/分类与我们的话（新增/修改——话语只存原文，说话人由出处推导，服务端逐字核验连续片段）"
     },
     {
       "canonical_name": "memory.view.confirm",

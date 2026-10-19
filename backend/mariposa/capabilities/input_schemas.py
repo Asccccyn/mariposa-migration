@@ -1307,6 +1307,152 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                           "items": {"type": "string",
                                                      "minLength": 1}}},
     },
+    # ===== EST_MARIPOSA_AUTO_SURFACING_V1（2026-10-19）：四新面输入
+    # 合同（包内 contracts/*.schema.json 的仓内方言翻译；禁止
+    # allowUnknownFields/additionalProperties 漏口）=====
+    "memory.surfacing.prepare": {
+        "type": "object",
+        "required": ["operation_id", "conversation_scope",
+                     "source_input", "recent_dialogue",
+                     "event_hypotheses"],
+        "additionalProperties": False,
+        "properties": {
+            "operation_id": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string", "minLength": 1},
+            "source_input": {
+                "type": "object",
+                # occurred_at 允许 null（包合同 nullable）——本方言
+                # required 不容 null，故不入 required，缺失按 null 处理
+                "required": ["message_id", "revision", "sequence",
+                             "text", "body_hash"],
+                "additionalProperties": False,
+                "properties": {
+                    "message_id": {"type": "string", "minLength": 1},
+                    "revision": {"type": "integer", "minimum": 1},
+                    "sequence": {"type": "integer", "minimum": 0},
+                    "text": {"type": "string"},
+                    "body_hash": {"type": "string",
+                                   "pattern": "^[0-9a-f]{64}$"},
+                    "occurred_at": {"anyOf": [
+                        {"type": "null"}, {"type": "string"}]}},
+            },
+            "recent_dialogue": {
+                "type": "array", "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "required": ["message_id", "revision", "role",
+                                 "text", "sequence"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "message_id": {"type": "string", "minLength": 1},
+                        "revision": {"type": "integer", "minimum": 1},
+                        "role": {"enum": ["owner", "assistant"]},
+                        "text": {"type": "string"},
+                        "sequence": {"type": "integer", "minimum": 0}}},
+            },
+            "event_hypotheses": {
+                "type": "array", "maxItems": 24,
+                "items": {
+                    "type": "object",
+                    # inherited_date_span 允许 null（同 occurred_at 方言处理）
+                    "required": ["hypothesis_id", "start_cp", "end_cp"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "hypothesis_id": {"type": "string", "minLength": 1},
+                        "start_cp": {"type": "integer", "minimum": 0},
+                        "end_cp": {"type": "integer", "minimum": 1},
+                        "inherited_date_span": {
+                            "anyOf": [
+                                {"type": "null"},
+                                {"type": "object",
+                                 "required": ["start_cp", "end_cp"],
+                                 "additionalProperties": False,
+                                 "properties": {
+                                     "start_cp": {"type": "integer",
+                                                   "minimum": 0},
+                                     "end_cp": {"type": "integer",
+                                                 "minimum": 1},
+                                 },
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    },
+    "memory.surfacing.validate": {
+        "type": "object",
+        "required": ["operation_id", "conversation_scope",
+                     "candidate_snapshot_ref", "source_input_ref",
+                     "target_input", "recent_dialogue", "window_id",
+                     "deadline_at"],
+        "additionalProperties": False,
+        "properties": {
+            "operation_id": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string", "minLength": 1},
+            "candidate_snapshot_ref": {"type": "string", "minLength": 1},
+            "source_input_ref": {
+                "type": "object",
+                "required": ["message_id", "revision"],
+                "additionalProperties": False,
+                "properties": {
+                    "message_id": {"type": "string", "minLength": 1},
+                    "revision": {"type": "integer", "minimum": 1}},
+            },
+            "target_input": {
+                "type": "object",
+                # occurred_at 允许 null（包合同 nullable）——本方言
+                # required 不容 null，故不入 required，缺失按 null 处理
+                "required": ["message_id", "revision", "sequence",
+                             "text", "body_hash"],
+                "additionalProperties": False,
+                "properties": {
+                    "message_id": {"type": "string", "minLength": 1},
+                    "revision": {"type": "integer", "minimum": 1},
+                    "sequence": {"type": "integer", "minimum": 0},
+                    "text": {"type": "string"},
+                    "body_hash": {"type": "string",
+                                   "pattern": "^[0-9a-f]{64}$"},
+                    "occurred_at": {"anyOf": [
+                        {"type": "null"}, {"type": "string"}]}},
+            },
+            "recent_dialogue": {
+                "type": "array", "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "required": ["message_id", "revision", "role",
+                                 "text", "sequence"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "message_id": {"type": "string", "minLength": 1},
+                        "revision": {"type": "integer", "minimum": 1},
+                        "role": {"enum": ["owner", "assistant"]},
+                        "text": {"type": "string"},
+                        "sequence": {"type": "integer", "minimum": 0}}},
+            },
+            "window_id": {"type": "string", "minLength": 1},
+            "deadline_at": {"type": "string", "minLength": 1}},
+    },
+    "memory.surfacing.check": {
+        "type": "object",
+        "required": ["validation_receipt", "conversation_scope",
+                     "target_message_id", "target_revision", "window_id"],
+        "additionalProperties": False,
+        "properties": {
+            "validation_receipt": {"type": "string", "minLength": 1},
+            "conversation_scope": {"type": "string", "minLength": 1},
+            "target_message_id": {"type": "string", "minLength": 1},
+            "target_revision": {"type": "integer", "minimum": 1},
+            "window_id": {"type": "string", "minLength": 1}},
+    },
+    "memory.detail.read": {
+        "type": "object", "required": ["detail_ref"],
+        "additionalProperties": False,
+        "properties": {
+            "detail_ref": {"type": "string", "minLength": 1},
+            "cursor": {"type": "string", "minLength": 1}},
+    },
     # workspace.forgetting.* / workspace.review.*（v1.7 2026-09-28 整体
     # 退役）的 4 个死 schema 键已删（审计 1005B：schema_for 永远查不到
     # 它们——REGISTRY 不再注册这些能力）

@@ -1,6 +1,12 @@
 # mariposa
 
-宿主用户与char的记忆与原文应用。开发和测试使用独立数据根、合成数据，
+宿主用户与char的记忆与原文应用。
+
+## 2026-10-19 · EST_MARIPOSA_AUTO_SURFACING_V1（自动浮现四能力，默认关）
+
+- 新增 `backend/mariposa/surfacing/`（prepare/validate/check 编排+严格选择+两阶段 TypeSafe judge 适配+运行库 store）与 `retrieval/candidate_service.py`（候选生成从 recall/service 等价提取，主动 recall 反向 import——单一候选生成接缝）；`memory/detail.py` 按桶全量详情（八段/五域/码点分页/无 view_receipt）。
+- 运行库迁移 16（surface 五表）；registry 四新面 `memory.surfacing.prepare/validate/check`+`memory.detail.read`（运行时幂等隔离，契约导出已重生成 122 能力）；config `SURFACE_*` 段（`MARIPOSA_SURFACE_ENABLED` 默认关；cost cap null=有付费即 blocked）。
+- 测试：新增 unit 43+integration 4 全绿；全量 unit 1283 绿/2 失败=她在途批遗留（words 惰性重建/读流上限，与本批无关已复验）。报告：estómago 仓 `docs/reports/EST_MARIPOSA_AUTO_SURFACING_V1/`。开发和测试使用独立数据根、合成数据，
 不读写旧 Ombre 生产数据；当前正式数据状态不能由历史开发说明推断。
 
 ## 快速开始（开发）

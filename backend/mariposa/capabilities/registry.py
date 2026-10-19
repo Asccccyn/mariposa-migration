@@ -382,6 +382,24 @@ def _register() -> dict[str, Capability]:
                     "OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）")
     add("emotion.context.get", _emotion_context, _owners(), False,
         description="情绪补充召回（默认禁用）", status="reserved")
+    # ===== EST_MARIPOSA_AUTO_SURFACING_V1（2026-10-19）=====
+    # 自动浮现四新面：全部运行时写面走 surface 运行库幂等（见
+    # _SURFACE_RUNTIME_CAPS），不进正式能力幂等缓存；E 侧专用
+    # service binding 的 capabilities_allowlist 只放行这四个名字。
+    add("memory.surfacing.prepare", _surface_prepare, _owners(), True,
+        description="自动浮现准备：既有候选生成→事件分组→严格 prepare "
+                    "判断→每事件唯一赢家（快照入 surface 运行库；judge "
+                    "费用独立台账；默认 SURFACE_ENABLED=false 时 blocked）")
+    add("memory.surfacing.validate", _surface_validate, _owners(), True,
+        description="投递前复核：目标消息当前相关性+版本/域向量复核+"
+                    "验证回执签发（不检索；不改原赢家；deadline 内有界）")
+    add("memory.surfacing.check", _surface_check, _owners(), False,
+        description="纯本地版本/权限/政策校验（无检索、无 judge、无网络；"
+                    "最终冻结前 as-of 复核，回执绑目标消息/修订/窗口）")
+    add("memory.detail.read", _surface_detail_read, _owners(), False,
+        description="按已见 detail_ref 直读该桶当前完整内容与五域关系"
+                    "（分页快照；绝不 recall；不建 view_receipt、不确认"
+                    "明确打开）")
     return caps
 
 
@@ -456,9 +474,18 @@ _RECALL_RUNTIME_CAPS = frozenset({
     "memory.words.get", "memory.context.validate", "memory.find_words",
 })
 
+#: 自动浮现运行时能力集（EST_MARIPOSA_AUTO_SURFACING_V1）：同款 runtime
+#: 幂等隔离——幂等回执由 surface 运行库 surface_operations 承担，
+#: 不把候选/对话投影写进正式能力幂等缓存。
+_SURFACE_RUNTIME_CAPS = frozenset({
+    "memory.surfacing.prepare", "memory.surfacing.validate",
+    "memory.surfacing.check", "memory.detail.read",
+})
+
 
 def _is_recall_runtime(capability: str) -> bool:
-    return capability in _RECALL_RUNTIME_CAPS
+    return capability in _RECALL_RUNTIME_CAPS or \
+        capability in _SURFACE_RUNTIME_CAPS
 
 
 from .transport import (  # noqa: E402,F401
@@ -1645,6 +1672,51 @@ def _episode_get(principal: Principal, a: dict) -> dict:
 def _episode_list(principal: Principal, a: dict) -> dict:
     from ..episodes import service as _ep
     return _ep.list_episodes(principal, a)
+
+
+# ===== EST_MARIPOSA_AUTO_SURFACING_V1 handlers（2026-10-19）=====
+# SurfaceBlocked → 结构化 Forbidden（错误闭集码原样透出给调用方；
+# 不整串发给主模型是 E 侧投递层的职责，这里只回结构化错误）。
+
+def _surface_blocked(sb) -> Forbidden:
+    return Forbidden(f"surface blocked: {sb.code}", code=sb.code,
+                     **(sb.details or {}))
+
+
+def _surface_prepare(principal: Principal, a: dict) -> dict:
+    from ..surfacing import service as surface_service
+    from ..surfacing.models import SurfaceBlocked
+    try:
+        return surface_service.prepare(principal, a)
+    except SurfaceBlocked as sb:
+        raise _surface_blocked(sb)
+
+
+def _surface_validate(principal: Principal, a: dict) -> dict:
+    from ..surfacing import service as surface_service
+    from ..surfacing.models import SurfaceBlocked
+    try:
+        return surface_service.validate(principal, a)
+    except SurfaceBlocked as sb:
+        raise _surface_blocked(sb)
+
+
+def _surface_check(principal: Principal, a: dict) -> dict:
+    from ..surfacing import service as surface_service
+    from ..surfacing.models import SurfaceBlocked
+    try:
+        return surface_service.check(principal, a)
+    except SurfaceBlocked as sb:
+        raise _surface_blocked(sb)
+
+
+def _surface_detail_read(principal: Principal, a: dict) -> dict:
+    from ..surfacing import service as surface_service
+    from ..surfacing.models import SurfaceBlocked
+    try:
+        return surface_service.detail_read(principal, a)
+    except SurfaceBlocked as sb:
+        raise _surface_blocked(sb)
 
 
 REGISTRY = _register()

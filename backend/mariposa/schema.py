@@ -1699,6 +1699,87 @@ CREATE INDEX IF NOT EXISTS idx_recall_page_cursors_set
 -- 物理清理由 _drop_deleted_columns 幂等执行（同 2026-10-05
 -- why_remember 删除先例：裁定入链、删除走 pragma 实测分叉）。
 """),
+    # ===== 16（EST_MARIPOSA_AUTO_SURFACING_V1，2026-10-19）：自动浮现运行面 =====
+    # 有界运行数据（幂等/快照/回执/详情分页/判断台账），非正式新记忆；
+    # 随 TTL 由 surfacing.store.purge_expired 清理，不进正式库。
+    # 表含对话/记忆投影——保护级别同 recall 运行库（MARIPOSA_ROOT/runtime
+    # 目录，不入 Git/普通日志）。
+    (16, """
+CREATE TABLE IF NOT EXISTS surface_operations(
+  principal_id TEXT NOT NULL,
+  operation_key TEXT NOT NULL,
+  payload_hash TEXT,
+  status TEXT NOT NULL,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id, operation_key)
+);
+CREATE TABLE IF NOT EXISTS surface_runs(
+  surface_run_id TEXT PRIMARY KEY,
+  operation_key TEXT NOT NULL,
+  conversation_scope TEXT NOT NULL,
+  status TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  coverage_json TEXT NOT NULL,
+  policy_revision INTEGER NOT NULL,
+  prompt_revision TEXT NOT NULL,
+  reason_code TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_surface_runs_op
+  ON surface_runs(operation_key);
+CREATE INDEX IF NOT EXISTS idx_surface_runs_expiry
+  ON surface_runs(expires_at);
+CREATE TABLE IF NOT EXISTS surface_validation_receipts(
+  receipt_id TEXT PRIMARY KEY,
+  surface_run_id TEXT NOT NULL,
+  conversation_scope TEXT NOT NULL,
+  target_message_id TEXT NOT NULL,
+  target_revision INTEGER NOT NULL,
+  window_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  items_json TEXT NOT NULL,
+  policy_revision INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  as_of TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_surface_receipts_run
+  ON surface_validation_receipts(surface_run_id);
+CREATE TABLE IF NOT EXISTS surface_detail_snapshots(
+  snapshot_id TEXT PRIMARY KEY,
+  detail_ref TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  memory_version TEXT NOT NULL,
+  domain_versions_json TEXT NOT NULL,
+  conversation_scope TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  surfaced_version TEXT,
+  changed_since_surface INTEGER NOT NULL DEFAULT 0,
+  pages_json TEXT NOT NULL,
+  section_status_json TEXT NOT NULL,
+  complete INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_surface_detail_ref
+  ON surface_detail_snapshots(detail_ref);
+CREATE TABLE IF NOT EXISTS surface_judge_ledger(
+  ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  operation_key TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  request_count INTEGER NOT NULL,
+  est_cost_usd REAL,
+  status TEXT NOT NULL,
+  day TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_surface_ledger_day
+  ON surface_judge_ledger(day);
+"""),
 ]
 
 
