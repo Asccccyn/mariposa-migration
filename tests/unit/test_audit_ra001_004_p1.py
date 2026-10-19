@@ -116,8 +116,7 @@ class TestRawLeaseFencing:
         cfg.RECALL_JUDGE_PROVIDER = "ra002_typesafe"
         try:
             _hold(actors, "租约fencing正文",
-                  our_words=[{"speaker": "qiaosheng", "text": "fencing话语",
-                              "expression_kind": "paraphrase"}])
+                  our_words=[{"speaker": "qiaosheng", "text": "fencing话语"                              }])
             r1 = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
                 {"query_plan": {"original_request": "fencing",
@@ -211,8 +210,7 @@ class TestJudgeValidity:
         cfg.RECALL_JUDGE_PROVIDER = "ra003_nan"
         try:
             _hold(actors, "NaN证明正文",
-                  our_words=[{"speaker": "qiaosheng", "text": "nan话语",
-                              "expression_kind": "paraphrase"}])
+                  our_words=[{"speaker": "qiaosheng", "text": "nan话语"                              }])
             r1 = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
                 {"query_plan": {"original_request": "nan",
@@ -291,8 +289,7 @@ class TestJudgeValidity:
         cfg.RECALL_JUDGE_PROVIDER = "ra003_dup"
         try:
             _hold(actors, "dupref正文",
-                  our_words=[{"speaker": "qiaosheng", "text": "dup话语",
-                              "expression_kind": "paraphrase"}])
+                  our_words=[{"speaker": "qiaosheng", "text": "dup话语"                              }])
             r1 = registry.invoke(
                 actors["jiaming"], "memory.recall.start",
                 {"query_plan": {"original_request": "dup",

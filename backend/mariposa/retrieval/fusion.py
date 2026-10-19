@@ -54,7 +54,7 @@ def rrf_fuse(families: dict[str, list[dict]],
             # 保留第一个见到的通道内容（族顺序即优先级）
             for f in ("channel", "representation", "content_version",
                       "representation_version", "memory_id", "word_id",
-                      "expression_kind", "speaker", "source_ref",
+                      "speaker", "source_ref",
                       "memory_date", "score", "excerpt", "truncated",
                       "matched_fields", "evidence"):
                 if f in item and f not in entry["hit"]:

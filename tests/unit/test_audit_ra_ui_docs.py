@@ -1,24 +1,32 @@
 """复审 UI/docs/脚本收尾回归（RA-011/030）。RA-029 为 README 静态更新。"""
 from __future__ import annotations
 
-import json
-import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
-_SCRIPT = Path(__file__).parent / "fixtures" / "ra011_deletion_ui.cjs"
-
-
-@pytest.mark.skipif(shutil.which("node") is None,
-                    reason="node 不可用：离线 JS 验证无法执行")
-def test_deletion_ui_v2_contract():
-    """旧前端删除 UI 合同——2026-10-13 旧前端退役，测试随之删除；
-    新前端（frontend/）删除申请走 memory.deletion.request，浏览器
-    DOM 实测覆盖（见 App.tsx BucketDetail）。"""
-    pass
-
+def test_current_acceptance_evidence_points_to_existing_nodes():
+    """验证所有 evidence 路径，包含 Python 之外的新前端测试资产。"""
+    import ast
+    import json
+    root = Path(__file__).parents[2]
+    manifest = json.loads((root / "docs/memory_runtime/ACCEPTANCE.json").read_text())
+    for requirement in manifest["requirements"]:
+        if requirement["status"] == "PASS":
+            assert requirement["evidence"], requirement["id"]
+        for reference in requirement["evidence"]:
+            filename, *names = reference.split("::")
+            path = root / filename
+            assert path.is_file(), reference
+            if path.suffix != ".py":
+                continue
+            nodes = ast.parse(path.read_text()).body
+            for name in names:
+                node = next((n for n in nodes if isinstance(
+                    n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name == name.split("[")[0]), None)
+                assert node is not None, reference
+                nodes = node.body
 
 
 def test_verify_script_structured_on_zero_candidates():

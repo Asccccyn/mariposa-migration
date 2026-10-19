@@ -112,8 +112,7 @@ class TestFindWordsTopLevelParams:
 
     def test_top_level_constraints_and_phrases_apply(self, actors):
         _hold(actors, "过滤目标话语",
-              our_words=[{"speaker": "qiaosheng", "text": "稀有原话目标",
-                          "expression_kind": "paraphrase"}])
+              our_words=[{"speaker": "qiaosheng", "text": "稀有原话目标"                          }])
         # 顶层 exact_phrases 不匹配任何话语 → 零候选（此前被丢弃会
         # 全量浏览交付）
         out = registry.invoke(actors["jiaming"], "memory.find_words", {
@@ -129,8 +128,7 @@ class TestFindWordsTopLevelParams:
         """words 通道白名单不含 categories（现行规格）——schema 接受
         的字段必须要么生效要么结构化拒绝，不得静默丢弃后全量检索。"""
         _hold(actors, "日常桶话语",
-              our_words=[{"speaker": "qiaosheng", "text": "日常桶的话语",
-                          "expression_kind": "paraphrase"}])
+              our_words=[{"speaker": "qiaosheng", "text": "日常桶的话语"                          }])
         with pytest.raises(Forbidden):
             registry.invoke(actors["jiaming"], "memory.find_words", {
                 "query": "话语",
@@ -180,8 +178,7 @@ class TestNavigateScopeAndReject:
 
     def test_navigate_after_word_reject_no_crash(self, actors):
         w = _hold(actors, "拒绝导航话语",
-                  our_words=[{"speaker": "qiaosheng", "text": "要拒绝的话",
-                              "expression_kind": "paraphrase"}])
+                  our_words=[{"speaker": "qiaosheng", "text": "要拒绝的话"                              }])
         with db.formal() as conn:
             word_id = conn.execute(
                 "SELECT word_id FROM memory_our_words WHERE memory_id=?",
@@ -260,14 +257,16 @@ class TestWordEvidenceProvenance:
                   if e.get("evidence_kind") == "structured_fact"]
         assert states and states[0].get("source_ref_state") == "revoked"
 
-    def test_native_no_source_verbatim_unchanged(self):
+    def test_native_no_source_unverified_under_provenance_rule(self):
+        """2026-10-18 她裁定：话语只存原文，逐字身份由出处证明——
+        无来源一律 word_unverified，不再自证 word_verbatim。"""
         with db.formal() as conn:
             ev = _word_evidence({
-                "word_id": "ow_n", "expression_kind": "verbatim",
+                "word_id": "ow_n",
                 "source_ref": None, "source_binding_version": 0,
                 "text": "原生无来源原话", "current_version_no": 1}, conn)
-        assert ev[0]["evidence_kind"] == "word_verbatim", \
-            "从未有来源的正式逐字声明保持原语义"
+        assert ev[0]["evidence_kind"] == "word_unverified", \
+            "无来源不自证逐字（provenance 驱动）"
 
 
 # ---------------------------------------------------------------- CB-042
@@ -278,8 +277,7 @@ class TestOutputBudgetCarriers:
         long_word = "长" * 9000
         _hold(actors, "预算载体正文",
               our_words=[{"speaker": "qiaosheng",
-                          "text": f"预算{long_word}话语",
-                          "expression_kind": "paraphrase"}])
+                          "text": f"预算{long_word}话语"                          }])
         out = registry.invoke(actors["jiaming"], "memory.recall.start", {
             "query_plan": {"original_request": "预算",
                            "channels": ["words"],

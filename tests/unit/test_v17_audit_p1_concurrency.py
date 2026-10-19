@@ -70,12 +70,13 @@ class TestF39ConcurrentEdit:
         assert loser.detail["current"] == 2
         winner = results.popitem()[1]
         assert winner["version"] == 2
-        # 版本历史连续可解释：1 -> 2，没有静默 last-write-wins 的第三版
+        # 2026-10-18 不留档：就地覆写后仅存当前版本行（v2）——胜者的
+        # 修改即正本，没有静默 last-write-wins 的第三版
         with db.formal() as conn:
             versions = [r["version_no"] for r in conn.execute(
                 "SELECT version_no FROM memory_versions WHERE memory_id=?"
                 " ORDER BY version_no", (mid,))]
-        assert versions == [1, 2]
+        assert versions == [2]
 
     def test_version_conflict_is_structured_not_500(self, actors):
         out = hold_v2(actors["jiaming"], "顺序冲突场景正文")

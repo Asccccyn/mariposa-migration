@@ -21,28 +21,33 @@ def _now() -> str:
 def list_memories(state: str | None = None, limit: int = 50,
                   cursor_date: str | None = None,
                   cursor_id: str | None = None) -> dict:
-    """倒序列表；正文按当前表示（遗忘桶只给摘要）。
-
-    CB-049（2026-10-02 审计 P2）：(memory_date, memory_id) 复合
-    keyset——同日多桶可完整续页（此前纯日期排他过滤，同日超出页大小
-    的剩余桶从该游标永久不可达）。无日期桶不在此列表（口径显式，
-    走 by_tag/检索）。
-    """
-    q = ("SELECT memory_id, memory_date FROM memories WHERE"
-         " visibility='active'"
-         + (" AND compression_state=? " if state else " ")
-         + "AND memory_date IS NOT NULL AND (? IS NULL OR"
-           " (memory_date < ? OR (memory_date = ? AND memory_id < ?)))"
-           " ORDER BY memory_date DESC, memory_id DESC LIMIT ?")
+    """全部有效桶的稳定倒序列表；无日期区在最后，按 id 继续翻页。"""
+    where = ["visibility='active'"]
+    params = []
+    if state:
+        where.append("compression_state=?")
+        params.append(state)
+    if cursor_id is not None:
+        if cursor_date is None:
+            where.append("memory_date IS NULL AND memory_id < ?")
+            params.append(cursor_id)
+        else:
+            where.append("(memory_date < ? OR (memory_date = ? AND"
+                         " memory_id < ?) OR memory_date IS NULL)")
+            params.extend([cursor_date, cursor_date, cursor_id])
+    elif cursor_date is not None:
+        # 旧 cursor_date 单字段调用仍表示该日期以前。
+        where.append("(memory_date < ? OR memory_date IS NULL)")
+        params.append(cursor_date)
+    q = ("SELECT memory_id, memory_date FROM memories WHERE "
+         + " AND ".join(where)
+         + " ORDER BY memory_date DESC, memory_id DESC LIMIT ?")
     with db.formal() as conn:
-        rows = conn.execute(q, tuple(
-            ([state] if state else []) +
-            [cursor_date, cursor_date, cursor_date, cursor_id, limit])
-        ).fetchall()
-        items = [memory.get(conn, r["memory_id"]) for r in rows]
+        rows = conn.execute(q, (*params, limit + 1)).fetchall()
+        items = [memory.get(conn, r["memory_id"]) for r in rows[:limit]]
     next_cursor = None
-    if len(rows) >= limit and rows:
-        last = rows[-1]
+    if len(rows) > limit:
+        last = rows[limit - 1]
         next_cursor = {"memory_date": last["memory_date"],
                        "memory_id": last["memory_id"]}
     return {"items": items, "count": len(items),

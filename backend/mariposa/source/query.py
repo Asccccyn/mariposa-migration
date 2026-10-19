@@ -505,21 +505,22 @@ def _attach_thinking(serialized: list[dict], conversation_id: str) -> None:
     会话查看是阅读路径，thinking 需要可见；_COLS 不含 content_json
     （检索路径不该背大字段），所以在阅读出口单点批量补。
     """
-    want = [m["provider_message_id"] for m in serialized
+    want = [m["message_id"] for m in serialized
             if m.get("has_thinking")]
     if not want:
         return
     ph = ",".join("?" * len(want))
     with db.formal() as conn:
         rows = conn.execute(
-            f"SELECT provider_message_id, content_json FROM source_messages"
-            f" WHERE provider_message_id IN ({ph})", want).fetchall()
-    ev = {r["provider_message_id"]: _thinking_evidence(r["content_json"])
+            f"SELECT id, content_json FROM source_messages"
+            f" WHERE conversation_id=? AND id IN ({ph})",
+            [conversation_id, *want]).fetchall()
+    ev = {r["id"]: _thinking_evidence(r["content_json"])
           for r in rows}
     for m in serialized:
         if not m.get("has_thinking"):
             continue
-        text, sums = ev.get(m["provider_message_id"], ("", []))
+        text, sums = ev.get(m["message_id"], ("", []))
         if text:
             m["thinking_text"] = text
         if sums:
@@ -529,13 +530,32 @@ def _attach_thinking(serialized: list[dict], conversation_id: str) -> None:
 def get_conversation(conversation_id: str, after_seq=None,
                      before_seq=None, around_seq: int | None = None,
                      limit: int = 100, after_id: str | None = None,
-                     before_id: str | None = None) -> dict:
-    """按 (sequence, id) 复合游标分页（A11：sequence 非唯一不漏消息）。
+                     before_id: str | None = None,
+                     page: int | None = None,
+                     around_message_id: str | None = None) -> dict:
+    """按页码或 (sequence, id) 复合游标分页（sequence 非唯一）。
 
-    游标接受旧式纯整数（兼容）或 {"seq": n, "id": "..."}；返回
-    next_after_cursor/prev_before_cursor 复合游标 + 兼容的 *_seq 字段。
+    不传 page 时保留旧式整数/复合游标与 around 窗口语义。
+    所有计数与正文统一为已发布、未被在线修订替代的当前可见消息。
+    page + around_seq 定位第一条序号 >= 锚点的可见消息所在页，超过
+    末尾时定位最后一条。重复序号按 id 排序，绝不将 sequence 当行号。
     """
+    if around_message_id is not None and page is None:
+        page = 1
+    if page is not None:
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise MariposaError("page 必须是从 1 开始的整数",
+                                code="INVALID_ARGUMENT", http_status=400)
+        if any(value is not None for value in
+               (after_seq, before_seq, after_id, before_id)):
+            raise MariposaError("page 不能与 after/before 游标混用",
+                                code="INVALID_ARGUMENT", http_status=400)
+        if around_seq is not None and (isinstance(around_seq, bool)
+                                       or not isinstance(around_seq, int)):
+            raise MariposaError("around_seq 必须是整数",
+                                code="INVALID_ARGUMENT", http_status=400)
     limit = max(1, min(int(limit), 500))
+    page_info = {}
 
     def _cursor(raw, cid):
         """dict 游标 → ("cmp", seq, id)；纯整数 → ("gt", seq, None) 兼容。"""
@@ -548,6 +568,8 @@ def get_conversation(conversation_id: str, after_seq=None,
     after_cur = _cursor(after_seq, after_id)
     before_cur = _cursor(before_seq, before_id)
     with db.formal() as conn:
+        # 同一读取快照内计数、定位、取页，避免在线导入改变页边界。
+        conn.execute("BEGIN")
         conv = _find_conversation(conn, conversation_id)
         if conv is None:
             raise NotFound("source conversation not found",
@@ -555,7 +577,50 @@ def get_conversation(conversation_id: str, after_seq=None,
         # live_superseded（迁移 30）：在线修订换代后旧行退出默认投影，
         # 按 id 证据读取不受影响
         pub = " AND published=1 AND live_superseded=0"
-        if around_seq is not None:
+        aggregate = conn.execute(
+            "SELECT COUNT(*) AS c, MIN(created_at) AS first_message_at,"
+            " MAX(created_at) AS last_message_at FROM source_messages WHERE"
+            f" conversation_id=?{pub}", (conv["id"],)).fetchone()
+        total = aggregate["c"]
+        anchor = None
+        if around_message_id is not None:
+            anchor = conn.execute(
+                "SELECT sequence, id FROM source_messages WHERE"
+                f" conversation_id=? AND id=?{pub}",
+                (conv["id"], around_message_id)).fetchone()
+            if anchor is None:
+                raise NotFound(
+                    "指定消息不在当前会话可见版本中；旧修订请按消息证据打开",
+                    code="SOURCE_MESSAGE_NOT_CURRENT",
+                    message_id=around_message_id, conversation_id=conv["id"])
+        if page is not None:
+            total_pages = max(1, (total + limit - 1) // limit)
+            page = min(page, total_pages)
+            if (around_message_id is not None or around_seq is not None) and total:
+                if around_message_id is None and around_seq <= 2**63 - 1:
+                    anchor = conn.execute(
+                        "SELECT sequence, id FROM source_messages WHERE"
+                        f" conversation_id=?{pub} AND sequence>=?"
+                        " ORDER BY sequence ASC, id ASC LIMIT 1",
+                        (conv["id"], max(around_seq, -(2**63)))).fetchone()
+                if anchor is None:
+                    page = total_pages
+                else:
+                    rank = conn.execute(
+                        "SELECT COUNT(*) AS c FROM source_messages WHERE"
+                        f" conversation_id=?{pub} AND (sequence<? OR"
+                        " (sequence=? AND id<?))",
+                        (conv["id"], anchor["sequence"], anchor["sequence"],
+                         anchor["id"])).fetchone()["c"]
+                    page = rank // limit + 1
+            msgs = conn.execute(
+                f"SELECT {_COLS} FROM source_messages WHERE conversation_id=?"
+                f"{pub} ORDER BY sequence ASC, id ASC LIMIT ? OFFSET ?",
+                (conv["id"], limit, (page - 1) * limit)).fetchall()
+            has_more = page < total_pages
+            page_info = {"page": page, "total": total,
+                         "page_size": limit, "total_pages": total_pages}
+        elif around_seq is not None:
             # CB-020 + RA-022（2026-10-02 复审 P2）：窗口在复合顺序
             # (sequence, id) 上**连续**且有界——整体按 DESC 复合序取
             # limit 条（含 exact 组全部成员的连续窗），再对窗口首条
@@ -648,15 +713,23 @@ def get_conversation(conversation_id: str, after_seq=None,
                 " ORDER BY sequence ASC, id ASC LIMIT ?", params).fetchall()
             has_more = len(rows) > limit
             msgs = rows[:limit]
-        total = conn.execute(
-            "SELECT COUNT(*) AS c FROM source_messages WHERE conversation_id=?"
-            " AND published=1", (conv["id"],)).fetchone()["c"]
+        from .binding import references_for_messages
+        references = references_for_messages([m["id"] for m in msgs], conn=conn)
+        conn.execute("COMMIT")
+    # 存储聚合由不同导入路径维护；读取时以正文的可见投影为唯一口径。
+    summary = _conv_summary(conv)
+    summary.update(message_count=total,
+                   first_message_at=_fmt_min(aggregate["first_message_at"]),
+                   last_message_at=_fmt_min(aggregate["last_message_at"]))
     first = msgs[0] if msgs else None
     last = msgs[-1] if msgs else None
     serialized = [_serialize(r) for r in msgs]
+    for message in serialized:
+        message["conversation_id"] = conv["id"]
+        message["memories_referencing"] = references.get(message["message_id"], [])
     _attach_thinking(serialized, conv["id"])
     return {
-        "conversation": _conv_summary(conv),
+        "conversation": summary,
         "messages": serialized,
         "next_after_seq": last["sequence"] if last else None,
         "prev_before_seq": first["sequence"] if first else None,
@@ -666,6 +739,7 @@ def get_conversation(conversation_id: str, after_seq=None,
                                if first else None),
         "has_more": has_more,
         "published_total": total,
+        **page_info,
         "source": "source_layer",
         "content_role": "retrieved_memory",
         "instruction_authority": "none",
@@ -694,7 +768,8 @@ def conversations_list(limit: int = 50, offset: int = 0,
             f"未知排序 {order!r}；可选：{'、'.join(_CONV_ORDER_BY)}",
             code="INVALID_ARGUMENT", http_status=400)
     where = ["EXISTS (SELECT 1 FROM source_messages m WHERE"
-             " m.conversation_id=source_conversations.id AND m.published=1)"]
+             " m.conversation_id=source_conversations.id"
+             " AND m.published=1 AND m.live_superseded=0)"]
     if titled:
         # 只留有标题会话；空标题壳（官方导出 name 为空）默认值是
         # "(未命名对话)"，在 WHERE 层过滤保证 total/has_more 分页
@@ -706,24 +781,29 @@ def conversations_list(limit: int = 50, offset: int = 0,
         params.append(provider)
     cond = "WHERE " + " AND ".join(where)
     with db.formal() as conn:
+        conn.execute("BEGIN")
         rows = conn.execute(
             f"SELECT id, provider, provider_conversation_id, title,"
             f" created_at, updated_at, summary,"
             f" (SELECT COUNT(*) FROM source_messages m WHERE"
-            f"  m.conversation_id=source_conversations.id AND m.published=1)"
+            f"  m.conversation_id=source_conversations.id"
+            f"  AND m.published=1 AND m.live_superseded=0)"
             f" AS message_count,"
             f" (SELECT MIN(created_at) FROM source_messages m WHERE"
-            f"  m.conversation_id=source_conversations.id AND m.published=1)"
+            f"  m.conversation_id=source_conversations.id"
+            f"  AND m.published=1 AND m.live_superseded=0)"
             f" AS first_message_at,"
             f" (SELECT MAX(created_at) FROM source_messages m WHERE"
-            f"  m.conversation_id=source_conversations.id AND m.published=1)"
+            f"  m.conversation_id=source_conversations.id"
+            f"  AND m.published=1 AND m.live_superseded=0)"
             f" AS last_message_at"
             f" FROM source_conversations {cond}"
-            f" ORDER BY {order_by}"
+            f" ORDER BY {order_by}, id ASC"
             f" LIMIT ? OFFSET ?", params + [limit + 1, offset]).fetchall()
         total = conn.execute(
             f"SELECT COUNT(*) AS c FROM source_conversations {cond}",
             params).fetchone()["c"]
+        conn.execute("COMMIT")
     return {"conversations": [_conv_summary(r) for r in rows[:limit]],
             "total": total, "has_more": len(rows) > limit, "limit": limit,
             "offset": offset}
@@ -1097,6 +1177,10 @@ def _serialize(row, *, keyword: str = "", include_content: bool = False,
         "conversation_title": row["conversation_title"]
         if "conversation_title" in row.keys() else None,
     }
+    if "conversation_id" in row.keys():
+        out["conversation_id"] = row["conversation_id"]
+    elif "conv_row_id" in row.keys():
+        out["conversation_id"] = row["conv_row_id"]
     _exc_text, _exc_located = _excerpt_for(
         row, text, keyword, matched_by, sliced, anchors=anchors)
     out["excerpt"] = _exc_text

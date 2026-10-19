@@ -1,7 +1,7 @@
 # Mariposa 记忆运行时·当前语义（CURRENT）
 
 **性质：仓库内唯一现行语义正本入口（v1.7 §0：不保留多套并列有效语义）**
-生效：2026-10-04｜现行修订：2026-10-08（`MANUAL_HANDOFF_JUDGE_SWITCH_V1`，宿主用户裁定：人工判断总开关、关闭模式全候选分页、Round2 通用 provider 门禁、Codex SDK provider 槽位）｜基线 commit：`f734a81`（2026-10-04 裁定批）｜
+生效：2026-10-04｜现行修订：2026-10-15（运行时及退役合同维护；包含判断总开关与合法心情编辑特例）｜基线 commit：`f734a81`（2026-10-04 裁定批）｜
 历史版本（v1.3/v1.4/v2.0.1 及一切旧报告）只作代码定位与证据，
 **凡与本文件及"域→现行正本清单"所列文件冲突的旧句一律作废**。
 2026-10-08 修订直接改写 §1/§4/§7/§11 相关条款并新增 §4.1；修订所涉新结构（recall_judge_policy 政策表、结果集快照、memory.recall.page、codex_sdk provider）由本轮施工落地，落地前不得宣称已实现。
@@ -14,12 +14,10 @@
   冲突时，以本文件为准并按缺陷处理。
 - 只字未在仓库落档的口头/会话裁定，已在 2026-10-04 全部收编进本
   文件（§4/§5/§6/§8/§9）。此后新裁定必须先落本文件再动代码。
-- **数据状态（2026-10-04 宿主用户确认）**：mariposa 至今没有真实
-  用户数据——她从未提供过任何真实原文；本机曾存在的
-  `~/Data/live-20260925/mariposa-runtime`（51 条等）全部是各轮
-  测试/审计写入的合成数据，已整体删除。审计与实现不得把库内
-  拟真内容当真实数据处理；正式数据根当前为空，一切库内容均为
-  隔离测试根随跑随删。
+- **数据边界**：2026-10-04 的“无真实数据/测试根已清空”只记录当日
+  历史快照，不能推定当前正式库为空。其后已进行 Source 导入和记忆库
+  整理；所有测试仍须使用合成数据与显式隔离根。清库、迁移、退役数据
+  处理前必须按当时实际库状态核对，不能引用旧快照降低数据保护。
 - 现行验收映射：`docs/memory_runtime/ACCEPTANCE.json`（v1.7，
   requirement → 当前 nodeid → 状态；`NOT_RUN_REAL_MODEL` 如实标注）。
   v1.4 历史证据在 `ACCEPTANCE_v1.4_history.json`，不参与当前验收。
@@ -128,6 +126,10 @@
   每项是一个独立 lexical clause/phrase（组内有序且相邻），**不是**
   隐含 OR 的关键词袋；要 OR 传多项；自然语言近似交给 dense/semantic
   路径。keyword-mode 输入框在明确入口做拆词适配，不动底层合同。
+  网页 `memory.recall` 的 `lexical_terms` + `keyword_match=any/all`
+  在该入口完成候选并集/交集；一次页面搜索使用一个查询与分页状态，
+  不以逐词开启独立 session 后截取首页拼接。Runtime clause/phrase
+  本身的组内有序相邻合同保持不变。
 - **Jev 证据角色（2026-10-03 审计 F05）**：证据门按候选类型核对
   必要主体角色——普通事件必须含 `event_evidence`，words/raw 必须含
   `primary_evidence`；标题不能替代事件主体。许可不足时明确
@@ -230,6 +232,10 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   （`legacy_raw_prefix` / `invalid_or_missing`），**不作为有效
   provenance 污染删除硬门计数**。
 
+**原文定位**：搜索命中携带的内部 conversation_id/message_id 是
+精确定位身份；网页跳转必须传递该身份，不能用同名标题或列表序号
+替代。按页/游标查看时遵守当前可见消息投影，隐藏/失效消息不占页。
+
 ## 7. 出站瘦身（compact_v1，2026-10-04 五——review4 方案）
 
 - **纯展示投影层**（capabilities/compact.py）：业务操作、权限/开关/
@@ -266,7 +272,18 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   `content_role=bootstrap_memory_package` / `instruction_authority=
   none`）、legacy 缺口不伪装完整、不绕开 content-role/injection
   safety。I 与 Plan 长正文分节续取（`next_page` 的 `i` /
-  `plan_content` 段）；mood 不是长内容载体不分节。
+  `plan_content` 段）。普通长度 mood_text 整体发送；超出整包字节预算
+  时以 `mood_text_truncated`/`mood_text_next` 指向既有 `memory_item`
+  续取，不静默截断。首页及续页完整出站信封均不超过 24576 UTF-8
+  字节。独立纪念日条目/输出/续页已按本轮指令退役。
+- **est 消费（2026-10-15 故障边界修正）**：宿主按 Unicode 码点完整读取
+  `mood_text_next`。普通心情续页失败有限重试后只舍弃该条完整心情；以
+  `bootstrap.get(loaded_snapshot_id=原快照)` 验证 unchanged/profile/权限后保留
+  其他资料，显式标注缺口、不缓存为完整结果。快照失效废弃整次装配并重建一次；
+  权限拒绝或复核失败不交付快照资料，明确“未取得”而非“没有记忆”。整窗主动
+  取消停止交付。I 缺失/整包不可用在 est 独立系统异常中标严重，其他缺口标警告。
+  合同要求同快照一致性，并未要求所有区块必须同时成功。旧 `anniversaries` 段与
+  续页消费保持退役；已派发窗口输入不热改，未派发准备可重新装配。
 - **Bootstrap 续页（`bootstrap.next`）与首页同权**：每一页进入
   模型上下文边界时都必须能明确证明该页内容是 memory/data 且无
   instruction authority——页级 envelope 或统一 ContextAssembler
@@ -316,6 +333,29 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
   不因此改写（调用方主张什么就是什么）。同 op 幂等重放返回原事务的
   原日期（不跨午夜重算——原子写回执不变）。
 
+### 8.2 记忆库整理与心情编辑（2026-10-14 用户确认）
+
+- 桶抽屉保存的正文、标题、日期与分类通过一次 `memory.update`
+  和同一个 expected_version 原子提交；分类绑定校验失败时全部回滚，
+  不先改正文再由第二请求补分类。日期字段缺省保留、显式 null 清空；
+  空字符串不作为隐式“保持旧值”的别名。
+- char身份补充、修订心情标签是明确允许的整理入口，保留
+  `memory.mood.update`；旧 `mood.write` 退役和原先“不能补写”文案
+  不得用来撤销这个后加授权。该入口复用现行心情词表和同期桶校验，
+  不推进事件正文版本，修改留 `memory.mood_updated` 审计。
+- 当前另有 `MARIPOSA_MOOD_EDIT_OVERRIDE` 整理期开关：开启时允许
+  qiaosheng 经该入口编辑，关闭后恢复原身份限制。本次只记录已有
+  实现，不扩大身份或桶范围；真实操作者/override 由审计记录，
+  `memory_moods.author` 的合同归属仍为 jiaming。
+- **重要日期归属与独立纪念日退役（2026-10-15 用户指令）**：
+  Superposition `special_dates` 复用为日期正本，est 负责日历和提醒，
+  content 负责纪念作品。Mariposa 的独立定义/发生项、Bootstrap 输出与
+  同名续页 section 已退役；不保留活跃读取或空占位。升级迁移将可能
+  存量封存为只读 `legacy_anniversary_definitions/occurrences`，不直接
+  销毁历史行，运行时不读这些存档；已发布迁移历史保留以支持升级。
+  `anniversary` 九分类及永久 WIDE、记忆真实发生日期完全保留。没有把
+  旧数据自动迁往 Superposition，也未新增年度生成器或日历同步。
+
 ## 9. 删除与破坏性幂等（2026-10-04 裁定）
 
 - Relation/Deletion 语义按 **v2.0 封板**（见 §10 清单）执行；删除链
@@ -333,17 +373,19 @@ Raw Archive 只读母本（`runtime/source/raw/`，chmod 0444）→ 严格 JSON
 | - | - |
 | 记忆运行时总纲 | 本文件 |
 | Relation/Deletion（v2.0 封板） | 根目录 `RELATION_DELETION_ACCEPTANCE.md`（2026-10-01 封板） |
-| I 修订模型 | `docs/I_REVISION_MODEL_20260929.md` |
-| Source 层 | `docs/SOURCE_LAYER_FIX_REPORT_v1.1.md`（叠加 v1.0 报告） |
-| 召回幂等/崩溃安全 | `docs/mariposa-recall-idempotency-crash-safety-2026-09-29.md` |
-| 检索/心情裁定 | `docs/mariposa-search-mood-ruling-2026-09-30.md` |
-| 2026-10-03 审计与修复 | `docs/audit_20261003/`（REPORT/RESULTS/REMEDIATION） |
+| I 修订模型 | 本文件 §8；实现与并发/历史合同定位：`backend/mariposa/identity_i/service.py`、`tests/unit/test_i_item_history.py` |
+| Source 层 | 本文件 §6；实现定位：`backend/mariposa/source/`；合同回归：`tests/unit/test_source_layer.py` |
+| 召回幂等/崩溃安全 | 本文件 §4/§4.1；`backend/mariposa/recall/store.py`、`tests/unit/test_v17_recall_commit_at_end.py` |
+| 检索/心情裁定 | 本文件 §3/§8.2；`backend/mariposa/recall/phase_policy.py`、`backend/mariposa/memory/extras.py` |
 | 现行验收 | `docs/memory_runtime/ACCEPTANCE.json`（v1.7） |
 | 存储/备份恢复集 | 本文件 §6 + `storage.py`（库+被引用母本+媒体对象） |
 
 离线迁移工具 `migration.py` 属**维护工具链，非现行运行时主链**：
-其缺陷按 P3/deferred 处置（2026-10-04 裁定）；当前无真实存量数据，
-不影响正式运行，正式启用该工具迁移数据前再行提升优先级。
+2026-10-04 在空测试根条件下曾按 P3/deferred 处理；该分级不适用于
+后来的真实迁移。实际迁移前按当前数据、备份、回滚和幂等风险评估。
+
+此前 §10 引用的五组报告已于 da4c9a6 移出仓库；历史文本可在该提交
+的父版本查询。现行入口已改为上表，不要求外部归档才能理解当前合同。
 
 **其余一切语义类文档均为历史/考古**（含但不限于：
 `docs/memory_runtime/BASELINE.md`、`PATH_MAP.md`、`EVALUATION.md`、
@@ -364,6 +406,14 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 批；v1.7 及更早的 recall 政策版本为历史）。
 
 ## 12. 变更记录
+
+- 2026-10-15：修复现行正本断链与空库历史快照误用；登记合法心情
+  编辑特例。10/13 已退役 handoff、pin/protect/anchor、旧 tags、
+  reengagement 与 chat/voice/group/wishstar/wakeup/listening/settings.update
+  占位；保留三个维护别名与两个能力发现入口。emotion.context.get
+  保留只读心情统计，尚未接成情绪引擎。新前端为 frontend/；旧
+  apps/web E2E 的 10/4 PASS 仅作历史，现行自动验收须指向新界面。
+  维护任务读 source_import_batches；outbox 停写历史仅只读披露。
 
 - 2026-10-10（语义统一批，她批"你做吧"）：Capability 加 **status 字段**
   （available/blocked/reserved）——MCP 发现列表过滤改为状态字段优先
@@ -486,5 +536,5 @@ relation_reference` + 遗留 `approved_summary`）、安全包装、幂等/审�
 
 - forgotten our_words recall：保持 `disabled`。原"PENDING_OWNER_
   DECISION"所涉存量遗留表示已随 2026-10-04 测试数据清除归零
-  （见 §0 数据状态）——该问题当前无实例；若未来有真实数据进入，
+  （见 §0 历史快照说明）——不能据此断言当前无实例；若需要处理真实遗留数据，
   是否允许话语跟随桶级遗忘状态检索再行拍板。

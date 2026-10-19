@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import SourceSearchForm from './SourceSearchForm'
 import {
   api, ApiError, loadAllBuckets, loadMoodVocab, login, logout, NAMES,
   session, uploadSource,
-  type Bucket, type Word,
+  loadBucket, loadBucketsByIds, operationId, errorMessage,
+  type Bucket, type Word, type OpenedBucket, type ViewReceipt,
 } from './api'
+import DeletionRequests from './DeletionRequests'
+import SourceEvidence, { type EvidenceTarget, type SourceSelection } from './SourceEvidence'
 
 /* ==================================================================
  * 接入说明（程知行 2026-10-13）：
@@ -20,12 +24,13 @@ import {
  *          outbox.status / settings.get / semantic.warmup
  *   I 抽屉 i.items.list + relations.list(item)
  * 编辑   memory.update（标题/正文/日期，乐观锁）+ categories.replace；
- *          心情区只读（当时心情仅char同期可写——她 2026-10-13 裁定）
+ *          心情按已授权的整理期规则编辑
  * ================================================================== */
 
 type Tab = 'search' | 'relation' | 'home' | 'source' | 'admin'
 
-// 九分类以后端为准（categories.py LABELS）；顺序沿用设计稿的视觉顺序
+// 十分类以后端为准（categories.py LABELS）；顺序沿用设计稿的视觉顺序，
+// diary（她 2026-10-17 加）暂列队尾——视觉位次她以后排
 const CATEGORIES: { key: string; label: string }[] = [
   { key: 'milestone', label: '重大转折' },
   { key: 'anniversary', label: '纪念' },
@@ -36,12 +41,15 @@ const CATEGORIES: { key: string; label: string }[] = [
   { key: 'reloplay', label: '剧本' },
   { key: 'sad', label: '伤心的事' },
   { key: 'plan', label: '计划' },
+  { key: 'diary', label: '日记' },
 ]
 const CAT_LABELS: Record<string, string> = Object.fromEntries(CATEGORIES.map((c) => [c.key, c.label]))
 // 心情七大类：登录后从 memory.mood.vocab 动态拉取（单一事实源），
 // 未拉到前用 2026-10-05 终版表兜底显示
 const MOOD_FALLBACK = ['开心', '爱', '生气', '吃醋', '悲伤', '渴望', '不安']
 const PAGE_SIZE = 30
+const SOURCE_PAGE_SIZE = 30
+const MESSAGE_PAGE_SIZE = 30
 
 const REL_TYPE_LABEL: Record<string, string> = {
   continuation_of: '接着这段',
@@ -108,12 +116,13 @@ function Butterfly({ className = '' }: { className?: string }) {
 /* ---------- Drawer（设计稿原样） ---------- */
 function Drawer({ open, side, onClose, children, glass }: { open: boolean; side: 'left' | 'right'; onClose: () => void; children: React.ReactNode; glass?: boolean }) {
   useEffect(() => {
+    if (!open) return
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onClose])
+  }, [open, onClose])
   return (
-    <div className={`fixed inset-0 z-50 ${open ? '' : 'pointer-events-none'}`}>
+    <div aria-hidden={!open} inert={!open} className={`fixed inset-0 z-50 ${open ? '' : 'pointer-events-none'}`}>
       <div onClick={onClose} className={`absolute inset-0 ${glass ? 'bg-[#1f3a68]/10' : 'bg-[#1e2a4a]/30 backdrop-blur-[2px]'} transition-opacity duration-300 ${open ? 'opacity-100' : 'opacity-0'}`} />
       <aside
         className={`absolute top-0 bottom-0 ${side === 'left' ? 'left-0' : 'right-0'} w-[88%] max-w-[440px] flex flex-col overflow-hidden ${glass ? `bg-white/45 backdrop-blur-2xl backdrop-saturate-150 border-white/70 ${side === 'left' ? 'border-r shadow-[20px_0_60px_rgba(31,58,104,0.18)]' : 'border-l shadow-[-20px_0_60px_rgba(31,58,104,0.18)]'}` : 'bg-[#fffdf7] shadow-2xl'} transition-transform duration-[380ms] ease-[cubic-bezier(.22,1,.36,1)] ${
@@ -141,55 +150,30 @@ function collectMemoryIds(v: any, out: Set<string>) {
 
 /* ---------- 关系分组（真实边 → 连通分量=故事线） ---------- */
 function buildGroups(buckets: Bucket[]) {
-  const edges = new Map<string, Set<string>>()
-  const labels = new Map<string, string>()
-  for (const b of buckets) {
-    for (const r of b.relations || []) {
-      const a = b.memory_id, c = r.other_memory
-      if (!edges.has(a)) edges.set(a, new Set())
-      if (!edges.has(c)) edges.set(c, new Set())
-      edges.get(a)!.add(c)
-      edges.get(c)!.add(a)
-      const lab = r.custom_label || REL_TYPE_LABEL[r.relation_type] || '关联'
-      labels.set(a + '|' + c, lab)
-      labels.set(c + '|' + a, lab)
-    }
+  const byId = new Map(buckets.map(bucket => [bucket.memory_id, bucket]))
+  const neighbors = new Map<string, Set<string>>()
+  for (const bucket of buckets) for (const relation of bucket.relations || []) {
+    const from = bucket.memory_id, to = relation.other_memory
+    if (!byId.has(to)) continue
+    if (!neighbors.has(from)) neighbors.set(from, new Set())
+    if (!neighbors.has(to)) neighbors.set(to, new Set())
+    neighbors.get(from)!.add(to); neighbors.get(to)!.add(from)
   }
   const seen = new Set<string>()
-  const groups: { id: string; name: string; ids: string[]; labels: Record<string, string> }[] = []
-  for (const start of edges.keys()) {
+  const groups: { id: string; ids: string[] }[] = []
+  for (const start of neighbors.keys()) {
     if (seen.has(start)) continue
-    const comp: string[] = []
-    const stack = [start]
-    while (stack.length) {
-      const n = stack.pop()!
-      if (seen.has(n)) continue
-      seen.add(n)
-      comp.push(n)
-      for (const m of edges.get(n) || []) if (!seen.has(m)) stack.push(m)
+    const ids: string[] = [], pending = [start]
+    while (pending.length) {
+      const id = pending.pop()!
+      if (seen.has(id)) continue
+      seen.add(id); ids.push(id)
+      for (const other of neighbors.get(id) || []) if (!seen.has(other)) pending.push(other)
     }
-    const ids = comp
-      .filter((id) => buckets.some((b) => b.memory_id === id))
-      .sort((x, y) => {
-        const bx = buckets.find((b) => b.memory_id === x)!
-        const by = buckets.find((b) => b.memory_id === y)!
-        return (dateOf(bx) || '9999').localeCompare(dateOf(by) || '9999')
-      })
-    if (ids.length < 2) continue
-    const first = buckets.find((b) => b.memory_id === ids[0])!
-    const l2 = first.relations?.find((r) => ids.includes(r.other_memory))
-    groups.push({
-      id: ids.join('+'),
-      name: (l2?.custom_label || REL_TYPE_LABEL[l2?.relation_type || 'custom'] || '故事线') + ' · ' + ids.length + ' 段',
-      ids,
-      labels: Object.fromEntries(ids.slice(1).map((id, k) => [id, labels.get(ids[k] + '|' + id) || ''])),
-    })
+    ids.sort()
+    groups.push({ id: ids.join('+'), ids })
   }
   return groups
-}
-function groupOfBucket(b: Bucket, buckets: Bucket[]) {
-  if (!(b.relations || []).length) return null
-  return buildGroups(buckets).find((g) => g.ids.includes(b.memory_id)) || null
 }
 
 /* ---------- App ---------- */
@@ -197,6 +181,18 @@ export default function App() {
   const [authed, setAuthed] = useState(false)
   const [booting, setBooting] = useState(false)
   const [bootError, setBootError] = useState('')
+  const headerRef = useRef<HTMLElement>(null)
+  const [headerHeight, setHeaderHeight] = useState(0)
+
+  useEffect(() => {
+    const header = headerRef.current
+    if (!header) return
+    const measure = () => setHeaderHeight(header.getBoundingClientRect().height)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [authed])
   const [buckets, setBuckets] = useState<Bucket[]>([])
   const [moods, setMoods] = useState<string[]>(MOOD_FALLBACK)
 
@@ -205,15 +201,29 @@ export default function App() {
   const [pages, setPages] = useState<Record<string, number>>({})
   const scrollMemo = useRef<Record<string, number>>({})
   const [openId, setOpenId] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [receipt, setReceipt] = useState<ViewReceipt | null>(null)
+  const detailRequest = useRef(0)
+  const [refreshError, setRefreshError] = useState('')
   const [lastId, setLastId] = useState<string | null>(null)
   const [selfOpen, setSelfOpen] = useState(false)
   const [focusRel, setFocusRel] = useState<string | null>(null)
   const [query, setQuery] = useState<Query>(EMPTY_Q)
   // 原文页跳转目标：桶抽屉"查看原文"→ {conversation_id, around_seq}
-  const [srcJump, setSrcJump] = useState<{ conversation_id: string; around_seq?: number } | null>(null)
+  const [srcJump, setSrcJump] = useState<SourceJump | null>(null)
+
+  const resetSession = () => {
+    detailRequest.current++
+    setAuthed(false); setBuckets([]); setOpenId(null); setReceipt(null)
+    setSelfOpen(false); setSrcJump(null); setQuery(EMPTY_Q); setPages({})
+    setCategory(null); setTab('home'); setFocusRel(null); setLastId(null)
+    setRefreshError(''); setDetailError(''); setDetailLoading(false)
+    scrollMemo.current = {}
+  }
 
   useEffect(() => {
-    const h = () => { setAuthed(false); setBuckets([]) }
+    const h = () => resetSession()
     window.addEventListener('mariposa:unauthorized', h)
     return () => window.removeEventListener('mariposa:unauthorized', h)
   }, [])
@@ -235,19 +245,30 @@ export default function App() {
   }
 
   const refreshBuckets = async () => {
+    const generation = session.generation
     try {
       const bs = await loadAllBuckets()
-      setBuckets(bs)
-    } catch { /* 401 已由 api 层处理；其余保持现状 */ }
+      if (generation !== session.generation) return
+      setBuckets(previous => {
+        const cached = new Map(previous.map(bucket => [bucket.memory_id, bucket]))
+        return bs.map(fresh => {
+          const old = cached.get(fresh.memory_id)
+          if (old && old.version > fresh.version) return old
+          return old?.version === fresh.version ? { ...old, ...fresh } : fresh
+        })
+      })
+      setRefreshError('')
+    } catch (e) { if (generation === session.generation) setRefreshError(errorMessage(e)) }
   }
 
   const key = category ?? '__all'
-  const page = pages[key] ?? 1
   const list = useMemo(() => (category ? buckets.filter((b) => (b.categories || []).includes(category)) : buckets), [buckets, category])
   const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+  const page = Math.min(pages[key] ?? 1, totalPages)
   const shown = list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
   const current = buckets.find((b) => b.memory_id === openId) ?? null
-  const byId = (id: string) => buckets.find((b) => b.memory_id === id)
+  const bucketsById = useMemo(() => new Map(buckets.map(b => [b.memory_id, b])), [buckets])
+  const byId = (id: string) => bucketsById.get(id)
 
   const switchCategory = (c: string | null) => {
     scrollMemo.current[key] = window.scrollY
@@ -258,10 +279,21 @@ export default function App() {
     setPages((s) => ({ ...s, [key]: p }))
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
-  const openBucket = (id: string) => {
+  const openBucket = async (id: string) => {
+    const request = ++detailRequest.current
     setOpenId(id)
     setLastId(id)
+    setReceipt(null); setDetailError(''); setDetailLoading(true)
+    try {
+      const opened = await api<OpenedBucket>('memory.open', { memory_id: id })
+      const fresh = await loadBucket(id, opened)
+      if (request !== detailRequest.current) return
+      patchBucket(fresh)
+      setReceipt({ memoryId: id, version: fresh.version, id: opened.view_receipt, confirmKey: opened.confirm_key })
+    } catch (e) { if (request === detailRequest.current) setDetailError(errorMessage(e)) }
+    finally { if (request === detailRequest.current) setDetailLoading(false) }
   }
+  const closeBucket = () => { detailRequest.current++; setOpenId(null); setReceipt(null); setDetailError(''); setDetailLoading(false) }
   const goTab = (t: Tab) => {
     if (t === tab) return
     if (tab === 'home') scrollMemo.current['__home_' + key] = window.scrollY
@@ -269,30 +301,34 @@ export default function App() {
     requestAnimationFrame(() => window.scrollTo({ top: t === 'home' ? scrollMemo.current['__home_' + key] ?? 0 : 0 }))
   }
   const patchBucket = (b: Bucket) =>
-    setBuckets((bs) => bs.map((x) => (x.memory_id === b.memory_id ? b : x)))
+    setBuckets((bs) => bs.some(x => x.memory_id === b.memory_id)
+      ? bs.map((x) => (x.memory_id === b.memory_id && b.version >= x.version ? b : x)) : [...bs, b])
+  const patchRelations = (cards: Record<string, Partial<Bucket>>) => setBuckets(previous => previous.map(bucket =>
+    cards[bucket.memory_id] ? { ...bucket, relations: cards[bucket.memory_id].relations || [] } : bucket))
+  const goSource = (jump: SourceJump) => { setSrcJump(jump); closeBucket(); goTab('source') }
 
   if (!authed) {
     return <LoginPage onLogin={boot} loading={booting} error={bootError} />
   }
 
   return (
-    <div className="min-h-screen relative overflow-x-hidden bg-[#fdfaf2]">
+    <div className="min-h-screen relative overflow-x-clip bg-[#fdfaf2]" style={{ '--app-header-height': `${headerHeight}px` } as React.CSSProperties}>
       {/* Header（设计稿原样 + 身份回显/退出） */}
-      <header className="sticky top-0 z-30 bg-[#fdfaf2]/90 backdrop-blur-md border-b border-[#e9dcb8]/60" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      <header ref={headerRef} className="sticky top-0 z-30 bg-[#fdfaf2]/90 backdrop-blur-md border-b border-[#e9dcb8]/60" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="max-w-5xl mx-auto px-4 pt-3 pb-2 flex items-center gap-2">
           <Butterfly className="w-8 h-7 flutter" />
           <h1 className="serif text-xl font-bold tracking-[0.08em] italic text-[#1e2a4a]">Mariposa</h1>
           <span className="ml-auto text-xs text-[#8a7a52]">{tab === 'home' ? `${list.length} 个记忆桶` : TAB_NAMES[tab]}</span>
           <span className="text-[11px] text-[#8a7a52]">· {(NAMES[session.principal] || session.principal).split('（')[0]}</span>
           <button
-            onClick={() => { logout(); setAuthed(false); setBuckets([]) }}
+            onClick={() => { logout(); resetSession() }}
             className="text-[11px] text-[#a8862c] border-b border-[#a8862c]/50"
           >退出</button>
         </div>
         {tab === 'home' && (
           <nav className="max-w-5xl mx-auto px-3 pb-2.5 grid grid-cols-5 gap-1 sm:flex sm:flex-wrap sm:gap-1.5">
             {[null, ...CATEGORIES].map((c) => {
-              const active = c?.key === category
+              const active = (c?.key ?? null) === category
               return (
                 <button
                   key={c?.key ?? 'all'}
@@ -310,6 +346,7 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-3 sm:px-4 pt-3 pb-36">
+        {refreshError && <p role="alert" className="text-sm text-[#c0392b]">刷新失败：{refreshError} <button onClick={refreshBuckets} className="underline">重试</button></p>}
         {tab === 'home' ? (
           <>
             {category === 'plan' && (
@@ -336,13 +373,13 @@ export default function App() {
             {totalPages > 1 && <Pager page={page} total={totalPages} onChange={goPage} />}
           </>
         ) : tab === 'search' ? (
-          <SearchPage q={query} setQ={setQuery} buckets={buckets} byId={byId} onOpen={openBucket} lastId={lastId} moods={moods} />
+          <SearchPage q={query} setQ={setQuery} buckets={buckets} byId={byId} onOpen={openBucket} lastId={lastId} moods={moods} onLoaded={patchBucket} />
         ) : tab === 'relation' ? (
-          <RelationPage focus={focusRel} setFocus={setFocusRel} buckets={buckets} byId={byId} onOpen={openBucket} />
+          <RelationPage focus={focusRel} setFocus={setFocusRel} buckets={buckets} byId={byId} onOpen={openBucket} onSource={goSource} onRelations={patchRelations} />
         ) : tab === 'source' ? (
           <SourcePage jump={srcJump} clearJump={() => setSrcJump(null)} buckets={buckets} onOpen={openBucket} refreshBuckets={refreshBuckets} />
         ) : (
-          <AdminPage bucketsCount={buckets.length} />
+          <AdminPage bucketsCount={buckets.length} onChanged={refreshBuckets} />
         )}
       </main>
 
@@ -359,30 +396,22 @@ export default function App() {
       <BottomNav tab={tab} onChange={(t) => (t === 'home' && tab === 'home' ? switchCategory(null) : goTab(t))} />
 
       {/* Bucket drawer (left) */}
-      <Drawer open={openId !== null} side="left" onClose={() => setOpenId(null)}>
+      <Drawer open={openId !== null} side="left" onClose={closeBucket}>
+        {detailLoading && <p className="px-5 py-2 text-xs text-[#a8862c]" role="status">正在读取当前版本…</p>}
+        {detailError && <p className="px-5 py-2 text-xs text-[#c0392b]" role="alert">{detailError} <button onClick={() => openId && openBucket(openId)} className="underline">重试</button></p>}
         {current && (
           <BucketDetail
-            key={current.memory_id + ':' + current.version}
+            key={current.memory_id}
             b={current}
-            allBuckets={buckets}
-            onClose={() => setOpenId(null)}
+            receipt={receipt}
+            opening={detailLoading}
+            onReopen={() => openBucket(current.memory_id)}
+            moods={moods}
+            onClose={closeBucket}
             onSaved={patchBucket}
+            onDelete={(id) => { setBuckets(bs => bs.filter(x => x.memory_id !== id)); closeBucket() }}
             onRelation={(gid) => { setFocusRel(gid); setOpenId(null); goTab('relation') }}
-            onSource={async () => {
-              // 桶→原文：取绑定，跳到原文页对应会话/序号
-              try {
-                const bid = (current.bindings || [])[0]
-                if (!bid) { window.alert('这个桶还没有绑定原文'); return }
-                const d = await api<{ bindings: { memory_id: string; start_seq: number }[] }>(
-                  'source.bindings.of_conversation', { conversation_id: bid.conversation_id })
-                const hit = d.bindings.find((x) => x.memory_id === current.memory_id)
-                setSrcJump({ conversation_id: bid.conversation_id, around_seq: hit?.start_seq })
-                setOpenId(null)
-                goTab('source')
-              } catch (e) {
-                window.alert('打开原文失败：' + (e instanceof Error ? e.message : e))
-              }
-            }}
+            onSource={() => goSource({ memory_id: current.memory_id })}
           />
         )}
       </Drawer>
@@ -442,28 +471,39 @@ function PlansBlock() {
   const [due, setDue] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const inflight = useRef(false)
+  const createAttempt = useRef<{ payload: string; key: string } | null>(null)
+  const loadRequest = useRef(0)
   const load = async () => {
+    const request = ++loadRequest.current
     try {
       const d = await api<{ plans: Plan[] }>('plan.list', {})
-      setPlans(d.plans || [])
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
+      if (request === loadRequest.current) setPlans(d.plans || [])
+    } catch (e) { if (request === loadRequest.current) setErr(errorMessage(e)) }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(); return () => { loadRequest.current++ } }, [])
   const create = async () => {
-    if (!title.trim()) return
+    if (!title.trim() || inflight.current) return
+    inflight.current = true
     setErr(''); setBusy(true)
     try {
-      await api('plan.create', { title: title.trim(), state: 'planned', ...(due ? { due_at: due } : {}) }, 'ui-plan-' + Date.now())
+      const args = { title: title.trim(), state: 'planned', ...(due ? { due_at: due } : {}) }
+      const payload = JSON.stringify(args)
+      if (createAttempt.current?.payload !== payload) createAttempt.current = { payload, key: operationId('ui-plan') }
+      await api('plan.create', args, createAttempt.current.key)
+      createAttempt.current = null
       setTitle(''); setDue('')
-      load()
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+      await load()
+    } catch (e) { setErr(errorMessage(e)) } finally { inflight.current = false; setBusy(false) }
   }
   const setState_ = async (p: Plan, state: string) => {
-    setErr('')
+    if (inflight.current) return
+    inflight.current = true; setBusy(true); setErr('')
     try {
       await api('plan.update', { plan_id: p.plan_id, expected_version: p.version, state })
-      load()
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); load() }
+      await load()
+    } catch (e) { setErr(errorMessage(e)); await load() }
+    finally { inflight.current = false; setBusy(false) }
   }
   const stateTag = (s: string) =>
     s === 'done' ? 'bg-[#f5ead0] text-[#7a5d14]'
@@ -489,71 +529,70 @@ function PlansBlock() {
             {p.due_at && <span className="shrink-0 text-[11px] text-[#a8862c] tabular-nums">{p.due_at.slice(0, 10)} 到期</span>}
             <span className="shrink-0 flex gap-1">
               {PLAN_STATES.filter((s) => s !== p.state).map((s) => (
-                <button key={s} onClick={() => setState_(p, s)} title={`改为 ${PLAN_STATE_LABEL[s]}`}
+                <button key={s} disabled={busy} onClick={() => setState_(p, s)} title={`改为 ${PLAN_STATE_LABEL[s]}`}
                   className="text-[10.5px] text-[#8a7a52] hover:text-[#1f3a68] border-b border-transparent hover:border-[#a8862c]">{PLAN_STATE_LABEL[s]}</button>
               ))}
             </span>
           </div>
         ))}
-        {!plans.length && <p className="text-[12px] text-[#9aa3b8] py-1">还没有计划（创建后，hold 记忆时以 plan_ids 绑定即归入计划分类）</p>}
+        {!plans.length && <p className="text-[12px] text-[#9aa3b8] py-1">还没有计划</p>}
       </div>
       {err && <p className="mt-1.5 text-[11.5px] text-[#c0392b]">{err}</p>}
     </section>
   )
 }
 
-/* ---------- Pager（设计稿原样） ---------- */
-function Pager({ page, total, onChange }: { page: number; total: number; onChange: (p: number) => void }) {
+/* ---------- Pager（记忆桶与原文共用） ---------- */
+function Pager({ page, total, onChange, disabled = false, compact = false }: {
+  page: number; total: number; onChange: (p: number) => void; disabled?: boolean; compact?: boolean
+}) {
   const nums: (number | '…')[] = []
   for (let i = 1; i <= total; i++) {
     if (i === 1 || i === total || Math.abs(i - page) <= 1) nums.push(i)
     else if (nums[nums.length - 1] !== '…') nums.push('…')
   }
   const arrow = (dir: -1 | 1) => (
-    <button
-      disabled={dir < 0 ? page === 1 : page === total}
+    <button type="button"
+      disabled={disabled || (dir < 0 ? page === 1 : page === total)}
       onClick={() => onChange(page + dir)}
       aria-label={dir < 0 ? '上一页' : '下一页'}
-      className="w-8 h-8 flex items-center justify-center text-[#1f3a68] disabled:opacity-25 hover:text-[#a8862c] transition-colors"
-    >
-      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      className="w-8 h-8 shrink-0 flex items-center justify-center text-[#1f3a68] disabled:opacity-25 hover:text-[#a8862c] transition-colors">
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
         <path d={dir < 0 ? 'M15 5 8 12l7 7' : 'm9 5 7 7-7 7'} />
       </svg>
     </button>
   )
+  const jump = (
+    <label className="flex items-center gap-1 text-[11px] text-[#a8862c] serif italic whitespace-nowrap">
+      翻到
+      <span className="inline-flex items-baseline gap-0.5 not-italic tabular-nums">
+        <select aria-label="跳转页码" value={page} disabled={disabled}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="appearance-none bg-transparent border-b border-dashed border-[#d9b44a] px-1.5 py-1 text-center text-[12px] text-[#1f3a68] outline-none focus:border-solid cursor-pointer disabled:opacity-50">
+          {Array.from({ length: total }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+        </select>
+        <span className="text-[#a8862c]">/{total}</span>
+      </span>
+      页
+    </label>
+  )
+  if (compact) return <div className="flex items-center justify-center gap-2">{arrow(-1)}{jump}{arrow(1)}</div>
   return (
-    <div className="mt-6 flex flex-col items-center gap-2">
+    <div className="mt-5 flex flex-col items-center gap-1">
       <div className="flex items-center gap-0.5">
         {arrow(-1)}
-        {nums.map((n, i) =>
-          n === '…' ? (
-            <span key={i} className="w-6 text-center text-[#c9b27a] text-xs tracking-widest">···</span>
-          ) : (
-            <button
-              key={i}
-              onClick={() => onChange(n)}
-              className={`relative w-8 h-9 serif tabular-nums transition-all duration-300 ${n === page ? 'text-[#1f3a68] text-[17px] font-bold' : 'text-[#8f98ad] text-[14px] hover:text-[#1f3a68]'}`}
-            >
-              {n}
-              <span className={`absolute left-1/2 -translate-x-1/2 bottom-0.5 h-[5px] w-[5px] rotate-45 bg-[#d9b44a] transition-all duration-300 ${n === page ? 'opacity-100 scale-100' : 'opacity-0 scale-0'}`} />
-            </button>
-          ),
-        )}
+        {nums.map((n, i) => n === '…' ? (
+          <span key={i} className="w-5 text-center text-[#c9b27a] text-[10px]">···</span>
+        ) : (
+          <button type="button" key={i} disabled={disabled} onClick={() => onChange(n)} aria-current={n === page ? 'page' : undefined}
+            className={`relative w-7 h-8 serif tabular-nums transition-colors disabled:opacity-50 ${n === page ? 'text-[#1f3a68] text-[14px] font-bold' : 'text-[#8f98ad] text-[12px] hover:text-[#1f3a68]'}`}>
+            {n}
+            <span className={`absolute left-1/2 -translate-x-1/2 bottom-0.5 h-1 w-1 rotate-45 bg-[#d9b44a] ${n === page ? 'opacity-100' : 'opacity-0'}`} />
+          </button>
+        ))}
         {arrow(1)}
       </div>
-      <label className="flex items-center gap-1.5 text-[12px] text-[#a8862c] serif italic">
-        翻到第
-        <select
-          value={page}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="appearance-none bg-transparent border-b border-dashed border-[#d9b44a] px-1.5 pb-0.5 text-center not-italic text-[13px] text-[#1f3a68] outline-none focus:border-solid cursor-pointer"
-        >
-          {Array.from({ length: total }, (_, i) => (
-            <option key={i} value={i + 1}>{i + 1}</option>
-          ))}
-        </select>
-        页 <span className="not-italic text-[#c9b27a]">/ {total}</span>
-      </label>
+      {jump}
     </div>
   )
 }
@@ -601,9 +640,12 @@ function BottomNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
 }
 
 /* ---------- Bucket detail（视觉原样；数据/编辑接真实接口） ---------- */
-const Section = ({ label, children }: { label: string; children: React.ReactNode }) => (
+const Section = ({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) => (
   <section className="py-3 border-b border-[#ece3cc]">
-    <h4 className="text-[11px] tracking-[0.2em] text-[#a8862c] mb-1.5">{label}</h4>
+    <div className="flex items-center mb-1.5">
+      <h4 className="text-[11px] tracking-[0.2em] text-[#a8862c]">{label}</h4>
+      {right && <div className="ml-auto">{right}</div>}
+    </div>
     {children}
   </section>
 )
@@ -673,8 +715,6 @@ function WordBubbles({ words }: { words: Word[] }) {
         <div key={l.word_id} className={`flex ${l.speaker === 'qiaosheng' ? 'justify-end' : 'justify-start'}`}>
           <div className={`max-w-[78%] px-3 py-1.5 text-[14px] leading-relaxed ${l.speaker === 'qiaosheng' ? 'bg-[#1f3a68] text-[#fdf6e0] rounded-2xl rounded-br-md' : 'bg-white/75 text-[#1f3a68] rounded-2xl rounded-bl-md border border-white'}`}>
             {l.text}
-            {l.expression_kind === 'verbatim' && <span className="ml-1.5 align-middle text-[10px] px-1 py-px rounded-full bg-[#f5ead0] text-[#7a5d14]">原话</span>}
-            {l.expression_kind === 'paraphrase' && <span className="ml-1.5 align-middle text-[10px] px-1 py-px rounded-full bg-[#e8edf6] text-[#1f3a68]">转述</span>}
           </div>
         </div>
       ))}
@@ -683,11 +723,15 @@ function WordBubbles({ words }: { words: Word[] }) {
   )
 }
 
-function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }: {
+function BucketDetail({ b, receipt, opening, onReopen, moods, onClose, onSaved, onDelete, onRelation, onSource }: {
   b: Bucket
-  allBuckets: Bucket[]
+  receipt: ViewReceipt | null
+  opening: boolean
+  onReopen: () => Promise<void>
+  moods: string[]
   onClose: () => void
   onSaved: (b: Bucket) => void
+  onDelete: (id: string) => void
   onRelation: (gid: string) => void
   onSource: () => void
 }) {
@@ -703,84 +747,161 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
   const [delOpen, setDelOpen] = useState(false)
   const [delReason, setDelReason] = useState('')
   const [delDone, setDelDone] = useState('')
+  // 心情编辑（她 2026-10-14 整理期临时放开）
+  const [moodEdit, setMoodEdit] = useState(false)
+  const [moodText, setMoodText] = useState(b.mood?.text || '')
+  const [moodTags, setMoodTags] = useState(b.mood?.tags || [])
+  const [keepWide, setKeepWide] = useState(false)
+  const [confirmedReceipt, setConfirmedReceipt] = useState('')
+  const [conflict, setConflict] = useState(false)
+  const [revising, setRevising] = useState<string | null>(null)
+  const [revisionText, setRevisionText] = useState('')
+  const inflight = useRef(false)
+  const recallAttempt = useRef<{ text: string; key: string } | null>(null)
   const [recallOpen, setRecallOpen] = useState(false)
-  const rel = groupOfBucket(b, allBuckets)
+  useEffect(() => {
+    if (!editing) { setTitle(b.original_title); setText(b.text); setDate(dateOf(b)); setCats(b.categories || []) }
+    if (!moodEdit) { setMoodText(b.mood?.text || ''); setMoodTags(b.mood?.tags || []) }
+  }, [b, editing, moodEdit])
+  useEffect(() => {
+    setConfirmedReceipt('')
+    if (editing || !receipt || receipt.memoryId !== b.memory_id || receipt.version !== b.version) return
+    let active = true
+    // The effect runs after this exact version has rendered; previews never confirm.
+    const frame = requestAnimationFrame(() => {
+      api('memory.view.confirm', { memory_id: b.memory_id, receipt_id: receipt.id,
+        ...(receipt.confirmKey ? { confirm_key: receipt.confirmKey } : {}) })
+        .then(() => { if (active) { setConfirmedReceipt(receipt.id); setConflict(false) } })
+        .catch(e => { if (active) { setErr(errorMessage(e)); setConflict(true) } })
+    })
+    return () => { active = false; cancelAnimationFrame(frame) }
+  }, [receipt, b.memory_id, b.version, editing])
+  const canRecall = !!receipt && confirmedReceipt === receipt.id && receipt.version === b.version && !opening && !editing
+  const acquire = (label: string) => {
+    if (inflight.current || opening) return false
+    inflight.current = true; setErr(''); setBusy(label); return true
+  }
+  const release = () => { inflight.current = false; setBusy('') }
+  const failed = (e: unknown) => {
+    setErr(errorMessage(e))
+    if (e instanceof ApiError && ['VERSION_CONFLICT', 'VIEW_RECEIPT_INVALID'].includes(e.code)) setConflict(true)
+  }
+  const hasRelations = !!b.relations?.length
   const field = 'w-full bg-transparent border-0 border-b border-dashed border-[#d9b44a]/70 px-0.5 py-1 outline-none transition-colors focus:border-solid focus:border-[#1f3a68] placeholder:text-[#c2b48f] placeholder:italic'
   const paper = 'w-full resize-none bg-[#fbf6e8] border-l-2 border-[#d9b44a] rounded-r-md px-3 py-2 outline-none transition-colors focus:bg-[#f8f0da] leading-relaxed'
 
+  // char直删（P-D02，她 2026-10-14 要的行首入口）：无申请无审批，
+  // 物理删除；仅 jiaming 身份渲染本按钮，后端合同同样只认 jiaming
+  const directDelete = async () => {
+    if (inflight.current || opening) return
+    if (!window.confirm(`char直删「${b.original_title || b.memory_id}」？\n\nP-D02：无申请无审批，物理删除，不可恢复。`)) return
+    if (!acquire('删除中…')) return
+    try {
+      await api('memory.deletion.direct', { memory_id: b.memory_id }, 'ui-del-' + b.memory_id + '-' + Date.now())
+      onDelete(b.memory_id)
+    } catch (e) {
+      failed(e)
+    } finally { release() }
+  }
+
+  // 整理期授权保留；文字与标签一起送出，不另造权限规则。
+  const saveMood = async () => {
+    if (!acquire('保存心情…')) return
+    try {
+      await api('memory.mood.update', { memory_id: b.memory_id, mood: { text: moodText, tags: moodTags } }, operationId('ui-mood'))
+      const fresh = await api<Bucket>('memory.get', { memory_id: b.memory_id })
+      onSaved({ ...b, ...fresh })
+      setMoodEdit(false)
+    } catch (e) {
+      failed(e)
+    } finally { release() }
+  }
+
   const save = async () => {
-    setErr(''); setBusy('保存中…')
+    if (!cats.length) { setErr('至少选一个分类'); return }
+    if (!title.trim() || !text.trim()) { setErr('标题和事件正文不能为空'); return }
+    if (!acquire('保存中…')) return
     try {
       const args: Record<string, unknown> = { memory_id: b.memory_id, expected_version: b.version }
       if (title !== b.original_title) args.original_title = title
       if (text !== b.text) args.text = text
       if (date !== dateOf(b)) args.memory_date = date || null
-      if (Object.keys(args).length > 2) await api('memory.update', args, 'ui-upd-' + b.memory_id + '-' + Date.now())
       if (JSON.stringify(cats) !== JSON.stringify(b.categories || [])) {
-        if (!cats.length) throw new ApiError('INVALID', '至少选一个分类（清空需走删除）')
-        await api('memory.categories.replace', { memory_id: b.memory_id, categories: cats })
+        args.categories = cats
       }
-      // 重读当前桶（正文/版本/附加面）
-      const fresh = await api<Bucket>('memory.get', { memory_id: b.memory_id })
-      const d = await api<{ cards: Record<string, any> }>('memory.cards.batch', { memory_ids: [b.memory_id] })
-      const c = d.cards[b.memory_id] || {}
-      onSaved({ ...fresh, words: c.words || [], recollections: c.recollections || [], relations: c.relations || [], bindings: c.bindings || [] })
+      if (Object.keys(args).length > 2) await api('memory.update', args, operationId('ui-upd'))
       setEditing(false)
+      await onReopen()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally { setBusy('') }
+      failed(e)
+    } finally { release() }
   }
 
   const submitRecall = async () => {
-    if (!recall.trim()) return
-    setErr(''); setBusy('正在写下回忆…')
+    if (!recall.trim() || !canRecall || !receipt || !acquire('正在写下回忆…')) return
     try {
-      // 回忆链（后端规矩）：open 签票 → view.confirm 明确确认 → append
-      const opened = await api<any>('memory.open', { memory_id: b.memory_id })
-      await api('memory.view.confirm', {
-        memory_id: b.memory_id, receipt_id: opened.view_receipt,
-        confirm_key: opened.confirm_key })
+      const payload = JSON.stringify([recall.trim(), keepWide, receipt.id])
+      if (recallAttempt.current?.text !== payload) recallAttempt.current = { text: payload, key: operationId('ui-rec') }
       await api('memory.recollections.append', {
-        memory_id: b.memory_id, receipt_id: opened.view_receipt,
-        text: recall.trim() }, 'ui-rec-' + b.memory_id + '-' + Date.now())
-      setRecall('')
-      const d = await api<{ cards: Record<string, any> }>('memory.cards.batch', { memory_ids: [b.memory_id] })
-      const c = d.cards[b.memory_id] || {}
-      onSaved({ ...b, recollections: c.recollections || [] })
+        memory_id: b.memory_id, receipt_id: receipt.id,
+        text: recall.trim(), keep_wide: keepWide }, recallAttempt.current.key)
+      recallAttempt.current = null
+      setRecall(''); setKeepWide(false)
+      onSaved(await loadBucket(b.memory_id))
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally { setBusy('') }
+      failed(e)
+    } finally { release() }
+  }
+
+  const reviseRecall = async () => {
+    if (!revising || !revisionText.trim() || !acquire('保存回忆修订…')) return
+    try {
+      await api('memory.recollections.revise', { recollection_id: revising, text: revisionText.trim() }, operationId('ui-rec-revise'))
+      setRevising(null); onSaved(await loadBucket(b.memory_id))
+    } catch (e) { failed(e) } finally { release() }
+  }
+  const revokeKeep = async (markId: string) => {
+    if (!acquire('撤销留标记…')) return
+    try {
+      await api('memory.keep.revoke', { mark_id: markId })
+      onSaved(await loadBucket(b.memory_id))
+    } catch (e) { failed(e) } finally { release() }
   }
 
   const submitDeletion = async () => {
-    if (!delReason.trim()) return
-    setErr(''); setBusy('提交删除申请…')
+    if (!delReason.trim() || !acquire('提交删除申请…')) return
     try {
-      const d = await api<{ request_id: string }>('memory.deletion.request', {
+      await api<{ request_id: string }>('memory.deletion.request', {
         memory_id: b.memory_id, reason: delReason.trim(),
         operation_id: 'ui-del-' + b.memory_id + '-' + Date.now(),
       })
-      setDelDone('已提交申请 ' + d.request_id + '（pending，内容未变；审批由char处理）')
+      setDelDone('删除申请已提交，等待char确认。')
       setDelOpen(false); setDelReason('')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally { setBusy('') }
+      failed(e)
+    } finally { release() }
   }
 
   return (
     <>
       <div className="flex items-center gap-1 px-3 py-2 border-b border-[#ece3cc]">
-        {rel && (
-          <button onClick={() => onRelation(rel.id)} title={rel.name} className="flex items-center gap-1.5 h-8 px-2.5 rounded-full bg-[#e8edf6] text-[#1f3a68] text-xs active:scale-95 transition">
+        {session.principal === 'jiaming' && !editing && (
+          <button onClick={directDelete} disabled={!!busy || opening} aria-label="直删" title="char直删（无申请无审批，物理删除）"
+                  className="w-8 h-8 rounded-full flex items-center justify-center transition text-[#b3423a] hover:bg-[#f6dede] active:scale-95">
+            <svg viewBox="0 0 24 24" className="w-[17px] h-[17px]" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" /><path d="M10 11v6M14 11v6" /></svg>
+          </button>
+        )}
+        {hasRelations && (
+          <button onClick={() => onRelation(b.memory_id)} title="查看实际关联" className="flex items-center gap-1.5 h-8 px-2.5 rounded-full bg-[#e8edf6] text-[#1f3a68] text-xs active:scale-95 transition">
             <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><circle cx="5" cy="12" r="2.2" /><circle cx="12" cy="12" r="2.2" /><circle cx="19" cy="12" r="2.2" /><path d="M7.2 12h2.6M14.2 12h2.6" /></svg>
-            {rel.ids.length} 段相连
+            查看关联
           </button>
         )}
         {editing ? (
           <button onClick={() => { setEditing(false); setTitle(b.original_title); setText(b.text); setDate(dateOf(b)); setCats(b.categories || []) }} className="ml-auto w-8 h-8 rounded-full text-[#1f3a68] hover:bg-[#f5ead0] text-lg">×</button>
         ) : (
           <>
-            <button onClick={() => setEditing(true)} aria-label="编辑" className="ml-auto w-8 h-8 rounded-full flex items-center justify-center transition text-[#1f3a68] hover:bg-[#f5ead0]">
+            <button onClick={() => setEditing(true)} disabled={!!busy || opening || !!b.content_gap} aria-label="编辑" className="ml-auto w-8 h-8 rounded-full flex items-center justify-center transition text-[#1f3a68] hover:bg-[#f5ead0] disabled:opacity-30">
               <svg viewBox="0 0 24 24" className="w-[18px] h-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></svg>
             </button>
             <button onClick={onClose} aria-label="关闭" className="w-8 h-8 rounded-full hover:bg-[#f5ead0] text-[#1f3a68] text-lg">×</button>
@@ -788,7 +909,8 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-6">
+      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto px-5 pb-6">
+        {b.content_gap && <p role="note" className="mt-3 rounded-lg bg-[#faf3ec] p-3 text-xs text-[#a8622c]">{b.content_gap.note}。此表示不能原地编辑。</p>}
         <div className="pt-4 pb-3 border-b border-[#ece3cc]">
           {editing ? (
             <>
@@ -809,21 +931,41 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
           )}
         </div>
 
-        {/* 心情：只读（她 2026-10-13 裁定——当时心情仅char同期可写，网页身份动不得） */}
-        <Section label="心情">
-          {(b.mood?.tags?.length || b.mood?.text)
+        {/* 心情（她 2026-10-14 整理期临时放开自编辑：memory.mood.update，
+            豁免口 MARIPOSA_MOOD_EDIT_OVERRIDE——整理完删 env 重启即恢复只读合同） */}
+        <Section label="心情" right={!editing && (
+          <button disabled={!!busy || opening} onClick={() => setMoodEdit(m => !m)} className="text-[11px] text-[#1f3a68] underline underline-offset-2">
+            {moodEdit ? '收起' : '编辑心情'}
+          </button>
+        )}>
+          {moodEdit ? (
+            <div className="w-full">
+              <MultiSelect value={moodTags} options={moods} editing onChange={(tags) => {
+                if (tags.length <= 3) { setMoodTags(tags); setErr('') } else setErr('心情标签最多选择三个')
+              }} tone="gold" />
+              <textarea value={moodText} onChange={(e) => setMoodText(e.target.value)}
+                placeholder="心情的话（当时心情=感受+为什么记得+想说没说出口的话）"
+                className="w-full min-h-[90px] resize-y bg-[#fbf6e8] border-l-2 border-[#d9b44a] rounded-r-md px-3 py-2 text-sm leading-relaxed outline-none" />
+              <div className="mt-1.5 flex items-center gap-2">
+                <button onClick={saveMood} disabled={!!busy} className="px-3 py-1 rounded-full bg-[#1f3a68] text-white text-xs active:scale-95 transition disabled:opacity-50">
+                  保存心情
+                </button>
+                {err && <span className="text-xs text-[#b3423a]">{err}</span>}
+              </div>
+            </div>
+          ) : (b.mood?.tags?.length || b.mood?.text)
             ? (<>
               {!!b.mood?.tags?.length && <MultiSelect value={b.mood.tags} options={b.mood.tags} editing={false} onChange={() => {}} tone="gold" />}
               {b.mood?.text && <p className="mt-1.5 text-sm leading-relaxed text-[#5a6480] italic">{b.mood.text}</p>}
             </>)
-            : <p className="text-[13px] text-[#9aa3b8]">（未记——当时心情只能由char在同期窗口写下）</p>}
+            : <p className="text-[13px] text-[#9aa3b8]">（未记——点"编辑心情"补写）</p>}
         </Section>
 
         <Section label="事件">
           {editing ? (
             <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} className={`${paper} text-[15px] text-[#33405f]`} />
           ) : (
-            <p className="text-[15px] leading-loose text-[#33405f] whitespace-pre-wrap">{b.text}</p>
+            <p className="text-[15px] leading-loose text-[#33405f] whitespace-pre-wrap [overflow-wrap:anywhere]">{b.text}</p>
           )}
           <div className="mt-3 rounded-2xl bg-[#1f3a68]/[0.05] border border-white/70 p-3">
             <p className="text-[11px] text-[#a8862c] mb-1">我们的话</p>
@@ -838,26 +980,36 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
             <div className="space-y-2">
               {(b.recollections || []).map((r, i) => (
                 <div key={r.recollection_id || i} className="pl-3 border-l-2 border-[#d9b44a]">
-                  <p className="text-sm text-[#33405f] leading-relaxed">{r.text}</p>
-                  <p className="text-[11px] text-[#a8862c] mt-0.5">{(r.created_at || '').slice(0, 10)} 再读时 · {(r.author_principal || r.author) === 'jiaming' ? 'char' : '宿主用户'}</p>
+                  {revising === r.recollection_id ? <div>
+                    <textarea aria-label="修订本人回忆" className={`${paper} text-sm`} value={revisionText} onChange={e => setRevisionText(e.target.value)} disabled={!!busy} />
+                    <button disabled={!!busy || !revisionText.trim()} onClick={reviseRecall} className="text-xs underline text-[#1f3a68]">保存修订</button>
+                    <button disabled={!!busy} onClick={() => setRevising(null)} className="ml-3 text-xs text-[#8a7a52]">取消</button>
+                  </div> : <p className="text-sm text-[#33405f] leading-relaxed">{r.text}</p>}
+                  <p className="text-[11px] text-[#a8862c] mt-0.5">{(r.written_at || '').slice(0, 10)} 再读时 · {(r.author_principal || r.author) === 'jiaming' ? 'char' : '宿主用户'}
+                    {(r.author_principal || r.author) === session.principal && <button disabled={!!busy} onClick={() => { setRevising(r.recollection_id); setRevisionText(r.text) }} className="ml-2 underline">修订</button>}
+                  </p>
                 </div>
               ))}
             </div>
-            <RecallForm recall={recall} setRecall={setRecall} busy={busy} onSubmit={submitRecall} field={field} />
+            <RecallForm recall={recall} setRecall={setRecall} busy={busy || (!canRecall ? '请先重新打开当前版本' : '')} onSubmit={submitRecall} field={field} />
           </Section>
         ) : (
           recallOpen && (
             <Section label="回忆">
-              <RecallForm recall={recall} setRecall={setRecall} busy={busy} onSubmit={submitRecall} field={field} autoFocus />
+              <RecallForm recall={recall} setRecall={setRecall} busy={busy || (!canRecall ? '请先重新打开当前版本' : '')} onSubmit={submitRecall} field={field} autoFocus />
             </Section>
           )
         )}
 
         {busy && <p className="mt-3 text-[12px] text-[#a8862c]">{busy}</p>}
         {err && <p className="mt-3 text-[12px] text-[#c0392b]">{err}</p>}
+        {(recallOpen || !!b.recollections?.length) && <label className="mt-2 flex items-center gap-2 text-xs text-[#7a5d14]"><input type="checkbox" checked={keepWide} disabled={!!busy} onChange={e => setKeepWide(e.target.checked)} />留下这条回忆时，也选择「留」</label>}
+        {(b.keeps || []).filter(mark => !mark.revoked_at).map(mark => <p key={mark.mark_id} className="mt-2 text-xs text-[#7a5d14]">{(NAMES[mark.owner] || mark.owner).split('（')[0]}选择了「留」{mark.owner === session.principal && <button disabled={!!busy} onClick={() => revokeKeep(mark.mark_id)} className="ml-2 underline">撤销我的留标记</button>}</p>)}
+        {(conflict || (!canRecall && !opening && !editing)) && <p className="mt-2 text-xs text-[#a8622c]">请重新打开当前版本后继续。草稿会保留。 <button disabled={!!busy} onClick={onReopen} className="underline">重新打开</button></p>}
+        {editing && conflict && <p className="mt-2 text-xs text-[#8a7a52]">当前版本 {b.version}：{b.original_title}。重新打开会更新版本，保留你正在编辑的草稿；确认后可再次保存。</p>}
 
         {editing && (
-          <button onClick={save} className="mt-4 w-full py-2.5 rounded-full bg-[#1f3a68] text-[#f6e3a8] serif italic tracking-wider active:scale-95 transition">
+          <button onClick={save} disabled={!!busy || opening} className="mt-4 w-full py-2.5 rounded-full bg-[#1f3a68] text-[#f6e3a8] serif italic tracking-wider active:scale-95 transition disabled:opacity-40">
             保存修订
           </button>
         )}
@@ -868,17 +1020,18 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
             {delDone
               ? <p className="text-[11px] text-[#a8622c] leading-relaxed">{delDone}</p>
               : delOpen ? (
-                <div className="rounded-xl border border-[#e0c8b8] bg-[#faf3ec] px-3 py-2.5">
-                  <p className="text-[11px] text-[#a8622c] leading-relaxed">申请物理删除「{b.original_title}」？理由必填；提交后内容不变，char批准才执行。</p>
-                  <div className="mt-1.5 flex gap-2">
-                    <input value={delReason} onChange={(e) => setDelReason(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && submitDeletion()}
-                      placeholder="删除理由（必填）" className="flex-1 bg-transparent border-0 border-b border-dashed border-[#c98b5f]/70 py-1 text-[13px] text-[#5c3a24] outline-none focus:border-solid placeholder:text-[#d3b8a3] placeholder:italic" />
-                    <button onClick={submitDeletion} disabled={!delReason.trim() || !!busy}
-                      className="shrink-0 text-[12.5px] text-[#a83c1c] px-1 pb-0.5 border-b border-[#a83c1c]/70 disabled:text-[#d3b8a3] disabled:border-transparent">提交申请</button>
-                    <button onClick={() => { setDelOpen(false); setDelReason('') }}
-                      className="shrink-0 text-[12px] text-[#8a7a52]">算了</button>
-                  </div>
+                <div className="relative rounded-xl border border-[#e0c8b8] bg-[#faf3ec] px-3 py-3">
+                  <button type="button" aria-label="关闭删除确认" disabled={!!busy}
+                    onClick={() => { setDelOpen(false); setDelReason('') }}
+                    className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full text-lg text-[#8a7a52] hover:bg-[#f0e3d7] disabled:opacity-40">×</button>
+                  <p className="pr-7 text-[12px] text-[#a8622c] leading-relaxed">确定要删除这个记忆吗？</p>
+                  <form className="mt-2 flex min-w-0 items-end gap-3" onSubmit={(e) => { e.preventDefault(); submitDeletion() }}>
+                    <input value={delReason} onChange={(e) => setDelReason(e.target.value)} required disabled={!!busy}
+                      aria-label="删除理由" placeholder="删除理由"
+                      className="min-w-0 w-full flex-1 bg-transparent border-0 border-b border-dashed border-[#c98b5f]/70 py-1 text-[13px] text-[#5c3a24] outline-none focus:border-solid placeholder:text-[#d3b8a3] placeholder:italic" />
+                    <button type="submit" disabled={!delReason.trim() || !!busy}
+                      className="shrink-0 text-[12.5px] text-[#a83c1c] px-1 py-1 border-b border-[#a83c1c]/70 disabled:text-[#d3b8a3] disabled:border-transparent">确定</button>
+                  </form>
                 </div>
               ) : (
                 <button onClick={() => setDelOpen(true)} className="text-[11px] text-[#c9a08a] hover:text-[#a83c1c] border-b border-transparent hover:border-[#c9a08a]">
@@ -887,6 +1040,7 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
               )}
           </div>
         )}
+        <DeletionRequests key={delDone} memoryId={b.memory_id} onChanged={onReopen} onDeleted={onDelete} compact />
 
         {!(b.recollections || []).length && !recallOpen && (
           <button onClick={() => setRecallOpen(true)} className="mt-3 mx-auto block text-[11px] text-[#c2b48f] hover:text-[#a8862c]">
@@ -910,95 +1064,89 @@ function BucketDetail({ b, allBuckets, onClose, onSaved, onRelation, onSource }:
 
 /* ---------- 关系页（时间线视觉保留设计稿；数据=真实关系边分组
    + episode 区块——她 2026-10-13 裁定：正在绑定关系的事在这边浮现） ---------- */
-function RelationPage({ focus, setFocus, buckets, byId, onOpen }: { focus: string | null; setFocus: (id: string | null) => void; buckets: Bucket[]; byId: (id: string) => Bucket | undefined; onOpen: (id: string) => void }) {
+function RelationPage({ focus, setFocus, buckets, byId, onOpen, onSource, onRelations }: {
+  focus: string | null; setFocus: (id: string | null) => void; buckets: Bucket[]
+  byId: (id: string) => Bucket | undefined; onOpen: (id: string) => void; onSource: (jump: SourceJump) => void
+  onRelations: (cards: Record<string, Partial<Bucket>>) => void
+}) {
   const groups = useMemo(() => buildGroups(buckets), [buckets])
-  const rels = focus ? groups.filter((r) => r.id === focus) : groups
-  const [episodes, setEpisodes] = useState<any[] | null>(null)
-  useEffect(() => {
-    if (focus) return
-    ;(async () => {
-      try {
-        const d = await api<{ episodes: any[] }>('episode.list', {
-          scope_id: 'primary', states: ['OPEN', 'QUIESCENT'], limit: 20 })
-        setEpisodes(d.episodes || [])
-      } catch { setEpisodes([]) }
-    })()
-  }, [focus, buckets])
-  const episodeBuckets = (ep: any): string[] => {
-    const ids = new Set<string>()
-    collectMemoryIds(ep.source_selections, ids)
-    collectMemoryIds(ep.terminal_source_ref, ids)
-    collectMemoryIds(ep.decision_source_refs, ids)
-    return [...ids].filter((id) => buckets.some((b) => b.memory_id === id))
+  const selected = groups.find(group => group.id === focus || (!!focus && group.ids.includes(focus)))
+  const edges = useMemo(() => {
+    const unique = new Map<string, { id: string; from: string; to: string; label: string; reverse?: string | null }>()
+    for (const bucket of buckets) for (const edge of bucket.relations || []) {
+      const from = edge.direction === 'out' ? bucket.memory_id : edge.other_memory
+      const to = edge.direction === 'out' ? edge.other_memory : bucket.memory_id
+      unique.set(edge.relation_id, { id: edge.relation_id, from, to,
+        label: edge.custom_label || REL_TYPE_LABEL[edge.relation_type] || edge.relation_type, reverse: edge.reverse_label })
+    }
+    return [...unique.values()]
+  }, [buckets])
+  const visible = selected ? edges.filter(edge => selected.ids.includes(edge.from) && selected.ids.includes(edge.to)) : edges
+  const [episodes, setEpisodes] = useState<{ episode_id: string; label: string; state: string; updated_at: string; source_selections: SourceSelection[] }[]>([])
+  const [next, setNext] = useState<object | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [relationsError, setRelationsError] = useState('')
+  const [relationsLoading, setRelationsLoading] = useState(false)
+  const relationsRequest = useRef(0)
+  const bucketKey = buckets.map(bucket => bucket.memory_id).sort().join('|')
+  const readRelations = async () => {
+    const current = ++relationsRequest.current
+    const generation = session.generation
+    setRelationsLoading(true); setRelationsError('')
+    try {
+      const cards: Record<string, Partial<Bucket>> = {}
+      for (let offset = 0; offset < buckets.length; offset += 100) {
+        const data = await api<{ cards: Record<string, Partial<Bucket>> }>('memory.cards.batch', { memory_ids: buckets.slice(offset, offset + 100).map(bucket => bucket.memory_id) })
+        if (current !== relationsRequest.current || generation !== session.generation) return
+        Object.assign(cards, data.cards)
+      }
+      onRelations(cards)
+    } catch (e) { if (current === relationsRequest.current) setRelationsError(errorMessage(e)) }
+    finally { if (current === relationsRequest.current) setRelationsLoading(false) }
   }
-  if (!groups.length && !episodes?.length)
-    return (
-      <div className="flex flex-col items-center justify-center py-24 text-[#8a7a52]">
-        <Butterfly className="w-12 h-10 flutter opacity-70" />
-        <p className="mt-3 serif italic text-sm">还没有相连的记忆</p>
-        <p className="mt-1 text-[11px] text-[#b5ad98]">桶与桶之间的关联由char经 MCP 建立（memory.relations.link）</p>
-      </div>
-    )
-  return (
-    <div className="space-y-6">
-      {focus && (
-        <button onClick={() => setFocus(null)} className="text-sm text-[#1f3a68]">‹ 全部关系</button>
-      )}
-      {!!episodes?.length && !focus && (
-        <section>
-          <h3 className="serif font-bold text-lg text-[#1f3a68] mb-2">正在发生的事</h3>
-          <div className="space-y-2">
-            {episodes.map((ep) => {
-              const mem = episodeBuckets(ep)
-              const st = ep.state === 'OPEN' ? 'bg-[#1f3a68] text-[#f6e3a8]' : 'bg-[#e8edf6] text-[#1f3a68]'
-              return (
-                <div key={ep.episode_id} className="flex items-center gap-2 py-1 border-b border-[#ece3cc]">
-                  <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${st}`}>{ep.state === 'OPEN' ? '进行中' : '静置'}</span>
-                  <span className="serif font-bold text-[14px] text-[#1f3a68] truncate flex-1">{ep.label || ep.episode_id}</span>
-                  <span className="shrink-0 text-[11px] text-[#a8862c] tabular-nums">{(ep.updated_at || '').slice(0, 10)}</span>
-                  {mem.map((id) => {
-                    const b = byId(id)
-                    if (!b) return null
-                    return (
-                      <button key={id} onClick={() => onOpen(id)}
-                        className="shrink-0 flex items-center gap-1 pl-2 pr-2.5 py-1 rounded-full bg-[#f5ead0] text-[11.5px] text-[#1f3a68] active:scale-95 transition">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#d9b44a]" />
-                        <span className="max-w-[8rem] truncate">{b.original_title}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
-      {rels.map((r) => (
-        <section key={r.id}>
-          <h3 className="serif font-bold text-lg text-[#1f3a68] mb-2">{r.name}</h3>
-          <ol className="relative ml-2 border-l-2 border-[#e6dcc3]">
-            {r.ids.map((id, k) => {
-              const b = byId(id)
-              if (!b) return null
-              return (
-                <li key={id} className="relative pl-5 pb-4">
-                  <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-[#d9b44a] ring-4 ring-[#fdfaf2]" />
-                  {k > 0 && r.labels[id] && <p className="text-[11px] text-[#7d8aa8] mb-1">↳ {r.labels[id]}</p>}
-                  <button onClick={() => onOpen(id)} className="text-left w-full">
-                    <div className="flex items-baseline gap-2">
-                      <span className="serif font-bold text-[#1f3a68]">{b.original_title}</span>
-                      <time className="text-[11.5px] text-[#a8862c] tabular-nums">{dateOf(b)}</time>
-                    </div>
-                    <p className="text-[13px] text-[#4a5675] line-clamp-2 mt-0.5">{b.text}</p>
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
-        </section>
-      ))}
-    </div>
-  )
+  useEffect(() => { readRelations(); return () => { relationsRequest.current++ } }, [bucketKey])
+  const sequence = useRef(0)
+  const read = async (append = false) => {
+    const request = ++sequence.current
+    setLoading(true); setError('')
+    try {
+      const data = await api<{ episodes: typeof episodes; next_cursor?: object }>('episode.list', {
+        scope_id: 'primary', states: ['OPEN', 'QUIESCENT'], limit: 20, ...(append && next ? { cursor: next } : {}) })
+      if (request !== sequence.current) return
+      setEpisodes(previous => append ? [...previous, ...data.episodes] : data.episodes); setNext(data.next_cursor || null)
+    } catch (e) { if (request === sequence.current) setError(errorMessage(e)) }
+    finally { if (request === sequence.current) setLoading(false) }
+  }
+  useEffect(() => { read(); return () => { sequence.current++ } }, [])
+  return <div className="space-y-6">
+    {focus && <button onClick={() => setFocus(null)} className="text-sm text-[#1f3a68]">‹ 全部关系</button>}
+    {!focus && <section>
+      <h3 className="serif font-bold text-lg text-[#1f3a68] mb-2">正在发生的事</h3>
+      {episodes.map(episode => <article key={episode.episode_id} className="py-2 border-b border-[#ece3cc]">
+        <div className="flex gap-2 items-center"><span className="text-xs text-[#a8862c]">{episode.state === 'OPEN' ? '进行中' : '静置'}</span><span className="serif font-bold text-[#1f3a68]">{episode.label}</span></div>
+        <div className="mt-2 flex flex-wrap gap-3">{episode.source_selections.map((selection, i) => <button key={i} onClick={() => onSource({ selection })} className="text-xs underline text-[#1f3a68]">原文片段 {i + 1}</button>)}</div>
+      </article>)}
+      {!loading && !episodes.length && !error && <p className="text-xs text-[#9aa3b8]">当前范围没有进行中的事</p>}
+      {loading && <p role="status" className="text-xs text-[#a8862c]">读取中…</p>}
+      {next && <button disabled={loading} onClick={() => read(true)} className="mt-2 text-xs underline text-[#1f3a68]">加载更多</button>}
+      {error && <p role="alert" className="text-xs text-[#c0392b]">{error} <button onClick={() => read()} className="underline">重试</button></p>}
+    </section>}
+    <section>
+      <h3 className="serif font-bold text-lg text-[#1f3a68] mb-2">{selected ? '这组记忆的关系' : '记忆之间的关系'}</h3>
+      {relationsLoading && <p role="status" className="text-xs text-[#a8862c]">读取关联中…</p>}
+      {relationsError && <p role="alert" className="text-xs text-[#c0392b]">{relationsError} <button onClick={readRelations} className="underline">重试</button></p>}
+      {visible.map(edge => <article key={edge.id} className="border-b border-[#ece3cc] py-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <button onClick={() => onOpen(edge.from)} className="serif font-bold text-[#1f3a68] underline">{byId(edge.from)?.original_title || edge.from}</button>
+          <span className="text-xs text-[#a8862c]">→ {edge.label} →</span>
+          <button onClick={() => onOpen(edge.to)} className="serif font-bold text-[#1f3a68] underline">{byId(edge.to)?.original_title || edge.to}</button>
+        </div>
+        {edge.reverse && <p className="mt-1 text-xs text-[#8a7a52]">反向含义：{edge.reverse}</p>}
+      </article>)}
+      {!visible.length && !relationsLoading && !relationsError && <p className="text-sm text-[#9aa3b8]">还没有相连的记忆</p>}
+    </section>
+  </div>
 }
 
 /* ---------- 原文页（新增真实层：会话列表主线 + 搜索 + 反查跳桶） ---------- */
@@ -1043,17 +1191,22 @@ type ConvItem = {
   provider_conversation_id: string
 }
 type SrcMsg = {
+  message_id: string
   provider_message_id: string; normalized_sender: string
   speaker_display?: string; created_at?: string; text?: string | null
   has_thinking?: boolean; thinking_text?: string | null
   thinking_summaries?: string[] | null
   has_tool_content?: boolean
   sequence: number
+  memories_referencing?: ConvBinding[]
+  attachments?: unknown[]
 }
-type ConvBinding = { binding_id: string; memory_id: string; start_seq: number; end_seq: number }
+type ConvBinding = { binding_id: string; memory_id: string }
+type SourceJump = EvidenceTarget | { conversation_id: string; around_seq?: number; around_message_id?: string }
+type SourceHit = SrcMsg & { conversation_id: string; conversation_title?: string; excerpt?: string }
 
 function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
-  jump: { conversation_id: string; around_seq?: number } | null
+  jump: SourceJump | null
   clearJump: () => void
   buckets: Bucket[]
   onOpen: (id: string) => void
@@ -1061,73 +1214,130 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
 }) {
   const [convs, setConvs] = useState<ConvItem[]>([])
   const [total, setTotal] = useState(0)
-  const [hasMore, setHasMore] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [listPage, setListPage] = useState(1)
+  const [listLoading, setListLoading] = useState(false)
+  const [viewLoading, setViewLoading] = useState(false)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const loading = listLoading || viewLoading || searchLoading
   const [err, setErr] = useState('')
   // 搜索（她 2026-10-13：原文页加一个搜索——source.search 专项检索）
   const [sq, setSq] = useState('')
   const [sSender, setSSender] = useState('')
   const [sFrom, setSFrom] = useState('')
   const [sTo, setSTo] = useState('')
-  const [sHits, setSHits] = useState<any[] | null>(null)
+  const [sHits, setSHits] = useState<SourceHit[] | null>(null)
+  const [searchMore, setSearchMore] = useState(false)
+  const [searchArgs, setSearchArgs] = useState<Record<string, unknown> | null>(null)
+  const [searchOffset, setSearchOffset] = useState(0)
+  const [evidence, setEvidence] = useState<EvidenceTarget | null>(null)
   // 会话视图
-  const [view, setView] = useState<{ conv: ConvItem; msgs: SrcMsg[]; more: boolean; cursor?: string } | null>(null)
+  const [view, setView] = useState<{ conv: ConvItem; msgs: SrcMsg[]; page: number; total: number; totalPages: number; focusSeq?: number; focusMessage?: string } | null>(null)
   const [bindings, setBindings] = useState<ConvBinding[]>([])
   const [importing, setImporting] = useState('')
+  const [importBusy, setImportBusy] = useState(false)
+  const importLock = useRef(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const listRequest = useRef(0)
+  const viewRequest = useRef(0)
+  const searchRequest = useRef(0)
+  const returnScroll = useRef(0)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const listTotalPages = Math.max(1, Math.ceil(total / SOURCE_PAGE_SIZE))
 
-  const loadConvs = async (offset = 0) => {
-    setLoading(true); setErr('')
+  const loadConvs = async (page = 1, scroll = false) => {
+    const request = ++listRequest.current
+    setListLoading(true); setErr('')
     try {
-      const d = await api<{ conversations: ConvItem[]; has_more: boolean; total: number }>(
-        'source.conversations.list', { limit: 50, offset, titled: true, order: 'first_desc' })
-      setConvs(offset ? (prev: ConvItem[]) => [...prev, ...d.conversations] : d.conversations)
-      setTotal(d.total ?? 0)
-      setHasMore(d.has_more)
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setLoading(false) }
-  }
-  useEffect(() => { loadConvs(0) }, [])
-
-  const openConv = async (convId: string, aroundSeq?: number) => {
-    setErr(''); setLoading(true)
-    try {
-      const d = await api<{ conversation: ConvItem; messages: SrcMsg[]; has_more: boolean; next_after_cursor?: string }>(
-        'source.conversation.get', { conversation_id: convId, limit: 100, ...(aroundSeq != null ? { around_seq: aroundSeq } : {}) })
-      setView({ conv: d.conversation, msgs: d.messages, more: d.has_more, cursor: d.next_after_cursor })
-      // 反查（§6.1 会话方向）：这个会话被哪些桶绑定
-      try {
-        const bd = await api<{ bindings: ConvBinding[] }>('source.bindings.of_conversation', { conversation_id: convId })
-        setBindings(bd.bindings || [])
-      } catch { setBindings([]) }
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setLoading(false) }
+      const read = (p: number) => api<{ conversations: ConvItem[]; total: number }>(
+        'source.conversations.list', { limit: SOURCE_PAGE_SIZE, offset: (p - 1) * SOURCE_PAGE_SIZE, titled: true, order: 'first_desc' })
+      let d = await read(page)
+      const actualPage = Math.max(1, Math.min(page, Math.ceil(d.total / SOURCE_PAGE_SIZE)))
+      if (actualPage !== page) d = await read(actualPage)
+      if (request !== listRequest.current) return
+      setConvs(d.conversations); setTotal(d.total); setListPage(actualPage)
+      if (scroll) window.scrollTo({ top: 0 })
+    } catch (e) {
+      if (request === listRequest.current) setErr(errorMessage(e))
+    } finally { if (request === listRequest.current) setListLoading(false) }
   }
   useEffect(() => {
-    if (jump) { openConv(jump.conversation_id, jump.around_seq); clearJump() }
-  }, [jump])
+    loadConvs()
+    return () => { listRequest.current++; viewRequest.current++; searchRequest.current++ }
+  }, [])
 
-  const loadMoreMsgs = async () => {
-    if (!view?.cursor) return
+  const loadConversation = async (convId: string, page: number, aroundSeq?: number, opening = false, aroundMessage?: string) => {
+    const request = ++viewRequest.current
+    if (opening && !view) returnScroll.current = window.scrollY
+    setErr(''); setViewLoading(true)
     try {
-      const d = await api<{ messages: SrcMsg[]; has_more: boolean; next_after_cursor?: string }>(
-        'source.conversation.get', { conversation_id: view.conv.id, after_cursor: view.cursor, limit: 100 })
-      setView({ ...view, msgs: [...view.msgs, ...d.messages], more: d.has_more, cursor: d.next_after_cursor })
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
+      const [d, bd] = await Promise.all([
+        api<{ conversation: ConvItem; messages: SrcMsg[]; page: number; total: number; total_pages: number }>(
+          'source.conversation.get', { conversation_id: convId, page, limit: MESSAGE_PAGE_SIZE, ...(aroundMessage ? { around_message_id: aroundMessage } : aroundSeq != null ? { around_seq: aroundSeq } : {}) }),
+        opening ? api<{ bindings: ConvBinding[] }>('source.bindings.of_conversation', { conversation_id: convId }) : Promise.resolve(null),
+      ])
+      if (request !== viewRequest.current) return
+      setEvidence(null)
+      setView({ conv: d.conversation, msgs: d.messages, page: d.page, total: d.total, totalPages: d.total_pages, focusSeq: aroundSeq, focusMessage: aroundMessage })
+      if (bd) setBindings(bd.bindings || [])
+    } catch (e) {
+      if (request === viewRequest.current) {
+        if (e instanceof ApiError && e.code === 'SOURCE_MESSAGE_NOT_CURRENT' && aroundMessage) setEvidence({ message_id: aroundMessage })
+        else setErr(errorMessage(e))
+      }
+    } finally { if (request === viewRequest.current) setViewLoading(false) }
   }
+  const openConv = (convId: string, aroundSeq?: number, aroundMessage?: string) => loadConversation(convId, 1, aroundSeq, true, aroundMessage)
+  const goMessagePage = (page: number) => { if (view && !viewLoading) loadConversation(view.conv.id, page) }
+  const closeConversation = () => {
+    viewRequest.current++; setViewLoading(false); setView(null); setBindings([]); setErr('')
+    requestAnimationFrame(() => window.scrollTo({ top: returnScroll.current }))
+  }
+  useEffect(() => {
+    if (jump) {
+      if ('conversation_id' in jump) openConv(jump.conversation_id, jump.around_seq, jump.around_message_id)
+      else { viewRequest.current++; setViewLoading(false); setView(null); setEvidence(jump) }
+      clearJump()
+    }
+  }, [jump])
+  useEffect(() => {
+    if (!view) return
+    const frame = requestAnimationFrame(() => {
+      const messages = Array.from(document.querySelectorAll<HTMLElement>('[data-source-seq]'))
+      const target = view.focusMessage ? messages.find(m => m.dataset.sourceId === view.focusMessage)
+        : view.focusSeq == null ? null : messages.find((m) => Number(m.dataset.sourceSeq) >= view.focusSeq!) || messages[messages.length - 1]
+      if (target) {
+        const appHeight = parseFloat(getComputedStyle(target).getPropertyValue('--app-header-height')) || 0
+        window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - appHeight - (toolbarRef.current?.getBoundingClientRect().height || 0) - 12) })
+      } else window.scrollTo({ top: 0 })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [view])
 
-  const doSearch = async () => {
-    setErr(''); setLoading(true)
+  const doSearch = async (append = false) => {
+    if (loading || importBusy) return
+    if (sFrom && sTo && sFrom > sTo) { setErr('开始日期不能晚于结束日期'); return }
+    const request = ++searchRequest.current
+    setErr(''); setSearchLoading(true)
     try {
-      const args: Record<string, unknown> = { limit: 30 }
-      if (sq.trim()) args.query = sq.trim()
-      if (sSender) args.senders = sSender
-      if (sFrom) args.date_from = sFrom
-      if (sTo) args.date_to = sTo
-      const d = await api<{ hits: any[] }>('source.search', args)
-      setSHits(d.hits)
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setLoading(false) }
+      const args: Record<string, unknown> = append && searchArgs ? searchArgs : {
+        limit: SOURCE_PAGE_SIZE, ...(sq.trim() ? { query: sq.trim() } : {}),
+        ...(sSender ? { senders: [sSender] } : {}), ...(sFrom ? { date_from: sFrom } : {}), ...(sTo ? { date_to: sTo } : {}) }
+      const offset = append ? searchOffset : 0
+      const d = await api<{ hits: SourceHit[]; has_more: boolean }>('source.search', { ...args, offset })
+      if (request === searchRequest.current) {
+        setSHits(previous => append ? [...previous || [], ...d.hits] : d.hits)
+        setSearchMore(d.has_more); setSearchOffset(offset + d.hits.length); setSearchArgs(args)
+        if (!append) window.scrollTo({ top: 0 })
+      }
+    } catch (e) {
+      if (request === searchRequest.current) setErr(errorMessage(e))
+    } finally { if (request === searchRequest.current) setSearchLoading(false) }
   }
 
   const doImport = async (f: File) => {
+    if (importLock.current) return
+    importLock.current = true
+    setImportBusy(true)
     setImporting(`上传 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）…`)
     try {
       const path = await uploadSource(f)
@@ -1139,80 +1349,95 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
       const s = d.stats || {}
       setImporting(`导入完成：${s.conversations_total ?? '?'} 会话 / ${s.messages_new ?? '?'} 新消息` +
         (s.verify_problems?.length ? ` · ⚠ 校验问题 ${s.verify_problems.length}` : ' · 校验通过'))
-      loadConvs(0)
+      loadConvs(1)
       refreshBuckets()
-    } catch (e) { setImporting('导入失败：' + (e instanceof Error ? e.message : e)) }
+    } catch (e) { setImporting('导入失败：' + errorMessage(e)) } finally { importLock.current = false; setImportBusy(false) }
   }
 
-  const bindingAt = (seq: number) => bindings.filter((b) => b.start_seq <= seq && seq <= b.end_seq)
-  const startBinding = (seq: number) => bindings.find((b) => b.start_seq === seq)
   const bucketTitle = (mid: string) => buckets.find((b) => b.memory_id === mid)?.original_title || mid
-  const line = 'bg-transparent border-0 border-b border-dashed border-[#d9b44a]/70 outline-none focus:border-solid focus:border-[#1f3a68] transition-colors'
+
+  if (evidence) return <SourceEvidence target={evidence} onClose={() => setEvidence(null)}
+    onConversation={(id, messageId) => { setEvidence(null); openConv(id, undefined, messageId) }} />
 
   /* --- 会话视图（消息流按她的聊天页组件样式：thinking 折叠在上方、
      时间戳在气泡下方、左char右我、75% 宽）--- */
   if (view) {
+    // Only join adjacent messages that share an exact binding; never bridge unbound messages.
+    const messageRanges: SrcMsg[][] = []
+    for (const message of view.msgs) {
+      const previous = messageRanges[messageRanges.length - 1]
+      const last = previous?.[previous.length - 1]
+      const continuesBinding = last?.memories_referencing?.some(reference =>
+        message.memories_referencing?.some(next => next.binding_id === reference.binding_id))
+      if (continuesBinding) previous.push(message)
+      else messageRanges.push([message])
+    }
     return (
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <button onClick={() => { setView(null); setBindings([]) }} className="text-sm text-[#1f3a68]">‹ 全部会话</button>
-          <span className="text-[11px] text-[#a8862c]">{view.conv.message_count} 条 · {fmtTime(view.conv.first_message_at)} → {fmtTime(view.conv.last_message_at)}</span>
+        <div ref={toolbarRef} className="sticky z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 bg-[#fdfaf2] border-b border-[#e9dcb8]/60" style={{ top: 'var(--app-header-height, 0px)' }}>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <button onClick={closeConversation} className="shrink-0 py-1 text-sm text-[#1f3a68]">‹ {sHits ? '搜索结果' : '全部会话'}</button>
+            <span className="text-[10px] text-[#a8862c] tabular-nums">{view.total} 条 · {fmtTime(view.conv.first_message_at)} → {fmtTime(view.conv.last_message_at)}</span>
+          </div>
+          <h3 className="mt-1 serif font-bold text-lg text-[#1f3a68] break-words">{view.conv.title}</h3>
+          {view.totalPages > 1 && <Pager compact page={view.page} total={view.totalPages} onChange={goMessagePage} disabled={viewLoading} />}
         </div>
-        <h3 className="serif font-bold text-lg text-[#1f3a68]">{view.conv.title}</h3>
         {bindings.length > 0 && (
-          <p className="mt-1 text-[11.5px] text-[#7a5d14]">
+          <p className="mt-2 text-[11.5px] text-[#7a5d14]">
             这段会话被 {[...new Set(bindings.map((b) => b.memory_id))].length} 个记忆桶绑定 · 金色边条的消息段可点击跳桶
           </p>
         )}
         <div className="mt-4">
-          {view.msgs.map((m) => {
-            const sb = startBinding(m.sequence)
-            const inRange = bindingAt(m.sequence).length > 0
-            const isHuman = m.normalized_sender === 'human'
-            const isMain = isHuman || m.normalized_sender === 'assistant'
-            const time = (fmtTime(m.created_at) || '').slice(5, 16)
-            const steps: { kind: 'think' | 'tool'; text: string }[] = []
-            if (m.thinking_text) steps.push({ kind: 'think', text: m.thinking_text })
-            for (const s of m.thinking_summaries || []) steps.push({ kind: 'think', text: `官方思考摘要：${s}` })
-            if (m.has_tool_content) steps.push({ kind: 'tool', text: '工具调用（证据面）' })
-            return (
-              <div key={m.provider_message_id} className={`mb-7 ${inRange ? 'border-l-2 border-[#d9b44a] pl-3' : ''}`}>
-                {sb && (
-                  <button
-                    onClick={() => onOpen(sb.memory_id)}
-                    className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-full bg-[#f5ead0] text-[#1f3a68] text-[11.5px] active:scale-95 transition"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#d9b44a]" />
-                    已收入记忆《{bucketTitle(sb.memory_id)}》↗
-                  </button>
-                )}
-                {isMain ? (
-                  <div className={isHuman
-                    ? 'ml-auto flex w-[78%] flex-col items-end pr-[1em]'
-                    : 'flex w-[78%] flex-col items-start pl-[1em]'}>
-                    {/* thinking：上方折叠，点开才显示（她 2026-10-13 要求） */}
-                    {!isHuman && steps.length > 0 && <Thinking steps={steps} />}
-                    <div className={isHuman
-                      ? 'whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[#1f1e1d]'
-                      : 'serif whitespace-pre-wrap break-words text-[15.5px] leading-relaxed text-[#1f1e1d]'}>
-                      {m.text || '（无用户可见正文）'}
-                    </div>
-                    <div className={`mt-1 flex items-center ${isHuman ? 'pr-1.5' : 'pl-1.5'}`}>
-                      <span className="text-[11px] tabular-nums text-[#a3a099]">{time}</span>
-                    </div>
+          {messageRanges.map(messages => (
+            <div key={messages[0].message_id}
+              className={`mb-7 space-y-7 ${messages[0].memories_referencing?.length ? 'border-l-2 border-[#d9b44a] pl-3' : ''}`}>
+              {messages.map((m) => {
+                const references = m.memories_referencing || []
+                const isHuman = m.normalized_sender === 'human'
+                const isMain = isHuman || m.normalized_sender === 'assistant'
+                const time = (fmtTime(m.created_at) || '').slice(5, 16)
+                const steps: { kind: 'think' | 'tool'; text: string }[] = []
+                if (m.thinking_text) steps.push({ kind: 'think', text: m.thinking_text })
+                for (const s of m.thinking_summaries || []) steps.push({ kind: 'think', text: `官方思考摘要：${s}` })
+                if (m.has_tool_content) steps.push({ kind: 'tool', text: '工具调用（证据面）' })
+                return (
+                  <div key={m.message_id} data-source-id={m.message_id} data-source-seq={m.sequence}>
+                    {references.map(sb => (
+                      <button
+                        key={sb.binding_id}
+                        onClick={() => onOpen(sb.memory_id)}
+                        className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-full bg-[#f5ead0] text-[#1f3a68] text-[11.5px] active:scale-95 transition"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#d9b44a]" />
+                        已收入记忆《{bucketTitle(sb.memory_id)}》↗
+                      </button>
+                    ))}
+                    {isMain ? (
+                      <div className={isHuman
+                        ? 'ml-auto flex w-[78%] flex-col items-end pr-[1em]'
+                        : 'flex w-[78%] flex-col items-start pl-[1em]'}>
+                        {/* thinking：上方折叠，点开才显示（她 2026-10-13 要求） */}
+                        {!isHuman && steps.length > 0 && <Thinking steps={steps} />}
+                        <div className={isHuman
+                          ? 'min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed text-[#1f1e1d]'
+                          : 'min-w-0 max-w-full serif whitespace-pre-wrap [overflow-wrap:anywhere] text-[15.5px] leading-relaxed text-[#1f1e1d]'}>
+                          {m.text || '（无用户可见正文）'}
+                          {!!m.attachments?.length && <p className="mt-2 text-xs text-[#a8862c]">此消息含 {m.attachments.length} 个附件</p>}
+                        </div>
+                        <div className={`mt-1 flex items-center ${isHuman ? 'pr-1.5' : 'pl-1.5'}`}>
+                          <span className="text-[11px] tabular-nums text-[#a3a099]">{time}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-[#9aa3b8] text-center py-0.5">· {m.speaker_display || m.normalized_sender} ·（证据面，不入正文）·</p>
+                    )}
                   </div>
-                ) : (
-                  <p className="text-[11px] text-[#9aa3b8] text-center py-0.5">· {m.speaker_display || m.normalized_sender} ·（证据面，不入正文）·</p>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          ))}
         </div>
-        {view.more && (
-          <button onClick={loadMoreMsgs} className="mt-2 mx-auto block text-[12px] serif italic text-[#a8862c] border-b border-[#a8862c]/50">
-            加载更多消息 ↓
-          </button>
-        )}
+        {view.totalPages > 1 && <Pager page={view.page} total={view.totalPages} onChange={goMessagePage} disabled={viewLoading} />}
         {loading && <p className="mt-3 text-center text-[12px] text-[#a8862c]">加载中…</p>}
         {err && <p className="mt-3 text-[12px] text-[#c0392b]">{err}</p>}
       </div>
@@ -1223,14 +1448,14 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
   if (sHits) {
     return (
       <div>
-        <div className="flex items-center justify-between mb-2">
-          <button onClick={() => setSHits(null)} className="text-sm text-[#1f3a68]">‹ 返回会话列表</button>
-          <span className="text-[11px] text-[#a8862c]">原文命中 {sHits.length} 条 · 专项检索，不属于记忆召回</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <button onClick={() => { viewRequest.current++; searchRequest.current++; setViewLoading(false); setSearchLoading(false); setSHits(null); setErr('') }} className="text-sm text-[#1f3a68]">‹ 返回会话列表</button>
+          <span className="text-[11px] text-[#a8862c]">已加载 {sHits.length} 条{searchMore ? '，还有更多' : ''} · 原文专项检索</span>
         </div>
         <div className="border-t border-[#e6dcc3]">
           {sHits.map((h, i) => (
-            <button key={i} onClick={() => openConv(h.provider_conversation_id, h.sequence)}
-              className="w-full text-left py-2.5 border-b border-[#e6dcc3] hover:bg-[#f5ead0]/50 transition-colors">
+            <button key={h.message_id || i} disabled={viewLoading} onClick={() => openConv(h.conversation_id, undefined, h.message_id)}
+              className="block w-full text-left py-2.5 border-b border-[#e6dcc3] hover:bg-[#f5ead0]/50 transition-colors">
               <div className="flex items-baseline gap-2">
                 <span className="text-[11px] text-[#9aa3b8] tabular-nums shrink-0">{fmtTime(h.created_at)}</span>
                 <span className="text-[11.5px] text-[#a8862c] shrink-0">{h.speaker_display || h.normalized_sender}</span>
@@ -1241,6 +1466,9 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
           ))}
           {!sHits.length && <p className="py-16 text-center serif italic text-sm text-[#a8862c]">原文无命中（默认只查双方正文）</p>}
         </div>
+        {searchMore && <button disabled={loading} onClick={() => doSearch(true)} className="mx-auto my-4 block text-sm underline text-[#1f3a68]">加载更多</button>}
+        {loading && <p role="status" className="mt-3 text-xs text-[#a8862c]">读取中…</p>}
+        {err && <p role="alert" className="mt-3 text-xs text-[#c0392b]">{err}</p>}
       </div>
     )
   }
@@ -1248,26 +1476,14 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
   /* --- 会话列表 --- */
   return (
     <div>
-      <div className="flex items-center gap-2 pb-2 border-b border-[#ece3cc]">
-        <h4 className="shrink-0 w-9 text-[11px] tracking-[0.15em] text-[#a8862c]">搜原文</h4>
-        <input value={sq} onChange={(e) => setSq(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && doSearch()}
-          placeholder="全文关键词（只查双方正文）…" className={`${line} flex-1 py-1.5 text-[14px] text-[#1f3a68] placeholder:text-[#c2b48f] placeholder:italic`} />
-        <select value={sSender} onChange={(e) => setSSender(e.target.value)}
-          className="shrink-0 text-[12px] text-[#7a5d14] bg-transparent border-0 border-b border-dashed border-[#d9b44a]/70 outline-none">
-          <option value="">双方</option>
-          <option value="human">只我的</option>
-          <option value="assistant">只他的</option>
-        </select>
-        <input type="date" value={sFrom} onChange={(e) => setSFrom(e.target.value)} className={`${line} w-[7.5rem] py-1 text-[12px] text-[#7a5d14] tabular-nums`} />
-        <input type="date" value={sTo} onChange={(e) => setSTo(e.target.value)} className={`${line} w-[7.5rem] py-1 text-[12px] text-[#7a5d14] tabular-nums`} />
-        <button onClick={doSearch} className="shrink-0 serif italic text-[13px] text-[#1f3a68] px-1 border-b border-[#1f3a68]">搜索</button>
-      </div>
+      <SourceSearchForm keyword={sq} onKeywordChange={setSq} sender={sSender} onSenderChange={setSSender}
+        from={sFrom} onFromChange={setSFrom} to={sTo} onToChange={setSTo}
+        disabled={loading || importBusy} onSearch={() => doSearch()} />
 
-      <div className="flex items-baseline mt-4 mb-1">
-        <h3 className="serif font-bold text-lg text-[#1f3a68] flex-1">原文会话（最新在前）</h3>
-        <button onClick={() => fileRef.current?.click()} className="text-[12px] text-[#a8862c] border-b border-[#a8862c]/50">
-          {importing ? '导入…' : '导入 conversations.json / zip / md'}
+      <div className="flex items-baseline mt-3 mb-1">
+        <h3 className="serif font-bold text-lg text-[#1f3a68] flex-1">原文会话</h3>
+        <button onClick={() => fileRef.current?.click()} disabled={loading || importBusy} className="text-[12px] text-[#a8862c] border-b border-[#a8862c]/50">
+          {importBusy ? '导入中…' : '导入'}
         </button>
         <input ref={fileRef} type="file" accept=".json,.zip,.md,.markdown" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.target.value = '' }} />
@@ -1276,14 +1492,13 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
 
       <div className="border-t border-[#e6dcc3]">
         {convs.map((c) => (
-          <button key={c.id} onClick={() => openConv(c.id)}
-            className="w-full text-left py-2.5 border-b border-[#e6dcc3] hover:bg-[#f5ead0]/50 transition-colors">
+          <button key={c.id} disabled={loading || importBusy} onClick={() => openConv(c.id)}
+            className="block w-full text-left py-2.5 border-b border-[#e6dcc3] hover:bg-[#f5ead0]/50 transition-colors">
             <div className="flex items-baseline gap-2">
               <span className="serif font-bold text-[14px] text-[#1f3a68] truncate flex-1">{c.title || '（未命名会话）'}</span>
               <span className="text-[11px] text-[#a8862c] tabular-nums shrink-0">{(fmtTime(c.first_message_at) || '').slice(0, 10)}</span>
               <span className="text-[11px] text-[#9aa3b8] shrink-0">{c.message_count} 条</span>
             </div>
-            {c.summary && <p className="mt-0.5 text-[12px] text-[#7d8aa8] line-clamp-1">{c.summary.replace(/\s+/g, ' ')}</p>}
           </button>
         ))}
         {!convs.length && !loading && (
@@ -1293,12 +1508,8 @@ function SourcePage({ jump, clearJump, buckets, onOpen, refreshBuckets }: {
             <p className="mt-1 text-[11px] text-[#b5ad98]">导入 Claude 官方导出的 conversations.json 开始</p>
           </div>
         )}
-        {hasMore && (
-          <button onClick={() => loadConvs(convs.length)} className="w-full py-2.5 text-center text-[12px] text-[#a8862c] serif italic border-b border-[#e6dcc3]">
-            加载更多（已显示 {convs.length}{total ? ` / ${total}` : ''}）
-          </button>
-        )}
       </div>
+      {listTotalPages > 1 && <Pager page={listPage} total={listTotalPages} onChange={(p) => loadConvs(p, true)} disabled={loading || importBusy} />}
       {loading && <p className="py-3 text-center text-[12px] text-[#a8862c]">加载中…</p>}
       {err && <p className="mt-2 text-[12px] text-[#c0392b]">{err}</p>}
     </div>
@@ -1311,32 +1522,14 @@ type Query = { from: string; to: string; cats: string[]; catMode: Mode; moods: s
 const EMPTY_Q: Query = { from: '', to: '', cats: [], catMode: 'any', moods: [], moodMode: 'any', kw: '', kwMode: 'any' }
 const terms = (kw: string) => kw.trim().split(/\s+/).filter(Boolean)
 
-async function runRealQuery(q: Query): Promise<{ ids: string[]; more: boolean }> {
-  // D04：同字段 any/all=category_match/mood_match；跨维度交集由服务端池过滤
+type SearchResult = { hits: { memory_id: string; memory_version?: number }[]; next_cursor?: string[] | null; pool_truncated?: boolean }
+async function runRealQuery(q: Query, cursor?: string[] | null): Promise<SearchResult> {
   const filters: Record<string, unknown> = {}
   if (q.cats.length) { filters.categories = q.cats; filters.category_match = q.catMode }
   if (q.moods.length) { filters.mood_tags = q.moods; filters.mood_match = q.moodMode }
-  if (q.from || q.to) filters.event_date = { from: q.from || null, to: q.to || null }
-  const ts = terms(q.kw)
-  const call = (query: string) => api<{ hits: { memory_id: string }[]; next_cursor?: any }>(
-    'memory.recall', { query, filters, limit: 100 })
-  if (!ts.length) {
-    const d = await call('')
-    return { ids: d.hits.map((h) => h.memory_id), more: !!d.next_cursor }
-  }
-  // 关键词语义（后端=整串短语引擎）：any=逐词真实检索取并集；all=逐词取交集
-  const per = await Promise.all(ts.map((t) => call(t)))
-  const sets = per.map((d) => d.hits.map((h) => h.memory_id))
-  let ids: string[]
-  if (ts.length === 1) ids = sets[0]
-  else if (q.kwMode === 'any') {
-    const seen = new Set<string>(); ids = []
-    for (const s of sets) for (const id of s) if (!seen.has(id)) { seen.add(id); ids.push(id) }
-  } else {
-    const [first, ...rest] = sets
-    ids = first.filter((id) => rest.every((s) => s.includes(id)))
-  }
-  return { ids, more: per.some((d) => !!d.next_cursor) }
+  if (q.from || q.to) filters.event_date = { ...(q.from ? { from: q.from } : {}), ...(q.to ? { to: q.to } : {}) }
+  return api<SearchResult>('memory.recall', { query: '', lexical_terms: terms(q.kw), keyword_match: q.kwMode,
+    filters, limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) })
 }
 
 function Highlight({ text, ts }: { text: string; ts: string[] }) {
@@ -1365,12 +1558,12 @@ const Row = ({ label, children, toggleEl }: { label: string; children: React.Rea
   </div>
 )
 
-function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
+function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods, onLoaded }: {
   q: Query; setQ: (q: Query) => void
   buckets: Bucket[]; byId: (id: string) => Bucket | undefined
-  onOpen: (id: string) => void; lastId: string | null; moods: string[]
+  onOpen: (id: string) => void; lastId: string | null; moods: string[]; onLoaded: (bucket: Bucket) => void
 }) {
-  const [result, setResult] = useState<{ ids: string[]; more: boolean } | null>(null)
+  const [result, setResult] = useState<{ ids: string[]; nextCursor?: string[] | null; partial: boolean } | null>(null)
   const [running, setRunning] = useState(false)
   const [err, setErr] = useState('')
   const ts = terms(q.kw)
@@ -1382,21 +1575,31 @@ function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
 
   // 条件一变即查（真实引擎；350ms 防抖）
   const runRef = useRef(0)
-  const run = async () => {
+  const runningRef = useRef(false)
+  const run = async (append = false) => {
+    if (append && runningRef.current) return
     const my = ++runRef.current
-    setRunning(true); setErr('')
+    runningRef.current = true; setRunning(true); setErr('')
     try {
-      const r = await runRealQuery(q)
-      if (my === runRef.current) setResult(r)
+      const r = await runRealQuery(q, append ? result?.nextCursor : null)
+      const missing = r.hits.filter(h => !byId(h.memory_id) || (h.memory_version != null && byId(h.memory_id)?.version !== h.memory_version))
+      const fresh = await loadBucketsByIds(missing.map(h => h.memory_id))
+      if (my !== runRef.current) return
+      fresh.forEach(onLoaded)
+      setResult(previous => ({ ids: [...new Set([...(append ? previous?.ids || [] : []), ...r.hits.map(h => h.memory_id)])],
+        nextCursor: r.next_cursor, partial: !!r.pool_truncated || (append && !!previous?.partial) }))
     } catch (e) {
-      if (my === runRef.current) { setResult({ ids: [], more: false }); setErr(e instanceof Error ? e.message : String(e)) }
-    } finally { if (my === runRef.current) setRunning(false) }
+      if (my === runRef.current) setErr(errorMessage(e))
+    } finally { if (my === runRef.current) { runningRef.current = false; setRunning(false) } }
   }
   useEffect(() => {
-    if (!active) { setResult(null); return }
-    const t = setTimeout(run, 350)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    runRef.current++; runningRef.current = false
+    setResult(null); setErr(''); setRunning(false)
+    if (!active) return
+    if (q.from && q.to && q.from > q.to) { setErr('开始日期不能晚于结束日期'); return }
+    setRunning(true)
+    const t = setTimeout(() => run(), 350)
+    return () => { clearTimeout(t); runRef.current++; runningRef.current = false }
   }, [q])
 
   const res = useMemo(() => {
@@ -1404,7 +1607,7 @@ function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
     return result.ids.map((id) => byId(id)).filter(Boolean) as Bucket[]
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, buckets])
-  const shown = res.slice(0, 60)
+  const shown = res
 
   return (
     <div className="lg:grid lg:grid-cols-[340px_1fr] lg:gap-8">
@@ -1455,7 +1658,7 @@ function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
       <div className="mt-4 lg:mt-0">
         <div className="flex items-baseline mb-1">
           <span className="serif text-[#1f3a68]">
-            {active && !running && <>找到 <b className="text-lg">{res.length}</b> 段记忆</>}
+            {active && !running && <>已加载 <b className="text-lg">{res.length}</b> 段记忆</>}
             {running && <span className="text-[13px] italic text-[#a8862c]">检索中…</span>}
           </span>
           {active && (
@@ -1488,9 +1691,10 @@ function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
                 </span>
               </article>
             ))}
-            {!running && res.length === 0 && <p className="py-16 text-center serif italic text-sm text-[#a8862c]">没有符合的记忆，换个条件试试</p>}
-            {res.length > 60 && <p className="py-3 text-center text-[11px] text-[#9aa3b8]">仅显示前 60 条，可继续缩小条件</p>}
-            {res.length <= 60 && result?.more && <p className="py-3 text-center text-[11px] text-[#9aa3b8]">后端还有更多页未列出（当前页上限 100/次）</p>}
+            {!running && !err && result && res.length === 0 && <p className="py-16 text-center serif italic text-sm text-[#a8862c]">{result.partial ? "本次查询范围内未找到匹配，结果不完整" : "没有符合的记忆，换个条件试试"}</p>}
+            {result?.nextCursor && <button disabled={running} onClick={() => run(true)} className="mx-auto my-4 block text-sm underline text-[#1f3a68]">{running ? '读取中…' : '加载更多'}</button>}
+            {result?.partial && <p role="status" className="py-3 text-center text-xs text-[#a8622c]">检索达到候选范围上限，当前结果不完整；请缩小条件。</p>}
+            {err && <button disabled={running} onClick={() => run(!!result?.nextCursor)} className="my-3 text-xs underline text-[#1f3a68]">重试检索</button>}
           </div>
         )}
         {err && <p className="mt-2 text-[12px] text-[#c0392b]">{err}</p>}
@@ -1501,30 +1705,35 @@ function SearchPage({ q, setQ, buckets, byId, onOpen, lastId, moods }: {
 
 /* ---------- I 抽屉（视觉原样；内容=i.items.list 真实条目） ---------- */
 function SelfDrawer({ open, onClose, buckets, onOpen }: { open: boolean; onClose: () => void; buckets: Bucket[]; onOpen: (id: string) => void }) {
-  const [items, setItems] = useState<{ item_id: string; content: string; updated_at?: string; ids: string[] }[]>([])
+  const [items, setItems] = useState<{ item_id: string; revision: number; content: string; updated_at?: string; ids: string[]; relationsLoaded?: boolean }[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [relationsBusy, setRelationsBusy] = useState('')
+  const request = useRef(0)
+  const load = async () => {
+    const current = ++request.current
+    setLoading(true); setError('')
+    try {
+      const data = await api<{ items: Omit<(typeof items)[number], 'ids'>[] }>('i.items.list', {})
+      if (current === request.current) setItems(data.items.map(item => ({ ...item, ids: [] })))
+    } catch (e) { if (current === request.current) setError(errorMessage(e)) }
+    finally { if (current === request.current) setLoading(false) }
+  }
   useEffect(() => {
-    if (!open || items.length || loading) return
-    setLoading(true)
-    ;(async () => {
-      try {
-        const d = await api<{ items: any[] }>('i.items.list', {})
-        const out = []
-        for (const it of d.items || []) {
-          let ids: string[] = []
-          try {
-            const r = await api<any>('relations.list', { item_id: it.item_id, revision: it.revision })
-            const s = new Set<string>()
-            collectMemoryIds(r, s)
-            ids = [...s].filter((id) => buckets.some((b) => b.memory_id === id))
-          } catch { /* 无关联即空 */ }
-          out.push({ item_id: it.item_id, content: it.content, updated_at: it.updated_at, ids })
-        }
-        setItems(out)
-      } catch { /* 未登录等场景静默 */ } finally { setLoading(false) }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (open) load()
+    return () => { request.current++ }
   }, [open])
+  const loadRelations = async (item: (typeof items)[number]) => {
+    if (relationsBusy) return
+    const current = request.current
+    setRelationsBusy(item.item_id); setError('')
+    try {
+      const result = await api('relations.list', { item_id: item.item_id, revision: item.revision })
+      const ids = new Set<string>(); collectMemoryIds(result, ids)
+      if (current === request.current) setItems(previous => previous.map(it => it.item_id === item.item_id ? { ...it, ids: [...ids], relationsLoaded: true } : it))
+    } catch (e) { if (current === request.current) setError(errorMessage(e)) }
+    finally { setRelationsBusy('') }
+  }
 
   return (
     <Drawer open={open} side="right" onClose={onClose} glass>
@@ -1542,8 +1751,10 @@ function SelfDrawer({ open, onClose, buckets, onOpen }: { open: boolean; onClose
       </div>
 
       <div className="relative flex-1 overflow-y-auto px-4 pb-6 space-y-3">
+        <button disabled={loading} onClick={load} className="text-xs underline text-[#a8862c]">刷新条目</button>
+        {error && <p role="alert" className="text-xs text-[#c0392b]">{error}</p>}
         {loading && <p className="text-center text-[12px] text-[#a8862c] py-10">读取中…</p>}
-        {!loading && !items.length && (
+        {!loading && !error && !items.length && (
           <div className="text-center py-10">
             <Butterfly className="w-10 h-8 flutter mx-auto opacity-70" />
             <p className="mt-2 serif italic text-sm text-[#a8862c]">还没有自我认知条目</p>
@@ -1560,6 +1771,8 @@ function SelfDrawer({ open, onClose, buckets, onOpen }: { open: boolean; onClose
               <span className="serif text-[#d9b44a] text-lg leading-none mr-0.5">“</span>
               {it.content}
             </p>
+            {!it.relationsLoaded && <button disabled={!!relationsBusy} onClick={() => loadRelations(it)} className="mt-2 text-xs underline text-[#1f3a68]">{relationsBusy === it.item_id ? '读取关联中…' : '查看关联记忆'}</button>}
+            {it.relationsLoaded && !it.ids.length && <p className="mt-2 text-xs text-[#8a7a52]">没有关联记忆</p>}
             {it.ids.length > 0 && (
               <div className="mt-2.5 pt-2 border-t border-white/80">
                 <p className="flex items-center gap-1 text-[10.5px] tracking-[0.15em] text-[#8a7a52] mb-1.5">
@@ -1592,7 +1805,7 @@ function SelfDrawer({ open, onClose, buckets, onOpen }: { open: boolean; onClose
 }
 
 /* ---------- 后台页（新增：判断开关/向量状态/维护任务/审计日志——全部真实接口） ---------- */
-function AdminPage({ bucketsCount }: { bucketsCount: number }) {
+function AdminPage({ bucketsCount, onChanged }: { bucketsCount: number; onChanged: () => void | Promise<void> }) {
   const [policy, setPolicy] = useState<any>(null)
   const [policyRevision, setPolicyRevision] = useState(0)
   const [enabled, setEnabled] = useState(false)
@@ -1602,59 +1815,75 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
   const [settings, setSettings] = useState<any>(null)
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
 
-  const loadAll = async () => {
-    setErr('')
-    try {
-      const [p, a, j, o, s] = await Promise.all([
-        api<any>('maintenance.recall_policy.get', {}),
-        api<{ events: any[] }>('maintenance.activity.list', { limit: 100 }),
-        api<any>('maintenance.jobs.status', {}),
-        api<any>('maintenance.outbox.status', {}),
-        api<any>('maintenance.settings.get', {}),
-      ])
-      setPolicy(p); setPolicyRevision(p.revision || 0)
-      setEnabled(p.enabled === true)
-      setActivity(a.events || []); setJobs(j); setOutbox(o); setSettings(s)
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
+  const inflight = useRef(false)
+  const request = useRef(0)
+  const activityRequest = useRef(0)
+  const [eventTypes, setEventTypes] = useState<string[]>([])
+  const [eventType, setEventType] = useState('')
+  const canWrite = session.principal === 'qiaosheng'
+  const loadAll = async (clearError = true) => {
+    const current = ++request.current
+    activityRequest.current++
+    if (clearError) setErr('')
+    const results = await Promise.allSettled([
+      api<any>('maintenance.recall_policy.get', {}),
+      api<{ events: any[] }>('maintenance.activity.list', { limit: 100 }),
+      api<any>('maintenance.jobs.status', {}), api<any>('maintenance.outbox.status', {}),
+      api<any>('maintenance.settings.get', {}),
+    ])
+    if (current !== request.current) return
+    const [p, a, j, o, s] = results
+    if (p.status === 'fulfilled') { setPolicy(p.value); setPolicyRevision(p.value.revision || 0); setEnabled(p.value.enabled === true) }
+    if (a.status === 'fulfilled') { setActivity(a.value.events || []); setEventTypes([...new Set<string>((a.value.events || []).map((event: any) => event.event_type))]); setEventType('') }
+    if (j.status === 'fulfilled') setJobs(j.value)
+    if (o.status === 'fulfilled') setOutbox(o.value)
+    if (s.status === 'fulfilled') setSettings(s.value)
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failures.length) setErr(failures.map(result => errorMessage(result.reason)).join('；'))
   }
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => { loadAll(); return () => { request.current++; activityRequest.current++ } }, [])
 
   const savePolicy = async () => {
-    if (enabled && !policy?.provider) { setErr('开启判断需要先在环境变量配好 provider（MARIPOSA_RECALL_JUDGE_PROVIDER，见 mariposa.env.example）'); return }
-    if (!enabled && !window.confirm('确认关闭判断？关闭后不调用任何判断模型，本次检索的合法候选全集将按页全部交给char自行判断。')) return
-    setErr(''); setBusy('保存中…')
-    const idem = 'ui-judge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
+    if (!canWrite || inflight.current || !policy) return
+    if (enabled && !policy.provider) { setErr('判断服务尚未配置，请先完成服务配置'); return }
+    if (!enabled && !window.confirm('确认关闭判断？关闭后检索候选将按页交给char自行判断。')) return
+    inflight.current = true; setErr(''); setBusy('保存中…')
+    const idem = operationId('ui-judge')
     try {
-      await api('maintenance.recall_policy.update', {
-        expected_revision: policyRevision, enabled,
-        provider: policy?.provider || null,
-        model_id: policy?.model_id || null,
-        idempotency_key: idem,
-      }, idem)
-      setBusy(''); loadAll()
-    } catch (e) {
-      setBusy(''); setErr(e instanceof Error ? e.message : String(e)); loadAll()
-    }
+      await api('maintenance.recall_policy.update', { expected_revision: policyRevision, enabled,
+        provider: policy.provider || null, model_id: policy.model_id || null, idempotency_key: idem }, idem)
+      await loadAll()
+    } catch (e) { await loadAll(false); setErr(errorMessage(e)) }
+    finally { inflight.current = false; setBusy('') }
   }
-
   const warmup = async () => {
-    setErr(''); setBusy('向量预热中…')
+    if (!canWrite || inflight.current) return
+    inflight.current = true; setErr(''); setNotice(''); setBusy('向量预热中…')
     try {
-      const d = await api<any>('maintenance.semantic.warmup', {})
-      setBusy('预热完成：' + JSON.stringify(d).slice(0, 120))
-    } catch (e) { setBusy(''); setErr(e instanceof Error ? e.message : String(e)) }
+      await api('maintenance.semantic.warmup', {})
+      setNotice('向量预热完成')
+    } catch (e) { setBusy(''); setErr(errorMessage(e)) }
+    finally { inflight.current = false; setBusy('') }
+  }
+  const filterActivity = async (type: string) => {
+    const current = ++activityRequest.current
+    setEventType(type); setErr('')
+    try {
+      const data = await api<{ events: any[] }>('maintenance.activity.list', { limit: 100, ...(type ? { event_type: type } : {}) })
+      if (current === activityRequest.current) setActivity(data.events)
+    } catch (e) { if (current === activityRequest.current) setErr(errorMessage(e)) }
   }
 
   const card = 'rounded-2xl bg-white/70 border border-[#e6dcc3] px-4 pt-3 pb-3.5'
   const modeText = policy ? ({ on: '判断开启（' + (policy.provider || '?') + '）', off: '判断关闭（候选全集分页交付）', unconfigured: '未配置（判断通道阻断：候选正文不直出）' } as any)[policy.mode] || policy.mode : '…'
   const readiness = policy?.provider_readiness || {}
-  const eventTypes = [...new Set(activity.map((e) => e.event_type))]
 
   return (
     <div className="space-y-5">
       <p className="text-[11px] text-[#b5ad98] leading-relaxed">
-        打开本页不调用任何模型；政策仅你本人（qiaosheng）可写。共 {bucketsCount} 个记忆桶。
+        打开本页不调用任何模型；召回政策仅宿主用户可修改。共 {bucketsCount} 个记忆桶。
       </p>
 
       {/* 召回判断 */}
@@ -1670,19 +1899,17 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
         </div>
         <div className="mt-2.5 flex items-center gap-2 flex-wrap">
           <label className="flex items-center gap-1.5 text-[13px] text-[#1f3a68]">
-            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <input type="checkbox" disabled={!canWrite || !!busy || !policy} checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
             启用判断
           </label>
-          <button onClick={savePolicy} className="px-3 py-1.5 rounded-full bg-[#1f3a68] text-[#f6e3a8] text-[12.5px] active:scale-95 transition">保存</button>
-          <button onClick={loadAll} className="px-3 py-1.5 rounded-full border border-[#d9b44a] text-[#7a5d14] text-[12.5px]">刷新</button>
+          <button disabled={!canWrite || !!busy || !policy} onClick={savePolicy} className="px-3 py-1.5 rounded-full bg-[#1f3a68] text-[#f6e3a8] text-[12.5px] active:scale-95 transition">保存</button>
+          <button disabled={!!busy} onClick={() => loadAll()} className="px-3 py-1.5 rounded-full border border-[#d9b44a] text-[#7a5d14] text-[12.5px]">刷新</button>
         </div>
         {policy?.mode === 'unconfigured' && (
           <p className="mt-2 text-[11.5px] text-[#a8622c]">尚未选择判断模式：这不等于"关闭"。配置前候选正文不直出。</p>
         )}
         <p className="mt-2 text-[11px] text-[#b5ad98] leading-relaxed">
-          provider/模型/key 都在环境变量里配（仓库 mariposa.env.example 有样板，生产在
-          ~/Data/mariposa-secrets/start.sh 注入后 kickstart）；本页只有开关，就绪状态如实显示
-          api_key_missing 等原因——秘密不经屏。
+          本页显示服务配置与就绪状态。需要更换服务时由维护人员修改配置；密钥不会显示在页面。
         </p>
       </section>
 
@@ -1699,8 +1926,8 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
         <p className="mt-1 text-[11px] text-[#b5ad98] leading-relaxed">
           本地模型无需在此配置：端点/模型名由部署环境注入，这里只读状态。语义检索未配置时关键词检索照常工作。
         </p>
-        <button onClick={warmup} className="mt-2 px-3 py-1.5 rounded-full border border-[#d9b44a] text-[#7a5d14] text-[12.5px]">
-          预热语义向量（maintenance.semantic.warmup）
+        <button disabled={!canWrite || !!busy} onClick={warmup} className="mt-2 px-3 py-1.5 rounded-full border border-[#d9b44a] text-[#7a5d14] text-[12.5px]">
+          预热语义向量
         </button>
       </section>
 
@@ -1708,7 +1935,7 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
       <section className={card}>
         <h3 className="serif font-bold text-[#1f3a68]">维护任务</h3>
         <div className="mt-1.5 flex gap-6 text-[13px] text-[#33405f] flex-wrap">
-          <span>outbox 待处理 <b className="serif">{outbox?.pending ?? '—'}</b> / {outbox?.total ?? '—'}</span>
+          <span>{outbox?.status === 'historical_readonly' ? '历史事件记录（只读）' : '事件记录'} <b className="serif">{outbox?.total ?? '—'}</b> 条</span>
           {jobs?.import_jobs && Object.entries(jobs.import_jobs).map(([k, v]) => (
             <span key={k}>导入 {k} <b className="serif">{String(v)}</b></span>
           ))}
@@ -1719,9 +1946,7 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
       <section className={card}>
         <div className="flex items-baseline gap-2">
           <h3 className="serif font-bold text-[#1f3a68] flex-1">审计日志（最近 {activity.length} 条）</h3>
-          <select onChange={(e) => e.target.value ? (async () => {
-            try { const d = await api<{ events: any[] }>('maintenance.activity.list', { limit: 100, event_type: e.target.value }); setActivity(d.events || []) } catch { }
-          })() : loadAll()} className="text-[12px] text-[#7a5d14] bg-transparent border-b border-dashed border-[#d9b44a]/70 outline-none">
+          <select aria-label="审计事件类型" value={eventType} onChange={(e) => filterActivity(e.target.value)} className="text-[12px] text-[#7a5d14] bg-transparent border-b border-dashed border-[#d9b44a]/70 outline-none">
             <option value="">全部类型</option>
             {eventTypes.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
@@ -1740,6 +1965,8 @@ function AdminPage({ bucketsCount }: { bucketsCount: number }) {
         </div>
       </section>
 
+      <DeletionRequests onChanged={onChanged} />
+      {notice && <p role="status" className="text-xs text-[#a8862c]">{notice}</p>}
       {busy && <p className="text-[12px] text-[#a8862c]">{busy}</p>}
       {err && <p className="text-[12px] text-[#c0392b]">{err}</p>}
     </div>

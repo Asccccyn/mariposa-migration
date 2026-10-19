@@ -170,7 +170,8 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                 "后自动解除）", code="AUTH_LOCKED", http_status=423,
                 retry_after=_lock_s)
         token = _bearer(request)
-        principal = identity.authenticate(token)
+        from starlette.concurrency import run_in_threadpool
+        principal = await run_in_threadpool(identity.authenticate, token)
     except _ME as e:
         if e.code == "UNAUTHENTICATED":
             # 认证失败才占匿名档（GATE-01：成功请求不占）

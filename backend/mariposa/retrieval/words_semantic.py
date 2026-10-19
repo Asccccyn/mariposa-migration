@@ -2,7 +2,7 @@
 
 - 索引父单位 = 稳定 word_id（一条完整 authored our_word 一个向量；
   不把所有话拼一个向量，不塞进 event 向量空间）；
-- 向量身份绑定：词文本 hash + speaker/expression_kind/source_ref/
+- 向量身份绑定：词文本 hash + speaker/source_ref/
   所属 memory 版本 + 语料 generation（wordbody-v1）——任一变化失效；
 - 阈值独立于 event（待专项评测校准，不复制 event 经验值）；
 - provider 未配置显式不可用，不伪造相似度（HYBRID-07 同源原则）。
@@ -86,13 +86,12 @@ CREATE TABLE IF NOT EXISTS word_embeddings(
   ON word_embeddings(model)""")
 
 
-def _word_fingerprint(text: str, speaker, expression_kind, source_ref,
+def _word_fingerprint(text: str, speaker, source_ref,
                       memory_version) -> str:
     import hashlib
     import json as _json
     basis = _json.dumps({
         "text": text, "speaker": speaker,
-        "expression_kind": expression_kind,
         "source_ref": source_ref,
         "memory_version": str(memory_version or ""),
         "corpus": CORPUS_GENERATION,
@@ -100,11 +99,11 @@ def _word_fingerprint(text: str, speaker, expression_kind, source_ref,
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
-def reindex_word(conn, word_id: str, text: str, speaker, expression_kind,
+def reindex_word(conn, word_id: str, text: str, speaker,
                  source_ref, memory_version) -> bool:
     """按当前词身份重建向量；无文本/无 provider 清理并返回 False。"""
     ensure_schema(conn)
-    fp = _word_fingerprint(text, speaker, expression_kind, source_ref,
+    fp = _word_fingerprint(text, speaker, source_ref,
                            memory_version)
     cached = conn.execute(
         "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
@@ -132,7 +131,7 @@ def reindex_word(conn, word_id: str, text: str, speaker, expression_kind,
 def words_semantic_search(conn, query: str, limit: int = 20,
                           extra_where: list[str] | None = None,
                           extra_params: list[str] | None = None) -> dict:
-    """可见 words 上余弦检索。候选定位复用 words_search_docs 池
+    """可见 words 上余弦检索。候选定位直接读取 memory_our_words 正表
     （speaker/日期等条件由调用方 SQL 前置），返回 word 命中卡。
 
     全量审计 P1-04：不再用裸 list 表达"结果"与"运行状态"两种语义
@@ -147,7 +146,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
     scope = list(extra_where or [])
     sp = list(extra_params or [])
     pool_sql = ("SELECT w.word_id, w.text, w.speaker,"
-                " w.expression_kind, w.source_ref,"
+                " w.source_ref,"
                 " w.source_binding_version, w.memory_id,"
                 " m.current_version_no FROM memory_our_words w"
                 " JOIN memories m ON m.memory_id = w.memory_id"
@@ -163,7 +162,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
     pending = 0
     for r in rows:
         fp = _word_fingerprint(r["text"], r["speaker"],
-                               r["expression_kind"], r["source_ref"],
+                               r["source_ref"],
                                r["current_version_no"])
         valid = conn.execute(
             "SELECT 1 FROM word_embeddings WHERE word_id=? AND model=?"
@@ -172,7 +171,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
         if not valid:
             if budget > 0:
                 reindex_word(conn, r["word_id"], r["text"], r["speaker"],
-                             r["expression_kind"], r["source_ref"],
+                             r["source_ref"],
                              r["current_version_no"])
                 budget -= 1
             else:
@@ -182,7 +181,7 @@ def words_semantic_search(conn, query: str, limit: int = 20,
     scored = []
     for r in rows:
         fp = _word_fingerprint(r["text"], r["speaker"],
-                               r["expression_kind"], r["source_ref"],
+                               r["source_ref"],
                                r["current_version_no"])
         vrow = conn.execute(
             "SELECT vector FROM word_embeddings WHERE word_id=? AND"
@@ -197,7 +196,6 @@ def words_semantic_search(conn, query: str, limit: int = 20,
             scored.append({
                 "word_id": r["word_id"], "memory_id": r["memory_id"],
                 "speaker": r["speaker"],
-                "expression_kind": r["expression_kind"],
                 "source_ref": r["source_ref"],
                 "source_binding_version": int(
                     r["source_binding_version"] or 0),

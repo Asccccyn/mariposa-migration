@@ -48,9 +48,9 @@ def _hard_gate(c: dict, plan: dict, rejected: set[str],
         cv = c.get("content_version")
         if jv and cv and str(jv) != str(cv):
             return False
-    # 证据等级不满足不是淘汰条件（RAWX-01：paraphrase 候选仍作为线索
-    # 交付并标 evidence_requirement_met=false，触发后续 raw 补查判定）；
-    # 硬门只管判断有效性/版本/用户 rejected/权限。
+    # 证据等级不满足不是淘汰条件（RAWX-01：无有效来源的候选仍作为
+    # 线索交付并标 evidence_requirement_met=false，触发后续 raw 补查
+    # 判定）；硬门只管判断有效性/版本/用户 rejected/权限。
     return True
 
 

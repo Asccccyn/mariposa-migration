@@ -242,8 +242,7 @@ class TestP14WordsIdentityAndEnvelope:
                 original_title="雨夜", categories=["daily"],
                 creation_mode="contemporaneous", raw_pending=False,
                 our_words=[{"speaker": "qiaosheng",
-                            "text": "窗外的梧桐叶落了",
-                            "expression_kind": "verbatim"}])
+                            "text": "窗外的梧桐叶落了"                            }])
             p = recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "梧桐",
                                "channels": ["event"],

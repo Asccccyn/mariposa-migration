@@ -184,11 +184,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                             "additionalProperties": False, "properties": {}},
     "jobs.status": {"type": "object", "additionalProperties": False,
                     "properties": {}},
-    "plan.get": {"type": "object", "required": ["plan_id"],
-                 "additionalProperties": False,
-                 "properties": {"plan_id": {"type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 256}}},
     "settings.get": {"type": "object", "additionalProperties": False,
                      "properties": {}},
     # R13 占位：blocked/reserved 能力——参数被忽略、能力被拒，占位显式
@@ -250,20 +245,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {"plan_id": {"type": "string", "minLength": 1}},
     },
-    "plan.complete": {
-        "type": "object", "required": ["plan_id", "expected_version"],
-        "additionalProperties": False,
-        "properties": {
-            "plan_id": {"type": "string", "minLength": 1},
-            "expected_version": {"type": "integer", "minimum": 1}},
-    },
-    "plan.cancel": {
-        "type": "object", "required": ["plan_id", "expected_version"],
-        "additionalProperties": False,
-        "properties": {
-            "plan_id": {"type": "string", "minLength": 1},
-            "expected_version": {"type": "integer", "minimum": 1}},
-    },
     "presence.status": {"type": "object", "additionalProperties": False,
                          "properties": {}},
     "source.binding.list": {"type": "object", "additionalProperties": False,
@@ -283,8 +264,19 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                                  "after_seq": {"type": "integer"},
                                                  "before_seq": {"type": "integer"},
                                                  "around_seq": {"type": "integer"},
-                                                 "after_cursor": {"type": "string"},
-                                                 "before_cursor": {"type": "string"}}},
+                                                 "around_message_id": {"type": "string", "minLength": 1},
+                                                 "page": {"type": "integer", "minimum": 1},
+                                                 "after_cursor": {"anyOf": [
+                                                     {"type": "string"},
+                                                     {"$ref": "#/$defs/cursor"}]},
+                                                 "before_cursor": {"anyOf": [
+                                                     {"type": "string"},
+                                                     {"$ref": "#/$defs/cursor"}]}},
+                                 "$defs": {"cursor": {
+                                     "type": "object", "required": ["seq", "id"],
+                                     "additionalProperties": False,
+                                     "properties": {"seq": {"type": "integer"},
+                                                    "id": {"type": "string", "minLength": 1}}}}},
     "source.conversations.list": {"type": "object",
                                    "additionalProperties": False,
                                    "properties": {"limit": {},
@@ -330,7 +322,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                            "end_char_offset": {"type": "integer",
                                                                 "minimum": 0},
                                            "include_content": {"type": "boolean"}}},
-    "source.search": {"type": "object", "required": ["query"],
+    "source.search": {"type": "object",
                        "additionalProperties": False,
                        "properties": {"query": {"type": "string",
                                                  "minLength": 1,
@@ -387,6 +379,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "required": ["memory_ids"],
         "additionalProperties": False,
         "properties": {
+            "include_memory": {"type": "boolean"},
             "memory_ids": {"type": "array", "minItems": 1, "maxItems": 100,
                            "items": {"type": "string", "minLength": 1}},
         },
@@ -468,15 +461,46 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "text": {"type": "string", "minLength": 1},
             "original_title": {"type": "string", "minLength": 1,
                                "maxLength": 30},
+            "categories": {"type": "array", "minItems": 1,
+                           "items": {"type": "string"}},
             "operation_id": {"type": "string"},
             "memory_date": {"anyOf": [{"type": "string"},
                                      {"type": "null"}]},
             "date_confidence": {"type": "string",
                                 "enum": ["exact", "inferred",
-                                         "unknown"]}},
+                                         "unknown"]},
+            # 2026-10-18 她裁定：话语新增/修改并入修改入口——只存原文，
+            # speaker 不收（服务端由出处推导），text 须为出处消息的
+            # 连续片段（逐字核验见 extras._derive_word）
+            "our_words_add": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["text", "source_ref"],
+                "properties": {
+                    "text": {"type": "string", "minLength": 1},
+                    "source_ref": {"type": "string", "minLength": 1}}}},
+            "our_words_revise": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["word_id", "text", "source_ref"],
+                "properties": {
+                    "word_id": {"type": "string", "minLength": 1},
+                    "text": {"type": "string", "minLength": 1},
+                    "source_ref": {"type": "string", "minLength": 1}}}}},
     },
     "memory.mood.vocab": {
         "type": "object", "additionalProperties": False, "properties": {},
+    },
+    "memory.mood.update": {
+        "type": "object", "required": ["memory_id", "mood"],
+        "additionalProperties": False,
+        "properties": {
+            "memory_id": {"type": "string", "minLength": 1},
+            "mood": {"type": "object",
+                     "additionalProperties": False,
+                     "properties": {
+                         "text": {"anyOf": [{"type": "string"},
+                                            {"type": "null"}]},
+                         "tags": {"type": "array", "maxItems": 3,
+                                  "items": {"type": "string"}}}}},
     },
     "memory.by_date": {
         "type": "object", "required": ["date"],
@@ -491,7 +515,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "category": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan",
-                "sex", "anniversary", "reloplay"]},
+                "sex", "anniversary", "reloplay", "diary"]},
             "limit": {},
             "next_cursor": {"type": "object"}},
     },
@@ -862,7 +886,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                "maxLength": 30},
             "categories": {"type": "array", "items": {"type": "string", "enum": [
                 "daily", "milestone", "sad", "sweet", "date", "plan", "sex",
-                "anniversary", "reloplay"]}},
+                "anniversary", "reloplay", "diary"]}},
             "plan_ids": {"type": "array",
                          "items": {"type": "string", "minLength": 1}},
             "mood": {"type": "object", "additionalProperties": False,
@@ -877,8 +901,6 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                 "properties": {
                     "speaker": {"type": "string", "enum": ["jiaming", "qiaosheng"]},
                     "text": {"type": "string", "minLength": 1},
-                    "expression_kind": {"type": "string", "enum": [
-                        "verbatim", "paraphrase", "unspecified"]},
                     "source_ref": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}},
             "creation_mode": {"type": "string",
                                "enum": ["contemporaneous", "retrospective"]},
@@ -978,14 +1000,10 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                 "speaker": {"type": "string",
                                              "enum": ["jiaming", "qiaosheng"]},
                                 "text": {"type": "string", "minLength": 1},
-                                # F-J-24（她批准 2026-10-06）：开放事后追加的
-                                # 两字段——服务端 provenance 校验不放松
-                                # （source_msg: 必须解析到已发布消息；概括
-                                # 不得标 verbatim）
-                                "expression_kind": {"type": "string",
-                                                     "enum": ["verbatim",
-                                                              "paraphrase",
-                                                              "unspecified"]},
+                                # F-J-24（她批准 2026-10-06）字段沿用——
+                                # 服务端 provenance 校验不放松（source_msg:
+                                # 必须解析到已发布消息）。话语只存原文
+                                # （2026-10-18 概括通道退役）
                                 "source_ref": {"anyOf": [
                                     {"type": "string"},
                                     {"type": "null"}]}}}}},
@@ -1002,7 +1020,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
             "categories": {"type": "array", "minItems": 1, "items": {
                 "type": "string", "enum": ["daily", "milestone", "sad", "sweet",
                                             "date", "plan", "sex", "anniversary",
-                                            "reloplay"]}}},
+                                            "reloplay", "diary"]}}},
     },
     "i.get": {"type": "object", "properties": {}, "additionalProperties": False},
     "i.write": {
@@ -1101,8 +1119,12 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "additionalProperties": False,
         "properties": {
             "query": {"type": "string"},
+            "lexical_terms": {"type": "array", "maxItems": 16,
+                              "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+            "keyword_match": {"type": "string", "enum": ["any", "all"]},
             "limit": {"type": "integer"},
-            "cursor": {"type": "array", "items": {"type": "string"}},
+            "cursor": {"type": "array", "items": {"anyOf": [
+                {"type": "string"}, {"type": "null"}]}},
             "filters": {"type": "object", "additionalProperties": False,
                          "properties": {
                              "categories": {"type": "array", "items": {

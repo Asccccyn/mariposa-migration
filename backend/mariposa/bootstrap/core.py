@@ -44,18 +44,63 @@ _ENTRY_ALLOWED = {
 }
 
 
-BOOT_RULES_VERSION = "boot_rules_v2.1"
+BOOT_RULES_VERSION = "boot_rules_v2.4"
 
-#: RRA-006：memory_days 段单页字节预算（UTF-8；给 plans/i/纪念日等
+#: RRA-006：memory_days 段单页字节预算（UTF-8；给 plans/i 等
 #: 其余段与信封骨架留约 12KB——整包 ≤24576）
 _MEMORY_DAY_PAGE_BUDGET_BYTES = 12000
+BOOT_ENVELOPE_MAX_BYTES = 24576
+
+
+def _envelope_bytes(packet: dict) -> int:
+    import json
+    return len(json.dumps({"ok": True, "data": packet},
+                          ensure_ascii=False).encode("utf-8"))
+
+
+def bound_packet(packet: dict, *, section: str | None = None,
+                 cursor: dict | None = None) -> dict:
+    """Fit the complete wire packet; every deferred item keeps a continuation.
+
+    First-page sections can be empty because their independent continuation
+    has the full page budget. A continuation must make progress or explicitly
+    reject an oversized metadata item, never emit an empty cursor loop.
+    """
+    from ..errors import Forbidden
+    cursor = cursor or {}
+    sections = ("plans", "memory_days") if section is None else (section,)
+    for name in sections:
+        if name not in ("plans", "memory_days"):
+            continue
+        part = packet.get(name, {}) if section is None else packet
+        items = part.get("items")
+        if not isinstance(items, list):
+            continue
+        minimum = 0 if section is None else 1
+        while len(items) > minimum and _envelope_bytes(packet) > BOOT_ENVELOPE_MAX_BYTES:
+            items.pop()
+            if name == "plans":
+                part["next_cursor"] = {"plans_offset": int(cursor.get("plans_offset") or 0) + len(items)}
+            else:
+                last = items[-1] if items else None
+                part["next_cursor"] = {
+                    "memory_before_date": (last["memory_date"] if last else
+                                           part["dates"][0]),
+                    "memory_last_id": last["memory_id"] if last else ""}
+            if "count" in part:
+                part["count"] = len(items)
+    if _envelope_bytes(packet) > BOOT_ENVELOPE_MAX_BYTES:
+        raise Forbidden("Bootstrap 单条元数据超过信封预算；请缩短标题或标识后重试",
+                        code="BOOTSTRAP_ITEM_TOO_LARGE",
+                        limit_bytes=BOOT_ENVELOPE_MAX_BYTES)
+    return packet
 
 
 def _state_hash(conn) -> str:
     """开窗依据资源的状态指纹：任一变化使旧 snapshot 失效（§12.2）。
 
     v2.1 修正成分缺口：业务日期/时区、规则版本与分页常量、记忆表示
-    版本、纪念日"定义"（改名不改 occurrences 行也要失效）。业务日期入
+    版本。业务日期入
     指纹 = 跨自然日旧快照必然 SNAPSHOT_STALE，不会继续吐前一天窗口。
     """
     import hashlib
@@ -71,8 +116,6 @@ def _state_hash(conn) -> str:
             ("memories", "updated_at", ", MAX(representation_state) AS e"),
             ("plans", "updated_at", ""),
             ("i_documents", "updated_at", ""),
-            ("anniversary_definitions", "created_at", ""),
-            ("anniversary_occurrences", "occurrence_date", ""),
             # CB-046（2026-10-02 审计 P2）：开窗实际展示的心情与分类
             # 进入指纹——COUNT+MAX(updated_at) 漏掉"改标签不改时间戳"
             # 的行级变化，mood.write/categories.replace 后旧快照仍
@@ -275,6 +318,8 @@ def _memory_slim(conn, memory_id: str,
     if mood is not None:
         item["mood_tags"] = [t["tag"] for t in tags]
         item["mood_text"] = mood["mood_text"]
+        if mood["mood_text"]:
+            _section_body(item, memory_id, "mood_text", mood["mood_text"])
     else:
         item["mood_tags"] = []
         item["mood_text"] = None  # 心情空白 ≠ 不重要（R05）

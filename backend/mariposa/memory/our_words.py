@@ -1,7 +1,8 @@
 """我们的话（spec_v2 R08）：桶内双方话语，按说话人与顺序保存。
 
-可原话（verbatim）可概括（paraphrase），不参与普通召回索引；
-来源匹配不得自动改写其表达。说话人固定真实两主体。
+只存原文（2026-10-18 她裁定：概括/转述通道退役，录入一律勾选式
+原文，说话人跟随出处）；不参与普通召回索引；来源匹配不得自动改写
+其表达。说话人固定真实两主体。
 """
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ from .. import audit, db
 from ..errors import Forbidden, NotFound
 
 SPEAKERS = ("jiaming", "qiaosheng")
-EXPRESSION_KINDS = ("verbatim", "paraphrase", "unspecified")
 
 
 def _now() -> str:
@@ -29,11 +29,7 @@ def _validate_word(w: dict) -> dict:
     text = w.get("text")
     if not isinstance(text, str) or not text.strip():
         raise Forbidden("word text required", code="INVALID_ARGUMENT")
-    kind = w.get("expression_kind", "unspecified")
-    if kind not in EXPRESSION_KINDS:
-        raise Forbidden("expression_kind must be verbatim/paraphrase/unspecified",
-                        code="INVALID_ARGUMENT", expression_kind=kind)
-    return {"speaker": speaker, "text": text.strip(), "expression_kind": kind,
+    return {"speaker": speaker, "text": text.strip(),
             "source_ref": w.get("source_ref")}
 
 
@@ -99,10 +95,10 @@ def append(principal_id: str, memory_id: str, words: list[dict]) -> dict:
                 ids.append(wid)
                 conn.execute(
                     "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                    " speaker, text, expression_kind, source_ref, created_by,"
-                    " created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    " speaker, text, source_ref, created_by, created_at)"
+                    " VALUES(?,?,?,?,?,?,?,?)",
                     (wid, memory_id, start + i, w["speaker"], w["text"],
-                     w["expression_kind"], w["source_ref"], principal_id, now))
+                     w["source_ref"], principal_id, now))
             audit.record(conn, "memory.our_words.appended", principal_id,
                          resource_id=memory_id, payload={"count": len(ids)})
             # v1.7 F5：话语变更后同事务刷新分字段投影
@@ -139,7 +135,7 @@ def list_for(memory_id: str) -> list[dict]:
 
     with db.formal() as conn:
         rows = conn.execute(
-            "SELECT word_id, ordinal, speaker, text, expression_kind,"
+            "SELECT word_id, ordinal, speaker, text,"
             " source_ref, created_by, created_at FROM memory_our_words"
             " WHERE memory_id=? ORDER BY ordinal", (memory_id,)).fetchall()
         gaps = {r["word_id"]: _gap_state(conn, r["source_ref"])
@@ -258,7 +254,6 @@ def correct_source(principal_id: str, word_id: str,
             original_instance_id=f"word:{word_id}",
             endpoint_a=row["memory_id"], endpoint_b=cur or "",
             original_meta={"source_ref": cur,
-                           "expression_kind": row["expression_kind"],
                            "source_binding_version": cur_version},
             original_created_by=row["created_by"],
             original_created_at=row["created_at"],

@@ -36,8 +36,7 @@ def _hold_words(actors, text, words):
         date_confidence="exact", original_title="p2w",
         categories=["daily"], creation_mode="contemporaneous",
         raw_pending=False,
-        our_words=[{"speaker": "qiaosheng", "text": w,
-                    "expression_kind": "paraphrase"} for w in words])
+        our_words=[{"speaker": "qiaosheng", "text": w                    } for w in words])
 
 
 # ---------------------------------------------------------------- F17

@@ -206,8 +206,8 @@ def _judge_prompt(query_plan: dict, candidates: list,
             return True  # 结构事实（无正文）恒可发
         # RRA-024（回访 2026-10-09）：映射覆盖**生产证据词表**
         # （retrieval/evidence.py EVIDENCE_KINDS）——此前只认自造的
-        # word_excerpt 等别名，生产合法 word_verbatim/word_paraphrase/
-        # word_unverified 均漏映射（role=None → 恒放行外发）。未映射
+        # word_excerpt 等别名，生产合法 word_verbatim/word_unverified
+        # 均漏映射（role=None → 恒放行外发）。未映射
         # 且带正文 → 拒绝（fail-closed，与 parse_grants 同口径）
         kind = ev.get("evidence_kind") or ""
         role = {
@@ -215,7 +215,6 @@ def _judge_prompt(query_plan: dict, candidates: list,
             "approved_summary": "event_excerpt",
             "event_excerpt": "event_excerpt",   # 兼容别名
             "word_verbatim": "word_excerpt",
-            "word_paraphrase": "word_excerpt",
             "word_unverified": "word_excerpt",
             "word_excerpt": "word_excerpt",     # 兼容别名
             "raw_verbatim": "source_excerpt",

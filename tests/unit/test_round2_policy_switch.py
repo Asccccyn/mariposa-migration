@@ -114,8 +114,7 @@ def _r1_scenario_off(actors, op="op-r2s"):
     set_policy(False)
     hold(actors["jiaming"], "崧蓝事件正文",
          our_words=[{"speaker": "qiaosheng",
-                     "text": "复述：崧蓝染色的傍晚",
-                     "expression_kind": "paraphrase"}])
+                     "text": "复述：崧蓝染色的傍晚"                     }])
     r1 = _start(actors, op=op)
     _seed_source()
     return r1["data"]
@@ -177,8 +176,7 @@ class TestR01OffModeRound2:
         set_policy(False)
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
-                         "text": "复述：崧蓝染色的傍晚",
-                         "expression_kind": "paraphrase"}])
+                         "text": "复述：崧蓝染色的傍晚"                         }])
         r1 = _start(actors, op="op-r3")  # Round1 完成
         sid = r1["data"]["recall_session_id"]
         # 伪造"无完成回执"：直接删回执行
@@ -223,8 +221,7 @@ class TestR04ProviderAgnosticGate:
         set_policy(True, provider="granted_generic")
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
-                         "text": "复述：崧蓝染色的傍晚",
-                         "expression_kind": "paraphrase"}])
+                         "text": "复述：崧蓝染色的傍晚"                         }])
         r1 = _start(actors, op="op-r4a")
         sid = r1["data"]["recall_session_id"]
         _seed_source()
@@ -244,8 +241,7 @@ class TestR04ProviderAgnosticGate:
         set_policy(True, provider="nogrant_generic")
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
-                         "text": "复述：崧蓝染色的傍晚",
-                         "expression_kind": "paraphrase"}])
+                         "text": "复述：崧蓝染色的傍晚"                         }])
         r1 = _start(actors, op="op-r4b")
         sid = r1["data"]["recall_session_id"]
         _seed_source()
@@ -263,8 +259,7 @@ class TestR05BatchPagination:
         set_policy(False)
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
-                         "text": "复述：崧蓝染色",
-                         "expression_kind": "paraphrase"}])
+                         "text": "复述：崧蓝染色"                         }])
         r1 = _start(actors, op="op-r5")
         sid = r1["data"]["recall_session_id"]
         # 种 20 条原文命中（一个会话 20 条消息）

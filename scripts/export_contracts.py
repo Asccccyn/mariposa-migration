@@ -4,12 +4,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "backend"))
-from mariposa import schema as _schema  # noqa: E402
-_schema.migrate()
-# CB-055：先完整初始化 registry 再挂 v1 兼容层（反序循环导入）
+# 纯代码导出；Registry 自行装配保留别名，不连接或迁移任何数据库。
 from mariposa.capabilities.registry import REGISTRY  # noqa: E402
-from mariposa.capabilities import v1_compat  # noqa: E402
-v1_compat.register_v1_compat()
 
 out = {
     "contract_version": "1.0",
@@ -20,6 +16,7 @@ out = {
             "transport_name": "mariposa_" + name.replace(".", "_"),
             "allowed_principals": sorted(cap.allowed_principals),
             "write": cap.write,
+            "status": cap.status,
             "idempotent": cap.idempotent,
             "description": cap.description,
         }

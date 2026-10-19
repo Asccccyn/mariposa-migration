@@ -11,6 +11,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "[规格别名] 审计查询（管理接口，不参与召回）"
     },
@@ -21,6 +22,7 @@
         "jiaming"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "两入口开窗（entry_source 校验 profile；worker 拒绝）"
     },
@@ -31,6 +33,7 @@
         "jiaming"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "续取开窗分页（snapshot 变化返回 SNAPSHOT_STALE）"
     },
@@ -42,8 +45,9 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
-      "description": "[v1.1 薄实现] capabilities.list"
+      "description": "当前能力清单"
     },
     {
       "canonical_name": "capabilities.status",
@@ -53,8 +57,9 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
-      "description": "[v1.1 薄实现] capabilities.status"
+      "description": "当前能力可用状态统计"
     },
     {
       "canonical_name": "emotion.context.get",
@@ -64,6 +69,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "reserved",
       "idempotent": false,
       "description": "情绪补充召回（默认禁用）"
     },
@@ -75,6 +81,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "语义事件动作（start/continue/pause/close/correct）"
     },
@@ -86,6 +93,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 ID 读取事件当前状态与证据引用"
     },
@@ -97,6 +105,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "scope 内分页读取事件状态（不给全库）"
     },
@@ -108,6 +117,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "I 正本当前版（char写）"
     },
@@ -118,6 +128,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "新增一条 I"
     },
@@ -129,6 +140,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "读取单条当前 I"
     },
@@ -140,6 +152,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "显式读取某条 I 的历史、理由和记忆关联"
     },
@@ -151,6 +164,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "纠错 I 修订与桶的错误关系（不改 I 正文）"
     },
@@ -161,6 +175,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "恢复旧 I：复制旧版形成新 revision"
     },
@@ -171,6 +186,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "修改 I：追加 revision，可记录理由和旧版启发"
     },
@@ -182,6 +198,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "I 当前生效条目；旧版需显式读取"
     },
@@ -192,6 +209,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "宿主用户提建议（待提议材料，不改正本）"
     },
@@ -203,6 +221,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "I 建议列表"
     },
@@ -214,6 +233,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "兼容整篇 I 快照历史；条目历史优先用 i.item.history"
     },
@@ -224,6 +244,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "兼容单条 i_main 写入；进入多条目模式后拒绝整篇覆盖"
     },
@@ -234,6 +255,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "撤销客户端绑定（旧 token 立即失效）"
     },
@@ -246,6 +268,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "[规格别名] 维护任务状态总览"
     },
@@ -258,6 +281,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "审计查询（管理接口，不参与召回）"
     },
@@ -269,6 +293,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "崩溃窗口对账：核实业务结果后清除 running 幂等占位"
     },
@@ -281,6 +306,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "维护任务状态总览"
     },
@@ -292,8 +318,9 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
-      "description": "消费 outbox（至少一次+幂等标记）"
+      "description": "读取已停写 outbox 的历史状态（无消费者，不执行投递）"
     },
     {
       "canonical_name": "maintenance.outbox.status",
@@ -304,6 +331,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "outbox 待处理统计"
     },
@@ -315,6 +343,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "按当前版本重建全部派生索引（旧投影+分字段+words+source）"
     },
@@ -326,6 +355,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "召回判断政策只读（模式/provider/model/revision/就绪探针；零模型调用——刷新不触发推理）"
     },
@@ -336,6 +366,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "召回判断政策写入（expected_revision CAS + 幂等键；开启=所选 provider 判断，关闭=零判断调用+候选全集分页；仅 qiaosheng，且仅网页登录会话可写——OAuth 绑定/模型通道调用即拒 POLICY_WRITE_WEB_ONLY）"
     },
@@ -347,6 +378,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "全量预热语义向量（冷启动/重建后一次；查询路径仅限流补算）"
     },
@@ -359,6 +391,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "只读配置快照（时区/开窗/遗忘/provider 状态）"
     },
@@ -370,6 +403,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "清理 Source 暂存残留（过期 staging/part 文件）；返回清理计数"
     },
@@ -381,6 +415,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "媒体元数据"
     },
@@ -392,6 +427,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "媒体对象列表"
     },
@@ -403,6 +439,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": true,
       "description": "完成上传（hash 去重）"
     },
@@ -414,6 +451,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "申请上传 token（字节走专用 HTTP 端点，不进工具参数）"
     },
@@ -425,6 +463,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按分类直达（标题优先，不进召回）"
     },
@@ -436,6 +475,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按事件发生日期直达（标题优先）"
     },
@@ -447,6 +487,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按情绪查（结构化入口；历史 forgotten_summary 仍可查）"
     },
@@ -458,6 +499,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "批量读卡片附加面（words/recollections/keepers/bindings/relations），≤100 桶一次返回"
     },
@@ -469,6 +511,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "整组替换九分类（平行多选，非空必填）"
     },
@@ -480,6 +523,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "装配上下文的资源引用+版本重查（estómago/CC 换窗用）"
     },
@@ -490,6 +534,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "char直删（无申请/理由/配额；有效关系一律挡住）"
     },
@@ -500,6 +545,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "审批删除申请（仅char；approve 执行物理删除——CB-055：archive 已退役，描述与 v2.0 语义对齐）"
     },
@@ -510,6 +556,7 @@
         "jiaming"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "char直删（P-D02）：无申请/理由/审批；关系硬门（P-D04）同样生效；pending 申请置 superseded"
     },
@@ -521,6 +568,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "读删除申请（含人类/拒绝理由；桶删除后仍可查）"
     },
@@ -532,6 +580,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "删除申请列表"
     },
@@ -542,6 +591,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "提交删除申请（reason 必填；daily=10/lifetime=5 与旧系统一致）"
     },
@@ -553,6 +603,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "撤回 pending 删除申请"
     },
@@ -564,6 +615,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "v1.7 找话专项：全量可见 our_words 跨阶段检索"
     },
@@ -575,6 +627,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "读取当前表示（历史 forgotten_summary 只返回审批摘要——LEGACY_CONTENT_GAP；v1.7 遗忘链已退役，无新遗忘产生）"
     },
@@ -586,6 +639,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；自动化路径可带 operation_id+source_selections（同事务回执）"
     },
@@ -597,6 +651,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 operation_id 查 hold 完成回执（历史成功与当前资源状态分列；无记录=尚无提交证据）"
     },
@@ -608,6 +663,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "撤销本人的「留」标记（谁留谁撤；撤销不重置年龄）"
     },
@@ -619,6 +675,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "桶的留标记列表（含已撤销；阶段用有效标记）"
     },
@@ -630,8 +687,21 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "记忆倒序列表（历史 forgotten_summary 只给摘要表示）"
+    },
+    {
+      "canonical_name": "memory.mood.update",
+      "transport_name": "mariposa_memory_mood_update",
+      "allowed_principals": [
+        "jiaming",
+        "qiaosheng"
+      ],
+      "write": true,
+      "status": "available",
+      "idempotent": false,
+      "description": "当时心情修订（文字+标签，覆盖更新留审计；仅char，整理期豁免口见 service 层）"
     },
     {
       "canonical_name": "memory.mood.vocab",
@@ -641,6 +711,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "心情词表开放接口（大类/下层词+写入规则，单一事实源）"
     },
@@ -652,6 +723,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "明确打开：返回当前表示并签发一次性查看票据（不自动确认）"
     },
@@ -663,6 +735,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "追加我们的话（speaker/ordinal；参与 WIDE 阶段召回）"
     },
@@ -674,6 +747,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "列出桶内双方话语（按 ordinal）"
     },
@@ -685,6 +759,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "纠错话语来源引用（旧证据/指纹随之失效）"
     },
@@ -696,6 +771,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "v2 统一召回：query可空浏览；分类/心情标签/事件日期筛选；any/all；去重分页"
     },
@@ -707,6 +783,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "确认目标候选；可选 close 一并解决"
     },
@@ -718,6 +795,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "显式结束：resolved/cancelled；终止本次自动补查"
     },
@@ -729,6 +807,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "沿 temporal_axis 导航前后候选（earlier/later）"
     },
@@ -740,6 +819,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "判断关闭模式：按服务端游标读取冻结结果集下一页（零检索/零判断/零 COUNT；政策切换拒绝混页；游标与 refine/Raw 续页引用分槽不互换）"
     },
@@ -751,6 +831,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "同 session 纠正：改条件/证据需求/继续申请新 burst（revision+1）"
     },
@@ -762,6 +843,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "session-local 拒绝候选（candidate/event/word/source_selection）"
     },
@@ -773,6 +855,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "v1.7 Round 2 原文深搜：同 session+revision、ROUND1_COMPLETE 回执、judge 完成且 reason 属闭集"
     },
@@ -784,6 +867,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "新建 Recall Session 并执行首轮检索（0—3 条证据包）"
     },
@@ -795,6 +879,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "当前 session 状态+引用重校验（不重放旧正文）"
     },
@@ -806,6 +891,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "凭有效查看回执追加本人回忆（不索引；触发保留线索）"
     },
@@ -817,6 +903,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "列出桶的回忆（当前版；include_history 含修订历史）"
     },
@@ -828,6 +915,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "修订本人回忆（原话留底，supersedes 链）"
     },
@@ -839,6 +927,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "纠错桶间关系（binding_error；remove/replace_wrong_binding）"
     },
@@ -850,6 +939,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "建立关联（单向存储，显式反向查询）"
     },
@@ -861,6 +951,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "列出关联"
     },
@@ -872,6 +963,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "沿 continuation_of 追事件链"
     },
@@ -883,6 +975,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "关键词检索有效投影"
     },
@@ -894,6 +987,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）"
     },
@@ -905,6 +999,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": true,
       "description": "确认本次明确查看（明开回温：explicit-open basis，刷新回温基准；plan 不适用）"
     },
@@ -916,6 +1011,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 word_id 读单条话语（当前表示校验；历史 forgotten_summary 标 LEGACY_CONTENT_GAP）"
     },
@@ -927,6 +1023,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "独立 words 通道检索（我们的话；不混入 event ranking）"
     },
@@ -938,6 +1035,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "放弃计划（expected_version 乐观锁；state=cancelled；不物理删除）"
     },
@@ -949,6 +1047,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "标记计划完成（expected_version 乐观锁；state=done 的专用动作）"
     },
@@ -960,6 +1059,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "创建计划（唯一真源，记忆经链接引用）"
     },
@@ -971,6 +1071,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "读取单个计划明细（含正文、状态与版本）"
     },
@@ -982,6 +1083,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "列出计划"
     },
@@ -993,6 +1095,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "纠错 Plan↔Memory 成员链接（Plan 状态变化不解绑）"
     },
@@ -1004,6 +1107,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "修改计划（expected_version 乐观锁）"
     },
@@ -1016,6 +1120,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "当前活动状态（三时间线概览）"
     },
@@ -1028,6 +1133,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "轻量活动登记（actor 由凭据决定，不可参数自报）"
     },
@@ -1039,6 +1145,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "关系纠错历史（只读；目标已删返回原始身份）"
     },
@@ -1050,6 +1157,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "跨域有效关系正/反查（方向语义不颠倒）"
     },
@@ -1061,6 +1169,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "沿关系继续追链（有界、披露截断）"
     },
@@ -1073,6 +1182,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "[规格别名] 只读配置快照（时区/开窗/遗忘/provider 状态）"
     },
@@ -1084,6 +1194,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "把 memory 绑定到原文消息区间（可叠加多个 range；默认消息边界，句内片段用可选 char offset）"
     },
@@ -1095,6 +1206,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "纠错原文区间绑定（remove/replace_wrong_binding）"
     },
@@ -1106,6 +1218,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "memory 的原文绑定列表"
     },
@@ -1117,6 +1230,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "§6.1 反查（会话方向）：该会话被哪些记忆桶绑定、各覆盖哪段消息序（前端原文页点击跳桶用）"
     },
@@ -1128,8 +1242,9 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
-      "description": "按 sequence 游标分页读原文会话（超长会话不整段拉取）"
+      "description": "按页码或 (sequence, id) 游标分页读原文会话（超长会话不整段拉取）"
     },
     {
       "canonical_name": "source.conversations.list",
@@ -1139,6 +1254,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "原文会话列表（标题/时间/条数）"
     },
@@ -1150,6 +1266,7 @@
         "qiaosheng"
       ],
       "write": true,
+      "status": "available",
       "idempotent": true,
       "description": "导入 Claude conversations 导出（.json/.zip；流式解析；Raw Archive 留只读母本；同 provider+sha256 幂等）"
     },
@@ -1161,6 +1278,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "导入批次列表"
     },
@@ -1172,6 +1290,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "导入批次状态与统计（batch_id；失败含错误信息）"
     },
@@ -1182,6 +1301,7 @@
         "worker"
       ],
       "write": true,
+      "status": "available",
       "idempotent": false,
       "description": "在线原文增量入库（live_delta；estómago 归档 worker 专用，stream 授权钉 origin/说话人；同 op 幂等）"
     },
@@ -1192,6 +1312,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 operation_id 查 ingest 完成回执（无记录=尚无提交证据）"
     },
@@ -1203,6 +1324,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 memory 动态打开其绑定的原文区间（原文不复制进记忆）"
     },
@@ -1214,6 +1336,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按 provider UUID 精确打开原文消息（含前后上下文）"
     },
@@ -1225,6 +1348,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "打开原文消息区间（语义绑定的动态查看入口）"
     },
@@ -1236,6 +1360,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "原文专项检索：关键词/说话人/日期区间/会话。不是普通 Recall，不参与记忆召回（分层边界）"
     },
@@ -1247,6 +1372,7 @@
         "qiaosheng"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "按钉住成员 manifest 读回片段（逐成员 hash 核对，漂移显式标注不静默）"
     },
@@ -1259,6 +1385,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "三条时间线分开的活动证据"
     },
@@ -1271,6 +1398,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "真实 now + 共同时区"
     },
@@ -1283,6 +1411,7 @@
         "worker"
       ],
       "write": false,
+      "status": "available",
       "idempotent": false,
       "description": "自最后已知联系"
     }

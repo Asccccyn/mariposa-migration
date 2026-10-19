@@ -1,9 +1,7 @@
-"""正式记忆：hold / get / versions / 遗忘审批应用 / 恢复。
+"""正式记忆的创建与当前表示读取。
 
-关键不变量（§4）：
-- 工作区正文不进正式检索；遗忘只产生新版本，保留桶 ID 与原文引用；
-- 遗忘后任何默认文本匹配只依据当前有效摘要投影；
-- 审批在一个正式库事务内完成：决议 + 新版本 + 指针 + 投影/FTS + 审计 + 幂等。
+新写入统一使用 v2 分层；正文、分类、来源与派生投影在领域事务内写入。
+旧 hold_text/forgotten_summary 只保留读取兼容，遗忘审批与在线恢复已退役。
 """
 from __future__ import annotations
 
@@ -14,12 +12,11 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .. import audit, config, db
-from ..errors import Forbidden, NotFound, ProposalStale, VersionConflict
+from ..errors import Forbidden, NotFound
 from ..retrieval import projection
 from . import categories as categories_mod
 from . import our_words as our_words_mod
 
-_APPROVERS = {"qiaosheng", "jiaming"}  # 工具人无审批权（§6.3）
 
 
 def _now() -> str:
@@ -140,11 +137,6 @@ def _validate_mood(principal, mood: dict, creation_mode: str) -> dict:
     return {"text": text, "tags": deduped}
 
 
-def _duplicated_by_raw_ref(conn, raw_refs: list[dict] | None) -> str | None:
-    """CB-051：legacy raw 表已退役——恒无重复。raw_refs 在 hold 入口
-    已被显式拒绝，本函数仅为历史内部调用点保留空实现。"""
-    return None
-
 #: 2026-10-05 宿主用户裁定（终版）：桶编号 = 纯五位数字（00001-99999），
 #: 不带分类字母——分类筛直达由 memory.by_category 承担，编号只做
 #: 全局唯一短标识。单一全局号段，永不复用（桶删除后号码作废不回填）；
@@ -155,10 +147,9 @@ _EMPTY_CATEGORY_ENTRY_SOURCES = frozenset({"ombre_legacy_migration"})
 _BUCKET_ID_MAX = 99999
 
 
-def _next_bucket_id(conn, primary_category: str) -> str:
+def _next_bucket_id(conn) -> str:
     """写锁内取下一号（hold_in_tx 恒在 BEGIN IMMEDIATE 内调用，
-    并发分配由写锁串行化）。primary_category 形参保留以兼容调用点，
-    编号不再依赖分类。
+    并发分配由写锁串行化）。编号不依赖分类。
 
     号段永不复用：计数持久化在 bucket_id_counters，桶删除后下一号
     继续前进——此前从存活行取 MAX，删除后的重建会回卷复用旧号
@@ -180,63 +171,36 @@ def _next_bucket_id(conn, primary_category: str) -> str:
 
 def _insert_core_rows(conn, *, memory_id: str, principal_id: str, text: str,
                       memory_date, date_confidence, mode,
-                      original_title, v2: bool, now: str,
+                      original_title, now: str,
                       occurred_start: str | None = None,
                       occurred_end: str | None = None) -> None:
-    """memories + memory_versions(1) + 投影。必须在正式库事务内调用。
-
-    occurred_start/end 是事件实际发生区间的独立载体（R02），不再静默
-    丢弃；它们参与检索日期筛选，但不改变留存计时（R03 按 hold 起算）。
-    """
+    """新桶与 v2 正文版本；调用方持有正式库写事务。"""
     conn.execute(
         "INSERT INTO memories(memory_id, current_version_no, memory_date,"
         " date_confidence, visibility, compression_state, created_at,"
         " updated_at, held_at, held_at_confidence, creation_mode,"
         " occurred_start, occurred_end)"
-        " VALUES(?,?,?,?, 'active','full', ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES(?,?,?,?, 'active','full', ?, ?, ?, 'exact', ?, ?, ?)",
         (memory_id, 1, memory_date, date_confidence, now, now,
-         now if v2 else None, "exact" if v2 else "unknown",
-         mode or "legacy_unknown", occurred_start, occurred_end))
+         now, mode, occurred_start, occurred_end))
     payload = {"representation": "full", "hold_text": text,
                "authored_by": principal_id}
-    if v2:
-        conn.execute(
-            "INSERT INTO memory_versions(memory_id, version_no,"
-            " representation, hold_text, compressed_summary,"
-            " authored_by, confirmed_by, origin_kind,"
-            " payload_hash, created_at, original_title, event_text,"
-            " schema_version)"
-            " VALUES(?,1,'full',NULL,NULL,?,NULL,'initial_hold',?,?,"
-            "?,?,2)",
-            (memory_id, principal_id, canonical_hash(payload),
-             now, original_title, text))
-        # v2 投影：走统一 full 投影入口（P2-01——hold/update/meaning/
-        # rebuild 一致：正文 + why + 当前 meaning 层；whitelist 只含
-        # 事件正文。不再出现"刚 hold 时 why 搜不到、rebuild 后又能
-        # 搜到"的投影内容漂移）
-        rebuild_full_projection(conn, memory_id)
-    else:
-        conn.execute(
-            "INSERT INTO memory_versions(memory_id, version_no, representation,"
-            " hold_text, compressed_summary, authored_by, confirmed_by,"
-            " origin_kind, payload_hash, created_at)"
-            " VALUES(?,1,'full',?,NULL,?,NULL,'initial_hold',?,?)",
-            (memory_id, text, principal_id,
-             canonical_hash(payload), now))
-        # 与 v2 同一投影语义（2026-09-30 裁定）：只索引事件正文；
-        # 同时构建分字段投影（v1 新写入与 v2 对齐，memory.search/recall
-        # 的阶段字段底座不漏新桶）
-        projection.upsert(conn, memory_id, 1, "full",
-                          projection.normalize_search_text(text),
-                          whitelist_body=projection.normalize_search_text(text))
-        from ..retrieval import field_projection as _fp
-        _fp.build_for_memory(conn, memory_id)
+    conn.execute(
+        "INSERT INTO memory_versions(memory_id, version_no,"
+        " representation, hold_text, compressed_summary,"
+        " authored_by, confirmed_by, origin_kind,"
+        " payload_hash, created_at, original_title, event_text,"
+        " schema_version)"
+        " VALUES(?,1,'full',NULL,NULL,?,NULL,'initial_hold',?,?,?, ?,2)",
+        (memory_id, principal_id, canonical_hash(payload),
+         now, original_title, text))
+    rebuild_full_projection(conn, memory_id)
 
 
 def _insert_layers(conn, *, memory_id: str, principal_id: str,
                    cats: list[str] | None, mood_data: dict | None,
                    our_words: list[dict] | None, entry_source,
-                   v2: bool, now: str) -> None:
+                   now: str) -> None:
     """v2 分层：分类/当时心情+标签/我们的话/留存行。事务内调用。"""
     if cats:
         categories_mod.replace(conn, memory_id, cats, principal_id)
@@ -257,10 +221,10 @@ def _insert_layers(conn, *, memory_id: str, principal_id: str,
         for i, w in enumerate(_validated_words, start=1):
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id,"
-                " ordinal, speaker, text, expression_kind, source_ref,"
-                " created_by, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                " ordinal, speaker, text, source_ref,"
+                " created_by, created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (f"ow_{uuid.uuid4().hex[:12]}", memory_id, i,
-                 w["speaker"], w["text"], w["expression_kind"],
+                 w["speaker"], w["text"],
                  w["source_ref"], principal_id, now))
     # v1.7 P3：分层写入后建分字段投影（title/event/words）
     from ..retrieval import field_projection as _fp
@@ -337,10 +301,6 @@ def hold_in_tx(
     if raw_refs:
         raise Forbidden("raw_refs 已随 legacy raw 退役；来源绑定走"
                         " source.bind", code="INVALID_ARGUMENT")
-    # v2 分层识别：出现任一 v2 字段即走分层写入路径
-    v2 = any(v is not None for v in (original_title, categories, mood,
-                                     our_words, creation_mode,
-                                     occurred_start, occurred_end))
     # v1.7 §3.2 原裁定：分类必填、无默认值。修订（她 2026-10-10 现场
     # 裁定）：批量迁移件允许空分类（"先空着我自己来"）——空=分类待填，
     # 绝不自动补"日常"；后续走 memory.categories.replace 补。
@@ -349,11 +309,12 @@ def hold_in_tx(
     # 空分类放行仅限显式迁移入口（白名单 entry_source）；网页/MCP 的
     # 日常 hold 仍按原裁定拒绝——web 等通用 entry_source 不在白名单
     if not cats and entry_source not in _EMPTY_CATEGORY_ENTRY_SOURCES:
-        raise _F("CATEGORY_REQUIRED：至少一项合法分类（九分类，v1.7）；"
+        raise _F("CATEGORY_REQUIRED：至少一项合法分类（九分类+diary，v1.7）；"
                  "空分类仅限迁移入口（她 2026-10-10 批量迁移裁定）",
                  code="CATEGORY_REQUIRED",
                  allowed=sorted(("daily", "milestone", "sad", "sweet", "date",
-                                 "plan", "sex", "anniversary", "reloplay")))
+                                 "plan", "sex", "anniversary", "reloplay",
+                                 "diary")))
     # 2026-10-05 宿主用户裁定：原始标题必填——全量浏览先扫标题，标题即
     # 提要；精简上限 30 字符，超限结构化拒绝
     title = (original_title or "").strip()
@@ -377,7 +338,7 @@ def hold_in_tx(
     # （迁移工具已显式 retrospective）；公开面缺 creation_mode 在 schema
     # 层即被拒（SCHEMA_VIOLATION），estómago 侧本地预拒同语义——补记漏传
     # 模式又漏日期被写成"当天+当天"的洞就此封死。
-    mode = creation_mode or ("contemporaneous" if v2 else None)
+    mode = creation_mode or "contemporaneous"
     if mode is not None and mode not in ("contemporaneous", "retrospective"):
         raise Forbidden("creation_mode must be contemporaneous/retrospective",
                         code="INVALID_ARGUMENT")
@@ -397,7 +358,7 @@ def hold_in_tx(
                 code="MOOD_WINDOW_REQUIRED")
         mood_data = _validate_mood(principal, mood, mode)
 
-    memory_id = memory_id or _next_bucket_id(conn, cats[0] if cats else None)
+    memory_id = memory_id or _next_bucket_id(conn)
     now = now or _now()
     # 裁定（宿主用户 2026-10-06，F-J-03/D1 选项 A）：当天记录自动日期——
     # contemporaneous 且未给日期的 hold，memory_date 用同一次 held_at 的
@@ -406,15 +367,11 @@ def hold_in_tx(
     if mode == "contemporaneous" and not memory_date:
         memory_date = datetime.fromisoformat(now).astimezone(
             ZoneInfo(config.RELATIONSHIP_TIMEZONE)).date().isoformat()
-    # F39：去重在写锁内——并发同源 hold 只落一个 memory
-    dup = _duplicated_by_raw_ref(conn, raw_refs)
-    if dup:
-        return {"memory_id": dup, "deduplicated": True}
     _insert_core_rows(
         conn, memory_id=memory_id, principal_id=principal.principal_id,
         text=text, memory_date=memory_date,
         date_confidence=date_confidence, mode=mode,
-        original_title=original_title, v2=v2, now=now,
+        original_title=original_title, now=now,
         occurred_start=occurred_start, occurred_end=occurred_end)
     # plan 绑定先于分层写入（categories.add 的 PLAN 绑定守卫
     # 依赖链接已存在——同事务内顺序保证）
@@ -434,13 +391,13 @@ def hold_in_tx(
     _insert_layers(
         conn, memory_id=memory_id, principal_id=principal.principal_id,
         cats=cats, mood_data=mood_data, our_words=our_words,
-        entry_source=entry_source, v2=v2, now=now)
+        entry_source=entry_source, now=now)
     audit.record(
         conn, "memory.created", principal.principal_id,
         resource_id=memory_id, resource_version=1,
         payload={"entry_source": entry_source, "memory_date": memory_date,
                  "creation_mode": mode or "legacy_unknown",
-                 "v2_layered": v2},
+                 "v2_layered": True},
     )
     return {"memory_id": memory_id, "version": 1}
 

@@ -154,8 +154,7 @@ class Test1CoverageGateWhitelist:
                 date_confidence="exact", original_title="r3f",
                 categories=["daily"], creation_mode="contemporaneous",
                 raw_pending=False,
-                our_words=[{"speaker": "qiaosheng", "text": "旧年的晚风",
-                            "expression_kind": "verbatim"}])
+                our_words=[{"speaker": "qiaosheng", "text": "旧年的晚风"                            }])
             with db.formal() as conn:
                 conn.execute(
                     "UPDATE memories SET compression_state="
@@ -216,8 +215,7 @@ class Test2Continuation:
             date_confidence="exact", original_title="r3c",
             categories=["daily"], creation_mode="contemporaneous",
             raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚",
-                        "expression_kind": "paraphrase"}])
+            our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚"                        }])
         p = recall_service.start(actors["jiaming"], {
             "query_plan": {"original_request": "我当时的原话",
                            "channels": ["words"],
@@ -337,10 +335,8 @@ class Test3WordLocation:
                 original_title="r3w", categories=["daily"],
                 creation_mode="contemporaneous", raw_pending=False,
                 our_words=[
-                    {"speaker": "qiaosheng", "text": "小猫今天很乖",
-                     "expression_kind": "verbatim"},
-                    {"speaker": "jiaming", "text": "把小路灯放在桌上吧",
-                     "expression_kind": "verbatim"}])
+                    {"speaker": "qiaosheng", "text": "小猫今天很乖"                     },
+                    {"speaker": "jiaming", "text": "把小路灯放在桌上吧"                     }])
             recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "小路灯",
                                "channels": ["event"],
@@ -370,10 +366,8 @@ class Test3WordLocation:
             date_confidence="exact", original_title="u", categories=["daily"],
             creation_mode="contemporaneous", raw_pending=False,
             our_words=[
-                {"speaker": "qiaosheng", "text": "小猫今天很乖",
-                 "expression_kind": "verbatim"},
-                {"speaker": "jiaming", "text": "把小路灯放在桌上吧",
-                 "expression_kind": "verbatim"}])
+                {"speaker": "qiaosheng", "text": "小猫今天很乖"                 },
+                {"speaker": "jiaming", "text": "把小路灯放在桌上吧"                 }])
         with db.formal() as conn:
             loc = pl._locate_word_text(
                 conn, out["memory_id"], [["小", "路", "灯"]], [])
@@ -389,14 +383,12 @@ class Test4NegativesUnified:
             actors["jiaming"], text="晚风事件一", memory_date="2026-09-20",
             date_confidence="exact", original_title="w1", categories=["daily"],
             creation_mode="contemporaneous", raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "晚风旧话",
-                        "expression_kind": "verbatim"}])
+            our_words=[{"speaker": "qiaosheng", "text": "晚风旧话"                        }])
         memory.hold(
             actors["jiaming"], text="晚风事件二", memory_date="2026-09-30",
             date_confidence="exact", original_title="w2", categories=["daily"],
             creation_mode="contemporaneous", raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "晚风新话",
-                        "expression_kind": "verbatim"}])
+            our_words=[{"speaker": "qiaosheng", "text": "晚风新话"                        }])
 
     def test_source_date_excluded_sparse_words(self, actors):
         """审计反例：排除 2026-09-20 后两条都返回——稀疏路日期负向
@@ -501,8 +493,7 @@ class Test6FindWordsQueryOnly:
             actors["jiaming"], text="事件正文", memory_date="2026-09-25",
             date_confidence="exact", original_title="fw6", categories=["daily"],
             creation_mode="contemporaneous", raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "梧桐叶落了",
-                        "expression_kind": "verbatim"}])
+            our_words=[{"speaker": "qiaosheng", "text": "梧桐叶落了"                        }])
         out = registry.invoke(actors["jiaming"], "memory.find_words",
                               { "operation_id": "op-auto-test_c-0","query": "梧桐"}, None)
         data = out["data"]

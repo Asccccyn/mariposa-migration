@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 
 from .. import config, db
-from ..errors import Forbidden, NotFound
+from ..errors import Forbidden, NotFound, StaleOperation
 from . import budget as budget_mod
 from . import store
 
@@ -36,7 +36,8 @@ _FRAGMENT_CHARS_START = 4000
 _CARD_FIELDS = ("resource_ref", "candidate_ref", "channel", "representation",
                 "content_version", "representation_version",
                 "projection_version", "memory_id", "word_id", "ordinal",
-                "speaker", "expression_kind", "memory_date", "matched_by",
+                "speaker", "source_ref", "source_binding_version",
+                "memory_date", "matched_by",
                 "matched_fields", "excerpt", "truncated", "evidence",
                 "version_receipt", "rrf_score", "_matched",
                 "evidence_requirement_met")
@@ -394,61 +395,21 @@ def assemble_page(cards: list[dict], start_pos: tuple[int, int, int],
     return page
 
 
-def revalidate_page_cards(cards: list[dict]) -> tuple[list[str | None],
-                                                      list[dict]]:
-    """逐页重校验当前权限与版本（P08+A04）：失效卡标记并显式列出。
-
-    返回 (flags, invalidated)：flags 与 cards 原序等长，第 i 项为
-    失效原因或 None——**不返回收缩子集**（JFA-007 根因：装配坐标
-    必须吃冻结全集，收缩子集坐标会静默丢卡）。
-
-    与 revalidate_receipts 同口径：memory 要求仍 active 且版本一致；
-    our_word 要求桶仍 active+full；通道开关（A04）对翻页同权执行
-    （words/raw 关闭 → 对应前缀卡失效披露，与 replay.py 的通道拒绝
-    同一开关源）。不静默补入相似记录、不拼旧正文。
-    """
-    flags: list[str | None] = []
-    invalidated: list[dict] = []
+def revalidate_page_cards(cards: list[dict], *, session_id: str | None = None,
+                          intent: str | None = None) -> tuple[list[str | None], list[dict]]:
+    """Check current facts without changing the frozen cursor coordinate space."""
+    from .revalidation import revalidate_card
+    rejected = store.rejected_resource_refs(session_id) if session_id else set()
+    flags, invalidated = [], []
     with db.formal() as conn:
-        for c in cards:
-            ref = c.get("resource_ref") or ""
-            bad = None
-            if ref.startswith("our_word:") \
-                    and not config.RECALL_WORDS_ENABLED:
-                bad = "channel_words_disabled"
-            elif ref.startswith("source_msg:") \
-                    and not config.RECALL_RAW_FALLBACK_ENABLED:
-                bad = "channel_raw_disabled"
-            elif ref.startswith("memory:"):
-                row = conn.execute(
-                    "SELECT visibility, current_version_no FROM memories"
-                    " WHERE memory_id=?",
-                    (ref[len("memory:"):],)).fetchone()
-                if row is None or row["visibility"] != "active":
-                    bad = "resource_inactive_or_missing"
-                elif str(row["current_version_no"]) != \
-                        (c.get("content_version") or ""):
-                    bad = "content_version_changed"
-            elif ref.startswith("our_word:"):
-                row = conn.execute(
-                    "SELECT m.visibility, m.compression_state FROM"
-                    " memory_our_words w JOIN memories m ON"
-                    " m.memory_id=w.memory_id WHERE w.word_id=?",
-                    (ref[len("our_word:"):],)).fetchone()
-                if row is None or row["visibility"] != "active" or \
-                        row["compression_state"] != "full":
-                    bad = "resource_inactive_or_missing"
-            elif ref.startswith("source_msg:"):
-                row = conn.execute(
-                    "SELECT published FROM source_messages WHERE id=?",
-                    (ref[len("source_msg:"):],)).fetchone()
-                if row is None or not row["published"]:
-                    bad = "resource_inactive_or_missing"
-            else:
-                bad = "resource_unverifiable"
-            flags.append(bad)
-            if bad:
-                invalidated.append({"resource_ref": ref, "reason": bad})
+        conn.execute("BEGIN")
+        for card in cards:
+            _, reason = revalidate_card(conn, card, rejected=rejected,
+                                              intent=intent)
+            flags.append(reason)
+            if reason:
+                invalidated.append({"resource_ref": card.get("resource_ref") or "",
+                                    "reason": reason})
     return flags, invalidated
 
 
@@ -479,6 +440,11 @@ def serve_page(principal, a: dict) -> dict:
     if a.get("session_id") and a["session_id"] != pset["session_id"]:
         raise Forbidden("session_id 与结果集绑定不一致",
                         code="INVALID_ARGUMENT", result_set_id=rsid)
+    from .shared import _query_fp
+    current_plan = store.get_plan(pset["session_id"])
+    if not current_plan or pset["query_fingerprint"] != _query_fp(current_plan):
+        raise StaleOperation("查询计划已修订，旧结果集不可续页",
+                             session_id=pset["session_id"], result_set_id=rsid)
     # 政策纪元：模式混用或 revision 前进（同 mode 下 provider/
     # allowed_data 变更）都拒绝（J08+A03——不混纪元、不自动另起查询）
     policy = judge_policy.effective()
@@ -509,7 +475,9 @@ def serve_page(principal, a: dict) -> dict:
             result_set_id=rsid)
     # JFA-007：重校验返回原序失效标记（不收缩）——装配吃冻结全集，
     # 坐标与游标同一坐标系，任何页间失效不得静默丢失未交付候选
-    flags, invalidated = revalidate_page_cards(pset["candidates"])
+    flags, invalidated = revalidate_page_cards(
+        pset["candidates"], session_id=pset["session_id"],
+        intent=current_plan.get("intent"))
     extra = {
         "recall_session_id": pset["session_id"],
         "revision": int(pset["revision"]),

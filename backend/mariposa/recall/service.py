@@ -294,8 +294,6 @@ def _words_dense_fuse(conn, plan, words_hits, coverage):
                 from ..retrieval.words import _word_evidence
                 _wrow = {
                     "word_id": h["word_id"],
-                    "expression_kind": h.get(
-                        "expression_kind"),
                     "source_ref": h.get("source_ref"),
                     "source_binding_version": h.get(
                         "source_binding_version", 0),
@@ -315,14 +313,11 @@ def _words_dense_fuse(conn, plan, words_hits, coverage):
                     "representation_version": _mv_s,
                     "projection_version":
                         config.PROJECTION_REVISION,
-                    "speaker": h["speaker"],
-                    "expression_kind": h["expression_kind"],
-                    "excerpt": h["text"],
                     "matched_by": ["semantic"],
                     "matched_fields": ["our_words"],
                     "speaker": h.get("speaker"),
-                    "expression_kind":
-                        h.get("expression_kind"),
+                    "source_ref": h.get("source_ref"),
+                    "source_binding_version": int(h.get("source_binding_version") or 0),
                     "excerpt": h.get("text"),
                     "evidence": _word_evidence(_wrow, conn) or [
                         evidence_mod.make_evidence(
@@ -1569,6 +1564,6 @@ def words_recall(principal, a: dict, op_ctx: dict | None = None) -> dict:
 
 
 # ---------- 拆分批（2026-10-04）：重放校验与 Round2 外迁，重导出兼容 ----------
-from .replay import _norm_recall_field, revalidate_replayed  # noqa: E402,F401
+from .replay import revalidate_replayed  # noqa: E402,F401
 from .round2 import (_acquire_raw_lease, _reason_fact_supported,  # noqa: E402,F401
                      _release_raw_lease, round2)

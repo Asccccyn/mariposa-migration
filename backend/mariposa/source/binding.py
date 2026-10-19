@@ -250,12 +250,14 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
             raise Forbidden("同一条消息上 start 偏移不得大于 end 偏移",
                             code="SOURCE_RANGE_OFFSET")
         for i, (sid, m, row) in enumerate(fetched):
+            is_start = i == 0
+            is_end = i == len(fetched) - 1
+            offsets = (selection.get("start_char_offset") if is_start else None,
+                       selection.get("end_char_offset") if is_end else None)
             item = source_query._serialize(
                 row, include_content=include_content,
-                char_offsets=(
-                    selection.get("start_char_offset") if i == 0 else None,
-                    selection.get("end_char_offset")
-                    if i == len(fetched) - 1 else None))
+                char_offsets=offsets, slice_offsets=offsets,
+                is_start=is_start, is_end=is_end)
             pinned = m.get("content_hash")
             member_drift = None
             if isinstance(pinned, str):
@@ -267,7 +269,7 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
             if member_drift is None and isinstance(pinned, str):
                 # 在线修订换代：钉住行不可变，漂移信号=同 origin 消息已有
                 # 更新修订。R03（复审 2026-10-07）：按共同消息身份
-                # （origin_message_id）跨全部有权谱系判定——跨流复用后
+                # （source_conversation_id + origin_message_id）跨流判定——复用后
                 # 同一 source_message_id 有多条谱系、新修订又落在新行
                 # 新谱系上，旧行 fetchone 只看单条谱系会漏报其他流换代
                 lrows = conn.execute(
@@ -281,8 +283,9 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
                     newer = conn.execute(
                         "SELECT revision, content_hash FROM"
                         " source_live_revisions WHERE origin_message_id=?"
-                        " AND revision>? ORDER BY revision DESC LIMIT 1",
-                        (omid_all, pinned_rev)).fetchone()
+                        " AND source_conversation_id=? AND revision>?"
+                        " ORDER BY revision DESC LIMIT 1",
+                        (omid_all, conv["id"], pinned_rev)).fetchone()
                     if newer is not None:
                         member_drift = {
                             "pinned": pinned,
@@ -309,50 +312,60 @@ def ranges_of(memory_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def memories_referencing(message_id: str) -> list[dict]:
-    """§6.1 Source 反查：这段原文消息被哪些绑定区间实际覆盖。
+def references_for_messages(message_ids: list[str], conn=None) -> dict[str, list[dict]]:
+    """Batch inverse references by canonical message ID, using one snapshot.
 
-    精确判定按消息序范围（start..end 区间含该消息），不把"同
-    conversation"当"同一段"；返回绑定身份与范围供两端继续追查。
+    Pinned bindings use their exact member manifest; legacy bindings use the
+    validated parent path. Each relevant binding is resolved once per batch.
     """
+    if conn is None:
+        with db.formal() as c:
+            c.execute("BEGIN")
+            return references_for_messages(message_ids, conn=c)
+    out = {mid: [] for mid in message_ids}
+    if not out:
+        return out
+    by_conversation: dict[str, set[str]] = {}
+    ids = list(out)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        marks = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+                f"SELECT id, conversation_id FROM source_messages WHERE id IN ({marks})", chunk):
+            by_conversation.setdefault(row["conversation_id"], set()).add(row["id"])
+    for cid, wanted in by_conversation.items():
+        bindings = conn.execute(
+            "SELECT * FROM memory_source_bindings WHERE conversation_id=?"
+            " ORDER BY created_at, binding_id", (cid,)).fetchall()
+        pinned = {}
+        for member in conn.execute(
+                "SELECT m.binding_id, m.source_message_id FROM memory_source_binding_members m"
+                " JOIN memory_source_bindings b ON b.binding_id=m.binding_id"
+                " WHERE b.conversation_id=?", (cid,)):
+            pinned.setdefault(member["binding_id"], set()).add(member["source_message_id"])
+        for row in bindings:
+            members = pinned.get(row["binding_id"])
+            if members is None:
+                try:
+                    resolved = source_query.validate_range(
+                        cid, row["start_message_id"], row["end_message_id"], conn=conn)
+                    members = set(resolved["path_order"])
+                except (NotFound, Forbidden):
+                    continue
+            for mid in wanted & members:
+                out[mid].append(dict(row))
+    return out
+
+
+def memories_referencing(message_id: str) -> list[dict]:
+    """Resolve a source ID, then use the same exact batch inverse lookup."""
     with db.formal() as conn:
-        msg = conn.execute(
-            "SELECT id, provider_message_id, conversation_id, sequence,"
-            " provider FROM source_messages WHERE id=? OR"
-            " provider_message_id=?",
-            (message_id, message_id)).fetchone()
+        conn.execute("BEGIN")
+        msg = (source_query._find_message(conn, message_id=message_id)
+               or source_query._find_message(conn, provider_message_id=message_id))
         if msg is None:
             return []
-        seqs = conn.execute(
-            "SELECT sequence FROM source_messages WHERE conversation_id=?"
-            " AND (id=? OR provider_message_id=?)",
-            (msg["conversation_id"], message_id, message_id)).fetchall()
-        seq_set = {r["sequence"] for r in seqs}
-        rows = conn.execute(
-            "SELECT b.*, s.sequence AS start_seq, e.sequence AS end_seq,"
-            " s.id AS s_id, s.provider_message_id AS s_pid,"
-            " e.id AS e_id, e.provider_message_id AS e_pid"
-            " FROM memory_source_bindings b"
-            " JOIN source_messages s ON s.id=b.start_message_id"
-            " JOIN source_messages e ON e.id=b.end_message_id"
-            " WHERE b.conversation_id=?", (msg["conversation_id"],)).fetchall()
-    out = []
-    from . import query as _query
-    for r in rows:
-        # SRC-07（2026-10-04 全量审计）：覆盖以共享范围解析器的实际
-        # parent 路径成员为准——sibling 序号落点不等于路径身份；
-        # 解析失败（None）保守跳过该绑定
-        path_ids = _query.covered_path_ids(
-            msg["conversation_id"], r["start_message_id"],
-            r["end_message_id"])
-        if path_ids is None:
-            continue
-        if msg["id"] in path_ids:
-            d = {k: v for k, v in dict(r).items()
-                 if k not in ("start_seq", "end_seq", "s_id", "s_pid",
-                              "e_id", "e_pid")}
-            out.append(d)
-    return out
+        return references_for_messages([msg["id"]], conn=conn)[msg["id"]]
 
 
 def bindings_of_conversation(conversation_id: str) -> list[dict]:

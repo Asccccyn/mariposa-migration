@@ -128,8 +128,7 @@ class TestRound2CompletionProof:
                 date_confidence="exact", original_title="rv",
                 categories=["daily"], creation_mode="contemporaneous",
                 raw_pending=False,
-                our_words=[{"speaker": "qiaosheng", "text": "复述：晚风的傍晚",
-                            "expression_kind": "paraphrase"}])
+                our_words=[{"speaker": "qiaosheng", "text": "复述：晚风的傍晚"                            }])
             p = recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "晚风",
                                "channels": ["words"],
@@ -236,8 +235,7 @@ class TestJudgedCount:
                 original_title=f"e{i}", categories=["daily"],
                 creation_mode="contemporaneous", raw_pending=False,
                 our_words=[{"speaker": "qiaosheng",
-                            "text": f"崧蓝话语第{i}句",
-                            "expression_kind": "verbatim"}])
+                            "text": f"崧蓝话语第{i}句"                            }])
         p = recall_service.start(actors["jiaming"], {"query_plan": {
             "original_request": "崧蓝", "channels": ["event", "words"],
             "lexical_terms": ["崧蓝"]}})
@@ -266,8 +264,7 @@ class TestWordsDenseStatus:
             date_confidence="exact", original_title="ws",
             categories=["daily"], creation_mode="contemporaneous",
             raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "鹧鸪的叫声记录",
-                        "expression_kind": "verbatim"}])
+            our_words=[{"speaker": "qiaosheng", "text": "鹧鸪的叫声记录"                        }])
 
     def _fake(self, monkeypatch):
         import numpy as np
@@ -335,8 +332,7 @@ class TestIdempotencyBoundary:
             date_confidence="exact", original_title="idem",
             categories=["daily"], creation_mode="contemporaneous",
             raw_pending=False,
-            our_words=[{"speaker": "qiaosheng", "text": "梧桐叶落了",
-                        "expression_kind": "verbatim"}])
+            our_words=[{"speaker": "qiaosheng", "text": "梧桐叶落了"                        }])
         cap = _CountingJudge()
         jb.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER

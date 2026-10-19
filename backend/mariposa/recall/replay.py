@@ -8,15 +8,10 @@ from __future__ import annotations
 
 from .. import config, db
 from ..errors import Forbidden, StaleOperation
-from . import budget, phase_policy, store
+from . import budget, store
 from .shared import _query_fp, _require_enabled
 
-def _norm_recall_field(field: str) -> str:
-    """候选卡字段名归一化：words 通道写 our_words.text，阶段字段集用
-    our_words（N04）——导航轴（event_time/hold_time）保持原样。"""
-    if isinstance(field, str) and field.startswith("our_words."):
-        return "our_words"
-    return field
+from .revalidation import revalidate_card
 
 
 def revalidate_replayed(fn_name: str, saved: dict,
@@ -30,8 +25,8 @@ def revalidate_replayed(fn_name: str, saved: dict,
     - 候选卡按真实资源身份逐张校验：resource_ref 可解析出 memory 的
       （含无 memory_id 字段的导航卡），要求 memory 仍 active、卡片
       content_version == 当前 revision、当前分类与卡内结构化事实一致、
-      并按当前 phase 的 AllowedFields 重过滤 matched_fields/evidence
-      （字段名先归一化：our_words.text → our_words）；本 session 已
+      并按当前 phase 的 AllowedFields 判定冻结投影仍可交付
+      （任一命中字段失效即整卡失效，防旧 excerpt 残留）；本 session 已
       rejected 的资源剔除；无法验证资源身份的卡一律剔除（保守）；
     - packet 层元数据（revision/budget）以当前 session 现值刷新；
     - WP01：重放同样核对可信 scope——请求携带的 session 归属与
@@ -230,104 +225,18 @@ def _revalidate_replayed_resources(fn_name: str, saved: dict,
         raise StaleOperation(
             "查询计划已修订或响应缺查询指纹，旧 operation 响应拒绝重放",
             session_id=sid, operation=fn_name)
-    from . import phase_policy
     rejected = store.rejected_resource_refs(sid)
     with db.formal() as conn:
+        conn.execute("BEGIN")
         kept = []
-        for c in saved["candidates"]:
-            if not isinstance(c, dict):
+        for card in saved["candidates"]:
+            if not isinstance(card, dict):
                 continue
-            # F02：混合通道旧包中的 words 卡同样受当前开关约束，
-            # 关闭即剔除（专项 find_words 已在入口整体拒绝）
-            if (c.get("channel") == "words" or "our_words" in [
-                    _norm_recall_field(f)
-                    for f in (c.get("matched_fields") or [])]) \
-                    and not config.RECALL_WORDS_ENABLED:
-                continue
-            ref = c.get("resource_ref") or ""
-            mid = c.get("memory_id")
-            if not mid and isinstance(ref, str) and ref.startswith("memory:"):
-                mid = ref[len("memory:"):]  # 导航卡等只带 resource_ref 的形状
-            if not mid:
-                # 闭环复审 P2-6：source_msg 引用按当前库校验（存在
-                # 且 published）后保留——round2 幂等重放不得丢候选
-                # CB-014：本 session 已拒绝的资源同样不得经 source_msg
-                # 卡重放（此前该分支在 rejected 检查前直接保留）
-                if (isinstance(ref, str) and ref.startswith("source_msg:")
-                        and ref not in rejected):
-                    row = conn.execute(
-                        "SELECT published FROM source_messages WHERE"
-                        " id=?", (ref[len("source_msg:"):],)).fetchone()
-                    if row is not None and row["published"]:
-                        kept.append(c)
-                # 其余无法解析资源身份的卡一律剔除（N03）
-                continue
-            if ref and ref in rejected:
-                continue  # 本 session 已拒绝的资源不得重放
-            if isinstance(ref, str) and ref.startswith("our_word:"):
-                # RA-012（2026-10-02 复审 P2）：重放按当前 provenance
-                # 校验——来源撤销/换代后不再交付旧 word_verbatim
-                wrow = conn.execute(
-                    "SELECT w.expression_kind, w.source_ref,"
-                    " w.source_binding_version, m.current_version_no"
-                    " FROM memory_our_words w JOIN memories m ON"
-                    " m.memory_id=w.memory_id WHERE w.word_id=?",
-                    (ref[len("our_word:"):],)).fetchone()
-                if wrow is None:
-                    continue
-                from ..retrieval.words import _word_evidence
-                cur_ev = _word_evidence(wrow, conn)
-                card_ev = (c.get("evidence") or [{}])[0] or {}
-                if (cur_ev and cur_ev[0].get("evidence_kind")
-                        != card_ev.get("evidence_kind")):
-                    continue
-            m = conn.execute(
-                "SELECT visibility, current_version_no FROM memories"
-                " WHERE memory_id=?", (mid,)).fetchone()
-            if m is None or m["visibility"] != "active":
-                continue  # 已删除/归档：不再可见
-            if str(c.get("content_version")) != str(m["current_version_no"]):
-                continue  # 版本已前进：旧 revision 正文不得出站
-            # 分类变更（不产生新 revision）：卡内结构化事实过期即剔卡
-            current_cats = sorted(r["category"] for r in conn.execute(
-                "SELECT category FROM memory_categories WHERE memory_id=?",
-                (mid,)))
-            stale_fact = False
-            for ev in c.get("evidence") or []:
-                if not isinstance(ev, dict):
-                    continue
-                if ev.get("field") == "categories":
-                    val = (ev.get("structured_value") or {}).get("categories")
-                    if isinstance(val, list) and sorted(val) != current_cats:
-                        stale_fact = True
-            if stale_fact:
-                continue
-            if saved.get("intent") == "find_words":
-                # 专项 words 跨阶段（S02/S18）：不套 event phase 过滤
-                kept.append(c)
-                continue
-            if fn_name.endswith("navigate"):
-                # RER-02（2026-10-04 复审）：导航卡的时间轴字段
-                #（event_time/hold_time）不属 event phase 白名单——
-                # 结构卡仍有效时重放不得过滤为空；可见性/版本/身份
-                # 检查在上游已过
-                kept.append(c)
-                continue
-            allowed = phase_policy.eligible_fields(
-                phase_policy.phase_of(mid))
-            orig_fields = [_norm_recall_field(f)
-                           for f in (c.get("matched_fields") or [])]
-            fields = [f for f in orig_fields if f in allowed]
-            if orig_fields and not fields:
-                continue  # 命中字段全部不再被当前 phase 允许
-            if fields != list(c.get("matched_fields") or []):
-                c = dict(c)
-                c["matched_fields"] = fields
-                c["evidence"] = [
-                    ev for ev in (c.get("evidence") or [])
-                    if not isinstance(ev, dict)
-                    or _norm_recall_field(ev.get("field")) in allowed]
-            kept.append(c)
+            current, _ = revalidate_card(
+                conn, card, rejected=rejected, intent=saved.get("intent"),
+                navigation=fn_name.endswith("navigate"))
+            if current is not None:
+                kept.append(current)
     out = dict(saved)
     out["candidates"] = kept
     # packet 层元数据以当前 session 刷新（N03：refine 后旧包不再宣称

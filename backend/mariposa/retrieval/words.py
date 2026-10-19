@@ -1,7 +1,7 @@
 """独立 words 检索通道（v1.3 §7.2/§8 / v1.4 §7、P3）。
 
 "我们的话"使用独立 words channel，不混入普通 event ranking：本模块
-只读 memory_our_words 的派生索引（words_search_docs/words_fts，可重建），
+直接读取 memory_our_words 正表，在授权语料池内计算 scoped BM25，
 与事件投影完全隔离；仅出现在 our_words 的词不会让 event-only 命中
 （WORD-01，event 侧由投影构造层结构性保证）。
 
@@ -30,14 +30,14 @@ def _now() -> str:
 
 
 def _fingerprint(conn) -> str:
-    """正表指纹：word_id/speaker/text/expression_kind 的稳定摘要。"""
+    """正表指纹：word_id/speaker/text 的稳定摘要。"""
     rows = conn.execute(
-        "SELECT word_id, speaker, text, expression_kind, memory_id"
+        "SELECT word_id, speaker, text, memory_id"
         " FROM memory_our_words ORDER BY word_id").fetchall()
     h = hashlib.sha256()
     for r in rows:
         h.update(f"{r['word_id']}|{r['speaker']}|{r['text']}|"
-                 f"{r['expression_kind']}|{r['memory_id']}\n".encode())
+                 f"{r['memory_id']}\n".encode())
     return h.hexdigest()
 
 
@@ -165,14 +165,14 @@ def _source_ref_valid(conn, source_ref) -> bool:
 
 
 def _word_evidence(row, conn=None) -> list[dict]:
-    """expression_kind → evidence_kind（含来源有效性校验，EVID-03）。
+    """话语证据分级（含来源有效性校验，EVID-03）。
 
-    CB-039：sparse 与 dense 共用本构造——证据等级取决于当前
-    provenance（expression_kind + source_ref 当前事实 + 撤销换代），
-    不取决于命中通道；来源被显式撤销（换代>0 且当前无来源）不是
-    "从未有来源"，不签无外部来源核验路径的 word_verbatim。
+    话语一律原文（2026-10-18 概括通道退役）：分级只取决于当前
+    provenance（source_ref 当前事实 + 撤销换代），不取决于命中通道。
+    逐字身份由出处证明——来源有效才签 word_verbatim；无来源（含
+    撤销后）一律 word_unverified，不自证。来源被显式撤销（换代>0
+    且当前无来源）另附撤销事实。
     """
-    kind = _g(row, "expression_kind")
     source_ref = _g(row, "source_ref")
     keys = row.keys() if hasattr(row, "keys") else ()
     version = str(_g(row, "memory_version_no",
@@ -180,77 +180,41 @@ def _word_evidence(row, conn=None) -> list[dict]:
     gen = int(_g(row, "source_binding_version", 0) or 0)
     wid = _g(row, "word_id")
     text = _g(row, "text") or ""
-    if kind == "verbatim":
-        if not source_ref:
-            if gen > 0:
-                # 来源被显式撤销：保留撤销状态，不按"从未有来源"的
-                # 逐字声明路径签 verified
-                return [evidence_mod.make_evidence(
-                    "word_unverified", "our_words.text", text,
-                    f"our_word:{wid}", source_version=version)] + [
-                    evidence_mod.make_evidence(
-                        "structured_fact", "our_words.source_ref",
-                        "", f"our_word:{wid}",
-                        structured_value={
-                            "source_ref_state": "revoked",
-                            "source_binding_version": gen})]
-            # 无来源绑定且从未纠错：正式话语记录本身即逐字声明
-            return [evidence_mod.make_evidence(
-                "word_verbatim", "our_words.text", text,
-                f"our_word:{wid}", source_version=version)]
-        if _source_ref_valid(conn, source_ref):
-            return [evidence_mod.make_evidence(
-                "word_verbatim", "our_words.text", text,
-                f"our_word:{wid}", source_version=version)]
-        # 来源版本变化/失效后不继续返回 verified word_verbatim；
-        # 裁定（2026-10-04）：gap 细分——legacy raw 前缀/不可解析
-        # 引用不得伪装成有效 provenance
-        _state = ("legacy_raw_prefix"
-                  if isinstance(source_ref, str)
-                  and source_ref.startswith("raw_msg:")
-                  else "invalid_or_missing")
-        return [evidence_mod.make_evidence(
-            "word_unverified", "our_words.text", text,
-            f"our_word:{wid}", source_version=version)] + [
-            evidence_mod.make_evidence(
-                "structured_fact", "our_words.source_ref",
-                "", f"our_word:{wid}",
-                structured_value={"source_ref_state": _state})]
-    if kind == "paraphrase":
+    if not source_ref:
         out = [evidence_mod.make_evidence(
-            "word_paraphrase", "our_words.text", text,
+            "word_unverified", "our_words.text", text,
             f"our_word:{wid}", source_version=version)]
-        # RECALL-06（2026-10-04 二批）：来源解析缺口独立报告——不
-        # 只在 verbatim 分支处理，所有显式读取与证据构造都标 gap
-        if source_ref and not _source_ref_valid(conn, source_ref):
+        if gen > 0:
+            # 来源被显式撤销：保留撤销状态（不是"从未有来源"）
             out.append(evidence_mod.make_evidence(
                 "structured_fact", "our_words.source_ref",
                 "", f"our_word:{wid}",
                 structured_value={
-                    "source_ref_state": (
-                        "legacy_raw_prefix"
-                        if isinstance(source_ref, str)
-                        and source_ref.startswith("raw_msg:")
-                        else "invalid_or_missing")}))
+                    "source_ref_state": "revoked",
+                    "source_binding_version": gen}))
         return out
-    out = [evidence_mod.make_evidence(
+    if _source_ref_valid(conn, source_ref):
+        return [evidence_mod.make_evidence(
+            "word_verbatim", "our_words.text", text,
+            f"our_word:{wid}", source_version=version)]
+    # 来源版本变化/失效后不继续返回 verified word_verbatim；
+    # 裁定（2026-10-04）：gap 细分——legacy raw 前缀/不可解析
+    # 引用不得伪装成有效 provenance
+    _state = ("legacy_raw_prefix"
+              if isinstance(source_ref, str)
+              and source_ref.startswith("raw_msg:")
+              else "invalid_or_missing")
+    return [evidence_mod.make_evidence(
         "word_unverified", "our_words.text", text,
-        f"our_word:{wid}", source_version=version)]
-    if source_ref and not _source_ref_valid(conn, source_ref):
-        out.append(evidence_mod.make_evidence(
+        f"our_word:{wid}", source_version=version)] + [
+        evidence_mod.make_evidence(
             "structured_fact", "our_words.source_ref",
             "", f"our_word:{wid}",
-            structured_value={
-                "source_ref_state": (
-                    "legacy_raw_prefix"
-                    if isinstance(source_ref, str)
-                    and source_ref.startswith("raw_msg:")
-                    else "invalid_or_missing")}))
-    return out
+            structured_value={"source_ref_state": _state})]
 
 
 def words_search(conn, plan: dict, limit: int | None = None) -> dict:
-    """独立 words 通道检索：FTS 匹配话语正文，返回带证据分级的候选。
+    """独立 words 通道检索：池内 BM25 匹配正文，返回带证据分级的候选。
 
     返回 {hits, coverage, forgotten_visible, index_rebuilt}。speaker
     条件按正式 speaker 字段处理（WORD-03），不凭文本或角色猜。
@@ -258,17 +222,8 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
     from . import query_plan as qp
 
     limit = limit or config.RECALL_LEXICAL_K
-    rebuilt = ensure_index_current(conn)
-    terms_expr = qp.compile_terms(plan.get("lexical_terms") or [])
-    phrases_expr = " AND ".join(
-        qp.compile_phrase(p) for p in (plan.get("exact_phrases") or []) if p)
-    parts: list[str] = []
-    if phrases_expr:
-        parts.append(phrases_expr)
-    if terms_expr:
-        parts.append(f"({terms_expr})")
-    expr = " AND ".join(parts) if parts else None
-
+    # Scoped BM25 reads the canonical rows below; the legacy FTS tables are
+    # maintained only by explicit rebuilds, never as a side effect of a search.
     # 三轮复审#4：正/负说话人与日期条件统一走 source_scope（与 words
     # dense、raw Round2 同一语义；source_date_excluded 在此落地——
     # 此前稀疏路只过滤了 speaker_excluded，排除日期两条都漏出来）
@@ -306,7 +261,7 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
     # 命中子集，与 event 的全池口径不一致）。词法匹配由 scoped_bm25
     # 的组内连续判定完成。
     pool_sql = ("SELECT w.word_id, w.memory_id, w.ordinal, w.speaker,"
-                " w.text, w.expression_kind, w.source_ref,"
+                " w.text, w.source_ref,"
                 " w.source_binding_version, m.memory_date,"
                 " m.current_version_no"
                 " FROM memory_our_words w"
@@ -355,7 +310,8 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
             "word_id": r["word_id"],
             "ordinal": r["ordinal"],
             "speaker": r["speaker"],
-            "expression_kind": r["expression_kind"],
+            "source_ref": r["source_ref"],
+            "source_binding_version": int(r["source_binding_version"] or 0),
             "memory_date": r["memory_date"],
             "matched_by": (["words_keyword"] if scored_by_word
                            else []),
@@ -378,7 +334,7 @@ def words_search(conn, plan: dict, limit: int | None = None) -> dict:
         "forgotten_words_count": forgotten,
         "forgotten_recall": config.WORDS_FORGOTTEN_RECALL,
         "forgotten_decision_state": config.WORDS_FORGOTTEN_DECISION_STATE,
-        "index_rebuilt": rebuilt,
+        "index_rebuilt": False,
     }
 
 

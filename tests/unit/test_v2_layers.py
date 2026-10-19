@@ -101,13 +101,12 @@ class TestV2HoldLayered:
     def test_our_words_order_and_speaker(self, actors):
         out = hold_v2(actors, our_words=[
             {"speaker": "jiaming", "text": "今晚风好大"},
-            {"speaker": "qiaosheng", "text": "风大也陪你走完", "expression_kind": "verbatim"},
+            {"speaker": "qiaosheng", "text": "风大也陪你走完"},
         ])
         words = registry.invoke(actors["jiaming"], "memory.our_words.list",
                                 {"memory_id": out["memory_id"]}, None)["data"]["words"]
         assert [w["ordinal"] for w in words] == [1, 2]
         assert words[0]["speaker"] == "jiaming"
-        assert words[1]["expression_kind"] == "verbatim"
 
     def test_title_not_in_projection(self, actors):
         out = hold_v2(actors, title="青鸾独语夜", text="普通的事件正文")

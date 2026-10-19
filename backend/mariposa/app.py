@@ -14,12 +14,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import (FileResponse, HTMLResponse,
                                 JSONResponse, RedirectResponse)
 from fastapi.staticfiles import StaticFiles
+from anyio import CapacityLimiter, to_thread
+from starlette.concurrency import run_in_threadpool
 
 from . import config, db, gate, schema
 from . import oauth as _oauth
 from .capabilities import mcp_adapter
 from .capabilities import registry
-from .capabilities import v1_compat
 from .errors import MariposaError
 from .identity import Principal, service as identity
 
@@ -36,7 +37,6 @@ WEB_DIR = _SOURCE_ROOT / "frontend" / "dist"
 async def lifespan(app: FastAPI):
     schema.migrate()
     schema.migrate_runtime()
-    v1_compat.register_v1_compat()
     # AF-GATE-03：门禁维护流程的到期事件消费端（隔离事务写审计）
     def _gate_expiry_sink(events):
         """AF-GATE-03 到期事件消费端。
@@ -105,7 +105,8 @@ async def _surface_gate(request: Request, call_next):
       （/api/unknown、/apiX、错误 HTTP 方法等不再免费通行）。
     """
     ip = gate.client_ip(request)
-    remain = gate.assert_not_locked(ip)
+    # 门禁维护偶尔会写到期审计，不能在事件循环里等待 SQLite。
+    remain = await run_in_threadpool(gate.assert_not_locked, ip)
     if remain > 0:
         return _locked_response(max(1, math.ceil(remain)))
     # AF-GATE-02（五轮复审）：请求级"已计档"标记——每条请求至多
@@ -113,7 +114,7 @@ async def _surface_gate(request: Request, call_next):
     request.state._gate_metered = False
     path = request.url.path
     if not _surface_managed(path):
-        wait = gate.check_rate("anon", ip)
+        wait = await run_in_threadpool(gate.check_rate, "anon", ip)
         request.state._gate_metered = True
         if wait > 0:
             return _rate_limited_response(max(1, math.ceil(wait)))
@@ -123,7 +124,7 @@ async def _surface_gate(request: Request, call_next):
         # 未被任何端点处理/只有重定向的请求：事后补计匿名档；
         # 计数即满时以 429 顶替（本请求不再免费通行）。307 含
         # /api/ 前缀的尾斜杠重定向——无业务正文但同样是打点
-        wait = gate.check_rate("anon", ip)
+        wait = await run_in_threadpool(gate.check_rate, "anon", ip)
         if wait > 0:
             return _rate_limited_response(max(1, math.ceil(wait)))
     return response
@@ -143,6 +144,14 @@ def health() -> dict:
 # 动态授权（2026-10-05 宿主用户裁定）：连接后输密码换临时 token。
 # /oauth/* 与 /.well-known/* 不在 _surface_managed 内 → middleware 的
 # IP 匿名档 + 锁定全链生效；密码错误另计失败锁定（防在线爆破）。
+_OAUTH_BODY_MAX_BYTES = 64 * 1024
+# 密码慢哈希独占小额度，避免登录并发耗尽普通 API/health 的线程池额度。
+_OAUTH_THREADS = CapacityLimiter(4)
+
+
+def _oauth_body_error(error: MariposaError) -> JSONResponse:
+    return JSONResponse(status_code=error.http_status, content={
+        "error": "invalid_request", "error_description": error.code})
 
 def _oauth_base_url(request: Request) -> str:
     return f"{request.url.scheme}://{request.url.netloc}"
@@ -167,7 +176,10 @@ def oauth_discovery(request: Request):
 
 @app.post("/oauth/register")
 async def oauth_register(request: Request):
-    raw = await request.body()
+    try:
+        raw = await _read_body_capped(request, _OAUTH_BODY_MAX_BYTES)
+    except MariposaError as e:
+        return _oauth_body_error(e)
     try:
         meta = json.loads(raw or b"{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -181,7 +193,9 @@ async def oauth_register(request: Request):
         return JSONResponse(status_code=400, content={
             "error": "invalid_redirect_uris"})
     try:
-        out = _oauth.register_client(meta.get("client_name"), uris)
+        out = await to_thread.run_sync(
+            _oauth.register_client, meta.get("client_name"), uris,
+            limiter=_OAUTH_THREADS)
     except MariposaError as e:
         return JSONResponse(status_code=e.http_status, content={
             "error": e.code})
@@ -245,7 +259,7 @@ button {{ margin-top:16px; width:100%; border:0; border-radius:10px;
 
 
 async def _oauth_form_body(request: Request) -> dict:
-    raw = await request.body()
+    raw = await _read_body_capped(request, _OAUTH_BODY_MAX_BYTES)
     from urllib.parse import parse_qs
     parsed = parse_qs((raw or b"").decode("utf-8", "replace"),
                       keep_blank_values=True)
@@ -255,13 +269,19 @@ async def _oauth_form_body(request: Request) -> dict:
 @app.get("/oauth/authorize")
 async def oauth_authorize_get(request: Request):
     # GET：参数在 query string（无 body）
-    return _oauth_authorize_handle(
-        request, dict(request.query_params))
+    return await to_thread.run_sync(
+        _oauth_authorize_handle, request, dict(request.query_params),
+        limiter=_OAUTH_THREADS)
 
 
 @app.post("/oauth/authorize")
 async def oauth_authorize_post(request: Request):
-    return _oauth_authorize_handle(request, await _oauth_form_body(request))
+    try:
+        form = await _oauth_form_body(request)
+    except MariposaError as e:
+        return _oauth_body_error(e)
+    return await to_thread.run_sync(
+        _oauth_authorize_handle, request, form, limiter=_OAUTH_THREADS)
 
 
 def _oauth_authorize_handle(request: Request, form: dict):
@@ -316,7 +336,15 @@ def _oauth_authorize_handle(request: Request, form: dict):
 
 @app.post("/oauth/token")
 async def oauth_token(request: Request):
-    form = await _oauth_form_body(request)
+    try:
+        form = await _oauth_form_body(request)
+    except MariposaError as e:
+        return _oauth_body_error(e)
+    return await to_thread.run_sync(
+        _oauth_token_handle, request, form, limiter=_OAUTH_THREADS)
+
+
+def _oauth_token_handle(request: Request, form: dict):
     grant = form.get("grant_type", "")
     bad = JSONResponse(status_code=400, content={"error": "invalid_grant"})
     if grant == "password":
@@ -359,16 +387,14 @@ async def oauth_token(request: Request):
 
 @app.post("/oauth/revoke")
 async def oauth_revoke(request: Request):
-    form = await _oauth_form_body(request)
+    try:
+        form = await _oauth_form_body(request)
+    except MariposaError as e:
+        return _oauth_body_error(e)
     token = form.get("token", "")
     if token:
-        th = _oauth._hash_token(token)
-        with db.formal() as conn:
-            conn.execute(
-                "UPDATE client_bindings SET revoked=1 WHERE token_hash=?",
-                (th,))
-            conn.execute("DELETE FROM oauth_refresh_tokens"
-                         " WHERE refresh_hash=?", (th,))
+        await to_thread.run_sync(
+            _oauth.revoke_token, token, limiter=_OAUTH_THREADS)
     return JSONResponse(status_code=200, content={})
 
 
@@ -389,14 +415,14 @@ async def invoke(name: str, request: Request):
     # 复审（2026-10-01）：鉴权只用 header——先于读体；未鉴权的大
     # body（含 chunked）不再被读进内存
     try:
-        principal = _authenticate_tracked(request)
+        principal = await run_in_threadpool(_authenticate_tracked, request)
     except MariposaError as e:
         return _gate_error_response(e)
     # 门禁三件套（2026-10-04）：成功请求按能力分类计档——读能力
     # 扣读档、写能力扣更紧的写档（GATE-01：认证函数不隐式扣读，
     # 三档互不挤占）
     try:
-        _rate_limit_capability(principal, name)
+        await run_in_threadpool(_rate_limit_capability, principal, name)
         body = await _json_body(request)
     except MariposaError as e:
         # P1-07 复审：坏 JSON / BODY_TOO_LARGE 走结构化错误，不是 500
@@ -415,13 +441,9 @@ async def invoke(name: str, request: Request):
     if _prof:
         _args = {**_args, "output_profile": _prof}
     idem = request.headers.get("Idempotency-Key") or body.get("idempotency_key")
-    # P2-03（2026-10-05 审计）：同步 handler 让出事件循环——invoke 内部
-    # 含幂等等待（最长 8s time.sleep）与 SQLite busy_timeout（30s），
-    # 此前直接在 async 端点里同步执行，单个慢请求可冻结整个服务
-    # （含 /health 与静态面）；to_thread 后等待只占线程池不占循环
-    import asyncio as _asyncio
+    # 同步 DB/幂等等待使用 Starlette 有界线程池，不占 ASGI 事件循环。
     try:
-        result = await _asyncio.to_thread(
+        result = await run_in_threadpool(
             registry.invoke, principal, name, _args, idem)
     except MariposaError as e:
         return _gate_error_response(e)
@@ -550,6 +572,19 @@ def _rate_limit_capability(principal: Principal, name: str) -> None:
 async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
     """复审（2026-10-01）：流式累计读取，超限**立即截停**——chunked/
     无 Content-Length 的请求不再先整包进内存才判断。"""
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            size = int(declared)
+        except ValueError:
+            raise MariposaError("Content-Length is not a number",
+                                code="INVALID_HEADER", http_status=400)
+        if size < 0:
+            raise MariposaError("Content-Length must be nonnegative",
+                                code="INVALID_HEADER", http_status=400)
+        if size > max_bytes:
+            raise MariposaError(f"request body exceeds {max_bytes}",
+                                code="BODY_TOO_LARGE", http_status=413)
     total = 0
     chunks: list[bytes] = []
     async for chunk in request.stream():
@@ -557,30 +592,14 @@ async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
             continue
         total += len(chunk)
         if total > max_bytes:
-            _e = MariposaError(
-                f"request body exceeds {max_bytes}（媒体字节走"
-                " /api/media/stage/{token}）", code="BODY_TOO_LARGE")
-            _e.http_status = 413
-            raise _e
+            raise MariposaError(f"request body exceeds {max_bytes}",
+                                code="BODY_TOO_LARGE", http_status=413)
         chunks.append(chunk)
     return b"".join(chunks)
 
 
 async def _json_body(request: Request) -> dict:
-    # 复审（2026-10-01）：流式读取 + 即时截停（含 chunked 无
-    # Content-Length 的请求）；Content-Length 预检保留为快路径
-    clen = request.headers.get("content-length")
-    # CB-048：坏 Content-Length（非数字）是坏请求不是 500
-    try:
-        clen_n = int(clen) if clen else None
-    except ValueError:
-        raise MariposaError("Content-Length is not a number",
-                            code="INVALID_HEADER", http_status=400)
-    if clen_n is not None and clen_n > _JSON_BODY_MAX_BYTES:
-        raise MariposaError(
-            f"request body {clen_n} > {_JSON_BODY_MAX_BYTES}（媒体字节走"
-            " /api/media/stage/{token}）", code="BODY_TOO_LARGE",
-                http_status=413)
+    # 长度预检与实际流字节共用一个门，OAuth/媒体不会漏掉 chunked。
     raw = await _read_body_capped(request, _JSON_BODY_MAX_BYTES)
     if not raw:
         return {}
@@ -629,8 +648,8 @@ _JSON_BODY_MAX_BYTES = 2 * 1024 * 1024  # P1-07：JSON 通道 2MB 硬上限
 @app.put("/api/media/stage/{token}")
 async def media_stage(token: str, request: Request):
     try:
-        principal = _authenticate_tracked(request)
-        _rate_limit_write(principal)  # 字节上传属写档
+        principal = await run_in_threadpool(_authenticate_tracked, request)
+        await run_in_threadpool(_rate_limit_write, principal)
     except MariposaError as e:
         return _gate_error_response(e)
     # 复审（2026-10-01）：流式累计 + 即时截停（chunked 同样护住）；
@@ -654,7 +673,8 @@ async def media_stage(token: str, request: Request):
                             content={"ok": False,
                                      "error": {"code": "BODY_TOO_LARGE"}})
     try:
-        info = _media.stage_bytes(principal.principal_id, token, data)
+        info = await run_in_threadpool(
+            _media.stage_bytes, principal.principal_id, token, data)
     except MariposaError as e:
         return JSONResponse(status_code=e.http_status,
                             content={"ok": False, "error": {"code": e.code,
@@ -687,8 +707,8 @@ def media_object(content_hash: str, request: Request):
 async def source_upload(request: Request):
     import uuid as _uuid
     try:
-        principal = _authenticate_tracked(request)
-        _rate_limit_write(principal)  # 字节上传属写档
+        principal = await run_in_threadpool(_authenticate_tracked, request)
+        await run_in_threadpool(_rate_limit_write, principal)
     except MariposaError as e:
         return _gate_error_response(e)
     if principal.principal_id not in ("qiaosheng", "jiaming"):

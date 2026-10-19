@@ -1,7 +1,7 @@
 """两入口开窗（spec_v2 R20 / §11 / V2-BOOT）。
 
 v2 默认包 = 最近三个自然日桶的 标题+心情标签+心情文字 + 当前 I + 提前 0..3
-自然日进入临近的计划/纪念日全文；进行中/逾期未完成计划单列不消失。
+自然日进入临近的计划全文；进行中/逾期未完成计划单列不消失。
 普通事件不自动全文展开；**不默认附带旧版 30 条原文**（显式取源走 raw
 工具并另行确认）。开窗不产生 view confirm，不续期。
 
@@ -11,12 +11,11 @@ I 只注入当前 revision；若某条有历史，只带 has_history/history_cou
 - Claude Chat / CC 两个 profile 同一基础包（entry_source 校验不变）；
 - 最近三天 = 事件日期的今天与前两天（自然日，非滚动 72 小时）；
 - 临近按发生日期与今天之差 0..3 日（含恰好 3 日，按日期不按小时）；
-- snapshot 指纹覆盖：记忆当前表示、计划、I、纪念日发生项；变化即失效。
+- snapshot 指纹覆盖：记忆当前表示、计划、I；变化即失效。
 """
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from .. import config, db
@@ -24,26 +23,6 @@ from ..errors import Forbidden, SnapshotStale
 from ..memory import categories as cats_mod
 from ..memory import service as memory
 from ..plans import service as plans
-
-def _anniversaries_upcoming(today, days: int, conn=None) -> list[dict]:
-    horizon = (today + timedelta(days=days)).isoformat()
-    if conn is not None:
-        return _anniv_rows(conn, horizon, today, days)
-    with db.formal() as c:
-        return _anniv_rows(c, horizon, today, days)
-
-
-def _anniv_rows(conn, horizon, today, days: int) -> list[dict]:
-    if True:
-        rows = conn.execute(
-            "SELECT d.definition_id, d.title, o.occurrence_date,"
-            " d.memory_id FROM anniversary_occurrences o"
-            " JOIN anniversary_definitions d ON d.definition_id=o.definition_id"
-            " WHERE o.occurrence_date BETWEEN ? AND ?"
-            " ORDER BY o.occurrence_date",
-            (today.isoformat(), horizon)).fetchall()
-    return [dict(r) for r in rows]
-
 
 def _memory_section(conn, three_days: list[str],
                     profile: str = "claude_chat") -> dict:
@@ -75,7 +54,8 @@ from .core import (  # noqa: E402
     BOOT_DAY_WINDOW_MODE, BOOT_I_SECTION_CHARS, BOOT_MEMORY_DAYS,
     BOOT_PLAN_SECTION_CHARS, BOOT_RULES_VERSION, BOOT_SECTION_LIMIT,
     BOOT_SOFT_TOKEN_BUDGET, BOOT_UPCOMING_DAYS, _ENTRY_ALLOWED,
-    _memory_slim, _pack_memory_rows, _state_hash, _three_day_window)
+    _memory_slim, _pack_memory_rows, _state_hash, _three_day_window,
+    bound_packet)
 from .core import ret_mod as _biztime  # noqa: E402,F401（历史名兼容）
 
 
@@ -129,7 +109,7 @@ def get(principal_id: str, entry_source: str, profile: str,
             tz = ZoneInfo(config.RELATIONSHIP_TIMEZONE)
             today, three_days = _three_day_window(tz)
             md = _memory_section(conn, three_days, profile=profile)
-            # RA-006（2026-10-02 复审 P2）：I/Plan/纪念日与 state hash
+            # RA-006（2026-10-02 复审 P2）：I/Plan 与 state hash
             # 同一读事务装配——此前 COMMIT 在这些读取之前，包内容与其
             # 指纹可来自不同快照（审计反例 bootstrap_mixed_snapshot）
             from ..identity_i import service as _i_svc
@@ -139,8 +119,6 @@ def get(principal_id: str, entry_source: str, profile: str,
                 " i_revision_memory_relations").fetchone()["c"]
             plan_items = plans.bootstrap_plans(
                 today, BOOT_UPCOMING_DAYS, conn=conn)
-            anniv = _anniversaries_upcoming(today, BOOT_UPCOMING_DAYS,
-                                            conn=conn)
         finally:
             conn.execute("COMMIT")
 
@@ -214,10 +192,6 @@ def get(principal_id: str, entry_source: str, profile: str,
             "next_cursor": plan_cursor,
             "note": "进行中/需执行/逾期未完成单列不消失；plan 查看不续期",
         },
-        "anniversaries": {
-            "items": anniv,
-            "upcoming_days": BOOT_UPCOMING_DAYS,
-        },
         "policy": {
             "boot_memory_days": BOOT_MEMORY_DAYS,
             "plan_upcoming_days": BOOT_UPCOMING_DAYS,
@@ -229,6 +203,10 @@ def get(principal_id: str, entry_source: str, profile: str,
                      "note": "取原文用 source.message.get / source.search 显式查询"},
     }
 
+    # Include diagnostics in the measured envelope, then refresh the smaller
+    # estimate after deferring items to their existing continuation routes.
+    _estimate_budget(result)
+    bound_packet(result)
     _estimate_budget(result)
     with db.formal() as conn:
         conn.execute(
@@ -244,6 +222,7 @@ from .pages import next_page  # noqa: E402,F401
 
 def _estimate_budget(result: dict) -> None:
     """粗估（chars/1.5）；超预算显式提示，不静默截断约定资料。"""
+    result.pop("warnings", None)
     chars = 0
     for m in result.get("memory_days", {}).get("items", []):
         chars += len(m.get("mood_text") or "")

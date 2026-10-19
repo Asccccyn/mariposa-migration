@@ -132,8 +132,7 @@ class TestP203Round2BudgetPreview:
                 date_confidence="exact", original_title="b",
                 categories=["daily"], creation_mode="contemporaneous",
                 raw_pending=False,
-                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝",
-                            "expression_kind": "paraphrase"}])
+                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝"                            }])
             p = recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "我当时的原话",
                                "channels": ["words"],

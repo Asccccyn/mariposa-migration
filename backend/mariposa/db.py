@@ -1,7 +1,6 @@
-"""正式库与工作区库的连接管理。
+"""正式库、召回运行库和保留的辅助库连接管理。
 
-两个独立 SQLite 文件，各自独立连接；跨库交接走提交信封协议
-（见 workspace/service.py 与 memory/service.py），不假设跨库原子事务。
+各 SQLite 文件独立连接；正式领域写入由调用方显式持有事务。
 """
 from __future__ import annotations
 

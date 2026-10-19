@@ -46,14 +46,16 @@ class TestMemoryExtras:
         from mariposa.capabilities import registry as reg
         assert "memory.versions.read" not in reg.REGISTRY
         assert "memory.versions.list" not in reg.REGISTRY
-        # 内部版本行仍在（冲突检测依赖），只是查看入口没了
+        # 2026-10-18 不留档：就地覆写当前版本行（单行），版本计数器
+        # 递进体现在 memories.current_version_no；历史行不再保留
         h2 = _hold(actors)
-        extras.update_text("jiaming", h2["memory_id"], 1, text="第二版")
+        out = extras.update_text("jiaming", h2["memory_id"], 1, text="第二版")
+        assert out["version"] == 2
         with db.formal() as conn:
             c = conn.execute(
                 "SELECT COUNT(*) c FROM memory_versions WHERE memory_id=?",
                 (h2["memory_id"],)).fetchone()["c"]
-        assert c == 2
+        assert c == 1
 
 
 class TestRelations:

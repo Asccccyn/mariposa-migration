@@ -322,7 +322,7 @@ CREATE TABLE memory_categories(
   memory_id TEXT NOT NULL REFERENCES memories(memory_id),
   category TEXT NOT NULL CHECK(category IN
     ('daily','milestone','sad','sweet','date','plan','sex','anniversary',
-     'reloplay')),
+     'reloplay','diary')),
   added_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY(memory_id, category)
@@ -1185,6 +1185,61 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_judge_policy_history_idem
 -- 仅展示证据，不参与检索/绑定；已有库由导入回填（importer 在后续
 -- 导入时对已存在会话仅在 draft 带非空摘要时更新该列）。
 ALTER TABLE source_conversations ADD COLUMN summary TEXT;
+"""),
+    (37, """
+-- Independent anniversary dates are retired. Preserve historical records in
+-- read-only archive tables; memory category 'anniversary' is unrelated.
+ALTER TABLE anniversary_definitions RENAME TO legacy_anniversary_definitions;
+ALTER TABLE anniversary_occurrences RENAME TO legacy_anniversary_occurrences;
+
+CREATE TRIGGER legacy_anniversary_definitions_no_insert
+BEFORE INSERT ON legacy_anniversary_definitions BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+CREATE TRIGGER legacy_anniversary_definitions_no_update
+BEFORE UPDATE ON legacy_anniversary_definitions BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+CREATE TRIGGER legacy_anniversary_definitions_no_delete
+BEFORE DELETE ON legacy_anniversary_definitions BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+CREATE TRIGGER legacy_anniversary_occurrences_no_insert
+BEFORE INSERT ON legacy_anniversary_occurrences BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+CREATE TRIGGER legacy_anniversary_occurrences_no_update
+BEFORE UPDATE ON legacy_anniversary_occurrences BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+CREATE TRIGGER legacy_anniversary_occurrences_no_delete
+BEFORE DELETE ON legacy_anniversary_occurrences BEGIN
+  SELECT RAISE(ABORT, 'RETIRED_ARCHIVE_READ_ONLY');
+END;
+"""),
+    (38, """
+-- ===== 十分类 CHECK（2026-10-17 她裁定加 diary"日记"）：A08 同款重建路径，
+-- 数据逐行保留。
+CREATE TABLE memory_categories_new(
+  memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  category TEXT NOT NULL CHECK(category IN
+    ('daily','milestone','sad','sweet','date','plan','sex','anniversary',
+     'reloplay','diary')),
+  added_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, category)
+);
+INSERT INTO memory_categories_new SELECT * FROM memory_categories;
+DROP TABLE memory_categories;
+ALTER TABLE memory_categories_new RENAME TO memory_categories;
+CREATE INDEX idx_categories_category ON memory_categories(category);
+"""),
+    (39, """
+-- ===== 我们的话只剩原文（2026-10-18 她裁定）：删 expression_kind 列。
+-- 概括/转述通道整体退役——话语一律为原文（勾选式录入，说话人跟随
+-- 出处）。生产数据 84 行全部为 unspecified/verbatim，零 paraphrase，
+-- 删列无损。
+ALTER TABLE memory_our_words DROP COLUMN expression_kind;
 """),
 ]
 

@@ -2,8 +2,7 @@
 跨 profile 快照门、钳制溢出与游标字段裸异常。
 
 - R13：memory.relations.list direction=both 合法（handler 支持且默认）；
-  memory.by_tag namespace 缺省合法（handler 默认 tag）；blocked/reserved
-  能力占位 schema 放行形状、handler 的 blocked 响应仍权威
+  已退役 by_tag/blocked/reserved 的负向合同见 test_retired_capabilities_negative
 - R14：快照复用（loaded_snapshot_id）与全部续页 section 统一核 profile
   ——CC 的包不得被 estomago 身份冒充 unchanged 复用；拒绝原因=profile
   不匹配（不是被别的检查先拦）
@@ -38,14 +37,6 @@ class TestR13SchemaCoverage:
     def test_relations_list_direction_both_accepted(self):
         sc.validate("memory.relations.list",
                     {"memory_id": "00001", "direction": "both"})
-
-    def test_by_tag_namespace_optional(self):
-        sc.validate("memory.by_tag", {"tag": "daily"})
-        sc.validate("memory.by_tag", {"tag": "daily", "namespace": "tag"},
-                    )  # 显式等价值同样合法
-
-    # 2026-10-13 她裁定：blocked 占位全家桶（chat/voice/group/wishstar/
-    # wakeup/listening/settings.update 共 36 项）退役删除，本用例随之移除。
 
     def test_real_registry_full_coverage(self):
         missing = [n for n in registry.REGISTRY

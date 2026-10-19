@@ -1,7 +1,7 @@
 # mariposa
 
-宿主用户与char的自建聊天与共同生活应用。当前仓库为**隔离开发版**：
-独立目录、独立数据库，不读写旧 Ombre 生产数据；一切开发与测试使用合成数据。
+宿主用户与char的记忆与原文应用。开发和测试使用独立数据根、合成数据，
+不读写旧 Ombre 生产数据；当前正式数据状态不能由历史开发说明推断。
 
 ## 快速开始（开发）
 
@@ -10,21 +10,70 @@
 python -m venv .venv
 .venv/bin/pip install -r requirements.lock
 # 种子 + 启动（127.0.0.1:18780；Windows 时代 .ps1 脚本已随 Mac 迁移退役删除）
-MARIPOSA_ROOT=<数据根> MARIPOSA_ALLOW_CREATE=1 .venv/bin/python -m mariposa.devseed
-MARIPOSA_ROOT=<数据根> .venv/bin/python -m uvicorn mariposa.app:app --port 18780
+PYTHONPATH=backend MARIPOSA_ROOT=<数据根> MARIPOSA_ALLOW_CREATE=1 .venv/bin/python -m mariposa.devseed
+PYTHONPATH=backend MARIPOSA_ROOT=<数据根> .venv/bin/python -m uvicorn mariposa.app:app --port 18780
 ```
 
-开发 token 生成于 `runtime/dev_tokens.json`（不入 git），在 Web 页粘贴对应主体的 token。
+正式前端位于 `frontend/`：`cd frontend && pnpm install && pnpm build`。
+网页登录使用已配置的身份密码；开发 token 位于开发数据根的
+`runtime/dev_tokens.json`（不入 git），供隔离 API 测试使用。
 
 ## 测试
 
 - 遵守 AGENTS.md 硬约束（2026-09-22 内存事故后）：pytest 分批、
   指定文件/用例、`-q -x`、前台显式超时（60/120s），禁缓存/字节码
   写入仓库；预期内存 >2GB 或 >20 分钟先确认再跑
+- 2026-10-18 夜批基线：unit 1240 绿 / 2 失败（words 惰性重建移除与
+  读流上限预检属原文分页在途批的既有失败，与本批无关）——本批=
+  我们的话只剩原文（删 expression_kind 全链+迁移 39）+ memory.update
+  就地改（版本计数器仍递进，票据防串改依赖）+ 话语新增/修改并入
+  （说话人随出处、逐字核验连续片段）
 
-```powershell
-.venv\Scripts\python -m pytest tests -q
+```bash
+# 前台、单文件、120 秒硬超时；无字节码或 pytest 缓存写入仓库
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python - <<'PYTEST'
+import os, subprocess, tempfile
+with tempfile.TemporaryDirectory(prefix="mariposa-test-") as root:
+    env = dict(os.environ, MARIPOSA_ROOT=root, MARIPOSA_ALLOW_CREATE="1",
+               MARIPOSA_SEMANTIC_PROVIDER="", MARIPOSA_CODEX_LIVE_ENABLED="0")
+    subprocess.run([".venv/bin/python", "-m", "pytest", "-q", "-x",
+                    "-p", "no:cacheprovider", "--basetemp", root + "/pytest",
+                    "tests/unit/test_retired_capabilities_negative.py"],
+                   env=env, check=True, timeout=120)
+PYTEST
 ```
+
+## 浏览器回归
+
+现行 React 前端的四条隔离流程在 `tests/e2e/library.smoke.cjs`，覆盖登录、
+无日期分页、编辑读回、合法心情补标签、回忆修订与撤销留、原文搜索续页、
+角色按钮、删除申请/撤回/批准和末页删除。测试只使用自动创建的合成数据根。
+
+已有前端依赖、Playwright 与 Chromium 后运行：
+
+```bash
+.venv/bin/python -B scripts/run_browser_checks.py
+```
+
+若 Playwright 不在 Node 模块搜索路径，用 `MARIPOSA_PLAYWRIGHT_MODULE` 指定
+其模块目录；若浏览器未随 Playwright 安装，用 `MARIPOSA_CHROMIUM_EXECUTABLE`
+指定独立 Chrome/Chromium 可执行文件。脚本使用新的无头浏览器上下文，不使用
+个人浏览器配置。默认只监听 `127.0.0.1:18881`，端口已占用时失败，不接管旧进程；
+测试限时，服务器与浏览器进程结束后清理；源码和构建使用临时副本，
+不会刷新当前 checkout 的 `frontend/dist`，不会重启正在运行的服务。
+
+## 独立纪念日退役与开窗验证
+
+2026-10-15：用户已明确退役本仓独立纪念日子系统。旧读取/输出/续页
+与 est 消费均删除；升级迁移仅封存可能存在的旧行，不销毁历史。
+重要日期正本复用 Superposition。记忆的 `anniversary` 分类及永久 WIDE、
+长心情分页均保留。
+
+在 est 仓运行 `python3 scripts/verify-mariposa-bootstrap.py --mariposa-repo <本仓路径>`，
+用临时合成库与真实 HTTP 验证完整心情、局部失败隔离、原快照复核、失效重建、
+系统告警、取消和旧段退役。普通心情失败不连带丢弃已复核的 I 与计划；
+合同细节见 `docs/memory_runtime/CURRENT.md`。
+旧 66 发生项联调报告只属退役前历史，不参与现行验收。未部署生产。
 
 ## 架构速览
 

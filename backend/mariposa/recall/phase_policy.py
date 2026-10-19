@@ -25,12 +25,13 @@ POLICY_VERSION = "recall-phase-v1.7"
 #: 仓库分类 ID -> 整数 H（v1.7 §5.1 冻结值；reloplay 为工程初值）
 BASE_DAYS = {"daily": 20, "sex": 20, "sad": 30, "sweet": 30, "date": 60,
              "reloplay": 7}
-#: 永久类别：不进数值公式（§5.2）
-PERMANENT_CATEGORIES = frozenset({"milestone", "anniversary"})
+#: 永久类别：不进数值公式（§5.2）；diary 永久（她 2026-10-17 裁定）
+PERMANENT_CATEGORIES = frozenset({"milestone", "anniversary", "diary"})
 #: 中文写法 -> 仓库 ID（输入容忍，库里只存 ID）
 ALIASES = {"伤心": "sad", "伤心的事": "sad", "日常": "daily",
            "做爱": "sex", "甜蜜": "sweet", "约会": "date",
-           "重大转折": "milestone", "纪念": "anniversary", "剧本": "reloplay"}
+           "重大转折": "milestone", "纪念": "anniversary", "剧本": "reloplay",
+           "日记": "diary"}
 ALL_CATEGORIES = frozenset(BASE_DAYS) | PERMANENT_CATEGORIES | {"plan"}
 
 #: 普通召回第一轮字段（§5.3 矩阵：WIDE 6 / MID 5 / CORE 4）

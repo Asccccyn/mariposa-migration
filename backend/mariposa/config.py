@@ -94,8 +94,6 @@ POLICY_VERSION = "mariposa_v1_7"
 
 
 SEMANTIC_PROVIDER = os.environ.get("MARIPOSA_SEMANTIC_PROVIDER", "")  # 空 = 未配置
-QUOTE_SEMANTIC_AUTO_APPLY = os.environ.get(
-    "MARIPOSA_QUOTE_SEMANTIC_AUTO_APPLY", "true").lower() in ("1", "true", "yes")
 
 CONTRACT_VERSION = "1.0"
 

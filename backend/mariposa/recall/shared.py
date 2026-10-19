@@ -204,7 +204,8 @@ def _finalize_cards(cards: list[dict]) -> list[dict]:
                          "representation", "content_version",
                          "representation_version", "projection_version",
                          "memory_id", "word_id", "ordinal", "speaker",
-                         "expression_kind", "memory_date", "matched_by",
+                         "source_ref", "source_binding_version",
+                         "memory_date", "matched_by",
                          "matched_fields", "excerpt", "truncated", "evidence",
                          "judge", "version_receipt", "rrf_score",
                          "_matched")}  # 复审#1：检索层真实命中窗

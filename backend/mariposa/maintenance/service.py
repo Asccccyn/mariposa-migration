@@ -1,4 +1,4 @@
-"""运维能力：outbox 消费、活动查询、提醒到期（§16.1/§19.2/§17.3）。"""
+"""运维能力：现行 Source 导入状态、审计查询与历史 outbox 只读统计。"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -16,9 +16,7 @@ def _now() -> str:
 
 
 def outbox_drain(limit: int = 100) -> dict:
-    """至少一次投递 + 幂等消费的第一版消费者：逐条标记 processed。
-
-    异步下游接入点在此注册。WP-05（D05a）：events_outbox 已停写且
+    """WP-05（D05a）：events_outbox 已停写且
     无注册消费者——drain 显式返回 no_consumers_registered，历史行
     只读不动（audit_events 是单一正本）。
     """
@@ -36,7 +34,8 @@ def outbox_status() -> dict:
             "SELECT COUNT(*) AS pending FROM events_outbox WHERE processed=0"
         ).fetchone()
         total = conn.execute("SELECT COUNT(*) AS t FROM events_outbox").fetchone()["t"]
-    return {"pending": row["pending"], "total": total}
+    return {"pending": row["pending"], "total": total,
+            "status": "historical_readonly", "consumers_registered": False}
 
 
 def activity_list(limit: int = 50, event_type: str | None = None) -> list[dict]:
@@ -136,17 +135,21 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
 
 
 def jobs_status() -> dict:
-    """维护任务状态总览：outbox 待处理、导入任务。
-
-    CB-051（2026-10-02 审计 P2）：Workspace Tasks/Lease 已退役——
-    不再查询已删除的 workspace_task_leases/work_items（此前该状态页
-    在 fresh schema 上直接 no such table 崩溃）。"""
+    """Source 导入按真实批次统计；旧 outbox 数量只作历史披露。"""
     with db.formal() as conn:
         pending = conn.execute(
             "SELECT COUNT(*) AS c FROM events_outbox WHERE processed=0"
         ).fetchone()["c"]
         imports = conn.execute(
-            "SELECT status, COUNT(*) AS c FROM import_jobs GROUP BY status"
+            "SELECT kind, status, COUNT(*) AS c FROM source_import_batches"
+            " GROUP BY kind, status"
         ).fetchall()
+    totals: dict[str, int] = {}
+    by_kind: dict[str, dict[str, int]] = {}
+    for row in imports:
+        totals[row["status"]] = totals.get(row["status"], 0) + row["c"]
+        by_kind.setdefault(row["kind"], {})[row["status"]] = row["c"]
     return {"outbox_pending": pending,
-            "import_jobs": {r["status"]: r["c"] for r in imports}}
+            "outbox_status": "historical_readonly",
+            "import_jobs": totals, "import_jobs_by_kind": by_kind,
+            "import_jobs_source": "source_import_batches"}

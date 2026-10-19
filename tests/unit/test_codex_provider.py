@@ -353,8 +353,7 @@ class TestJ11Permissions:
             ensure_ascii=False), encoding="utf-8")
         importer.import_file("jiaming", str(f))
         hold(actors, "崧蓝事件正文",
-     our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝",
-                 "expression_kind": "paraphrase"}])
+     our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝"                 }])
 
         def transport(spec):
             payload = json.loads(spec["prompt"])

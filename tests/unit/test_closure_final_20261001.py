@@ -60,8 +60,7 @@ def _legit(actors):
         actors["jiaming"], text="崧蓝事件正文", memory_date="2026-09-25",
         date_confidence="exact", original_title="f", categories=["daily"],
         creation_mode="contemporaneous", raw_pending=False,
-        our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚",
-                    "expression_kind": "paraphrase"}])
+        our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚"                    }])
     p = recall_service.start(actors["jiaming"], {
         "query_plan": {"original_request": "我当时的原话",
                        "channels": ["words"],

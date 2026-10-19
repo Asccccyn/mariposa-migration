@@ -120,8 +120,7 @@ class TestFindWordsTopLevel:
 
     def test_lexical_terms_array_and_speaker(self, actors):
         _hold(actors, "说话人甲话语",
-              our_words=[{"speaker": "jiaming", "text": "甲的数组词句",
-                          "expression_kind": "paraphrase"}])
+              our_words=[{"speaker": "jiaming", "text": "甲的数组词句"                          }])
         out = registry.invoke(actors["jiaming"], "memory.find_words", {
             "query": "数组词句",
             "lexical_terms": ["数组词句"],
@@ -158,8 +157,7 @@ class TestBudgetAggregate:
         for i in range(3):
             _hold(actors, f"预算卡{i}正文",
                   our_words=[{"speaker": "qiaosheng",
-                              "text": f"预算{i}{long_word}",
-                              "expression_kind": "paraphrase"}])
+                              "text": f"预算{i}{long_word}"                              }])
         out = registry.invoke(actors["jiaming"], "memory.recall.start", {
             "query_plan": {"original_request": "预算",
                            "channels": ["words"],

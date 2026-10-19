@@ -164,23 +164,6 @@ class TestStaleReceipt:
             "未看过 v2 就确认成功会伪造明开事实"
 
 
-# ---------------------------------------------------------------- NP4
-
-class TestLockInChecks:
-
-
-    def test_pin_deleted_memory_no_fake_success(self, actors):
-        m = _hold(actors, "假回执检查")
-        with db.formal() as c2:
-            c2.execute("PRAGMA foreign_keys=OFF")
-            c2.execute("DELETE FROM memories WHERE memory_id=?",
-                       (m["memory_id"],))
-        with pytest.raises(NotFound):
-            registry.invoke(actors["jiaming"], "memory.pin",
-                            {"memory_id": m["memory_id"], "value": True},
-                            None)
-
-
 # ---------------------------------------------------------------- NP5
 
 class TestMaintenanceWorkerAccess:

@@ -86,9 +86,6 @@ def _project_bootstrap(out: dict) -> None:
         pl.pop("section_limit", None)
         pl.pop("upcoming_days", None)  # 工具说明承担
         pl.pop("count", None)          # 当前页可推导
-    ann = out.get("anniversaries")
-    if isinstance(ann, dict):
-        ann.pop("upcoming_days", None)
     out.pop("cursor", None)  # 顶层恒为 None 的占位（续页游标在各段内）
 
 

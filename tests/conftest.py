@@ -164,7 +164,6 @@ FORMAL_TABLES = [
     "field_search_docs", "field_fts",
     "relation_corrections",
     "memory_mood_tags", "memory_moods", "memory_categories",
-    "anniversary_occurrences", "anniversary_definitions",
     "audit_events", "events_outbox", "idempotency_records",  "words_fts", "words_search_docs", "search_fts",
     "retrieval_documents", "memory_versions",
     "memories", "client_bindings", "principals",

@@ -226,7 +226,7 @@ def _register() -> dict[str, Capability]:
         description="按钉住成员 manifest 读回片段（逐成员 hash 核对，"
                     "漂移显式标注不静默）")
     add("source.conversation.get", _source_conversation_get, _owners(), False,
-        description="按 sequence 游标分页读原文会话（超长会话不整段拉取）")
+        description="按页码或 (sequence, id) 游标分页读原文会话（超长会话不整段拉取）")
     add("source.conversations.list", _source_conversations_list, _owners(),
         False, description="原文会话列表（标题/时间/条数）")
     add("source.binding.bind", _source_bind, _owners(), True,
@@ -299,7 +299,15 @@ def _register() -> dict[str, Capability]:
     add("memory.by_emotion", _by_emotion, _owners(), False,
         description="按情绪查（结构化入口；历史 forgotten_summary 仍可查）")
     add("memory.update", _memory_update, _owners(), True,
-        description="修改桶正文（新版本，不就地覆盖；历史 forgotten_summary 需先离线恢复）")
+        description="修改桶（2026-10-18 她裁定：就地更新当前版本，不留历史"
+                    "版本；CAS 锁与审计保留）；可同时改正文/标题/日期/分类"
+                    "与我们的话（新增/修改——话语只存原文，说话人由出处"
+                    "推导，服务端逐字核验连续片段）")
+    # 当时心情修订（她 2026-10-14）：主体=char；MARIPOSA_MOOD_EDIT_OVERRIDE
+    # 豁免 qiaosheng（整理期临时补丁——删 env 重启即恢复 V2-REC-09）
+    add("memory.mood.update", _mood_update, _owners(), True,
+        description="当时心情修订（文字+标签，覆盖更新留审计；仅char，"
+                    "整理期豁免口见 service 层）")
     add("memory.relations.link", _rel_link, _owners(), True,
         description="建立关联（单向存储，显式反向查询）")
     add("memory.relations.list", _rel_list, _owners(), False, description="列出关联")
@@ -329,7 +337,7 @@ def _register() -> dict[str, Capability]:
     add("memory.relations.trace", _rel_trace, _owners(), False,
         description="沿 continuation_of 追事件链")
     add("maintenance.outbox.drain", _outbox_drain, _ops_maintainers(), True,
-        description="消费 outbox（至少一次+幂等标记）")
+        description="读取已停写 outbox 的历史状态（无消费者，不执行投递）")
     add("maintenance.outbox.status", _outbox_status, _maintainers_readers(), False,
         description="outbox 待处理统计")
     add("maintenance.activity.list", _activity_list, _maintainers_readers(), False,
@@ -716,7 +724,9 @@ def _recall(principal: Principal, a: dict) -> dict:
     with db.formal() as conn:
         return retrieval_search.recall(
             conn, str(a.get("query", "")), a.get("filters") or {},
-            _int_arg(a, "limit", 20, 1, 200), a.get("cursor"))
+            _int_arg(a, "limit", 20, 1, 200), a.get("cursor"),
+            lexical_terms=a.get("lexical_terms"),
+            keyword_match=a.get("keyword_match", "any"))
 
 
 # ---------- 召回运行时 handlers（runtime 幂等：operation_id） ----------
@@ -1004,7 +1014,8 @@ def _source_conversation_get(principal: Principal, a: dict) -> dict:
         if isinstance(a.get("after_cursor"), dict) else None,
         before_id=(a.get("before_cursor") or {}).get("id")
         if isinstance(a.get("before_cursor"), dict) else None,
-        around_seq=a.get("around_seq"), limit=_int_arg(a, "limit", 100, 1, 500))
+        around_seq=a.get("around_seq"), limit=_int_arg(a, "limit", 100, 1, 500),
+        page=a.get("page"), around_message_id=a.get("around_message_id"))
 
 
 def _source_conversations_list(principal: Principal, a: dict) -> dict:
@@ -1236,12 +1247,27 @@ from ..memory.extras import _UNSET  # WR-04：字段缺席哨兵
 
 
 def _memory_update(principal: Principal, a: dict) -> dict:
+    # 2026-10-18 她裁定：修订就地不留档（版本号不变，CAS 锁保留）+
+    # 我们的话新增/修改并入本入口（话语只存原文，说话人跟随出处，
+    # 服务端逐字核验连续片段——见 memory/extras.py _derive_word）
     return extras.update_text(
         principal.principal_id, str(a.get("memory_id", "")),
         _int_arg(a, "expected_version", 0, 0, 1 << 31), a.get("text"),
         a["memory_date"] if "memory_date" in a else _UNSET,
         a["date_confidence"] if "date_confidence" in a else _UNSET,
-        a["original_title"] if "original_title" in a else _UNSET)
+        a["original_title"] if "original_title" in a else _UNSET,
+        a["categories"] if "categories" in a else _UNSET,
+        a.get("our_words_add"),
+        a.get("our_words_revise"))
+
+
+def _mood_update(principal: Principal, a: dict) -> dict:
+    # 当时心情修订（fcd2d8a 补注册；她 2026-10-14 要整理期自用）：
+    # 主体=char；MARIPOSA_MOOD_EDIT_OVERRIDE 开时豁免 qiaosheng
+    # （service 层校验+审计 override 标注——临时补丁，删 env 重启即撤）
+    return extras.update_mood(principal.principal_id,
+                              str(a.get("memory_id", "")),
+                              a.get("mood"))
 
 
 def _rel_link(principal: Principal, a: dict) -> dict:
@@ -1467,11 +1493,14 @@ def _cards_batch(principal: Principal, a: dict) -> dict:
     # 关系边一并批量带回（2026-10-13 前端关系页要用；一张卡再拉
     # memory.relations.list 就是逐卡 N+1 打限速——同 batch 语义）
     rel_edges: dict[str, list[dict]] = {}
+    memories = {}
     with db.formal() as conn:
+        if a.get("include_memory"):
+            memories = {mid: memory.get(conn, mid) for mid in dict.fromkeys(ids)}
         marks = ",".join("?" * len(ids))
         for r in conn.execute(
                 "SELECT relation_id, from_memory, to_memory, relation_type,"
-                " custom_label FROM memory_relations WHERE from_memory IN"
+                " custom_label, reverse_label FROM memory_relations WHERE from_memory IN"
                 f" ({marks}) OR to_memory IN ({marks})",
                 ids + ids).fetchall():
             for side, key in (("out", r["from_memory"]),
@@ -1483,12 +1512,14 @@ def _cards_batch(principal: Principal, a: dict) -> dict:
                         "other_memory": (r["to_memory"] if side == "out"
                                          else r["from_memory"]),
                         "relation_type": r["relation_type"],
-                        "custom_label": r["custom_label"]})
+                        "custom_label": r["custom_label"],
+                        "reverse_label": r["reverse_label"]})
     cards = {}
     for mid in dict.fromkeys(ids):
         if not mid:
             continue
         cards[mid] = {
+            **({"memory": memories[mid]} if mid in memories else {}),
             "words": ow.list_for(mid),
             "recollections": rc.list_for(mid),
             "bindings": [{"binding_id": b["binding_id"],
@@ -1564,8 +1595,6 @@ def _settings_get(principal: Principal, a: dict) -> dict:
             "semantic_status": "unavailable" if not _cfg.SEMANTIC_PROVIDER
                                else "configured",
         },
-        "quote_semantic_auto_apply": getattr(
-            _cfg, "QUOTE_SEMANTIC_AUTO_APPLY", None),
         # RA-010：calendar/quote 已退役——不再引用不存在常量
         "note": "只读快照；修改经部署参数（policy version 变更入审计）",
     }
@@ -1622,14 +1651,15 @@ REGISTRY = _register()
 
 # 旧规格兼容层（plan.get 等薄实现）随 registry 一并装配——不依赖
 # app 导入（单元测试/工具直用 REGISTRY 时同样可用；register 内部
-# 幂等，app.py 的再次调用无害）
+# 只在此处装配保留的三别名和两个能力查询入口）
 from . import v1_compat as _v1_compat  # noqa: E402
 _v1_compat.register_v1_compat()
 
 
 def list_capabilities(principal: Principal) -> list[dict]:
     return [
-        {"name": c.name, "write": c.write, "description": c.description}
+        {"name": c.name, "write": c.write, "status": c.status,
+         "description": c.description}
         for c in REGISTRY.values()
         if principal.principal_id in c.allowed_principals
         and (principal.capabilities_allowlist is None

@@ -38,7 +38,8 @@ def _allowed_field_kinds(conn, memory_ids: list[str]) -> dict[str, set[str]]:
 
 
 def _stage_scoped_hits(conn, query: str, where: list[str],
-                       params: list) -> list[tuple[str, list[str]]]:
+                       params: list, lexical_terms: list[str] | None = None,
+                       keyword_match: str = "any") -> tuple[list, bool]:
     """全量审计 P2-01：兼容入口复用 Runtime 的 scoped BM25——
     scope 池 → 逐桶当前阶段允许字段 → 分字段文档打分，阶段过滤在
     打分/截断**之前**生效。此前先 FTS rank LIMIT 再过滤，CORE 桶的
@@ -48,8 +49,11 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
     from ..recall import pipeline as pl
     from . import query_plan as qp
     from . import scoped_bm25
-    terms, phrases = qp.plan_token_groups({"original_request": query})
-    if not (terms or phrases):
+    clauses = list(dict.fromkeys(lexical_terms or []))
+    groups = ([qp.plan_token_groups({"lexical_terms": [term]})
+               for term in clauses] if clauses else
+              [qp.plan_token_groups({"original_request": query})])
+    if not any(terms or phrases for terms, phrases in groups):
         return [], False
     # CB-043（2026-10-02 审计 P2）：池安全阀截断状态贯穿返回——此前
     # 丢弃后零命中与"池未查尽"无法区分（false negative + 不诚实覆盖）
@@ -75,8 +79,24 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
                          "field": row["field_kind"],
                          "tokens": scoped_bm25._doc_tokens(
                              row["text_norm"] or "")})
-    scored = scoped_bm25.score_documents(docs, terms, phrases)
-    return ([(e["owner"], list(e["fields"])) for e in scored],
+    # 每个词在同一完整、获准的候选宇宙中命中；先按桶合并布尔条件，
+    # 再分页。all 允许不同词命中同一桶的不同合法字段。
+    matches = [scoped_bm25.score_documents(docs, terms, phrases)
+               for terms, phrases in groups]
+    merged = {}
+    for group in matches:
+        for hit in group:
+            item = merged.setdefault(hit["owner"], {
+                "owner": hit["owner"], "fields": set(),
+                "score": 0.0, "clauses": 0})
+            item["fields"].update(hit["fields"])
+            item["score"] += hit["score"]
+            item["clauses"] += 1
+    scored = sorted((item for item in merged.values()
+                     if keyword_match != "all"
+                     or item["clauses"] == len(groups)),
+                    key=lambda item: (-item["score"], item["owner"]))
+    return ([(e["owner"], sorted(e["fields"])) for e in scored],
             pool_trunc)
 
 
@@ -164,14 +184,17 @@ def _hit(row, matched_by: str, matched_fields: list[str]) -> dict:
 
 
 def _recall_keyword(conn, query: str, where: list[str], params: list,
-                    filters: dict, limit: int, cursor: list | None) -> dict:
+                    filters: dict, limit: int, cursor: list | None,
+                    lexical_terms: list[str] | None = None,
+                    keyword_match: str = "any") -> dict:
     """关键词模式：池内 scoped BM25（全量审计 P2-01：阶段字段过滤在
     打分/截断**之前**，CORE 桶的不允许命中不再挤掉合法 event_text）；
     offset 游标；matched_fields 如实标注真实命中字段。
     """
     offset = int(cursor[0]) if cursor and len(cursor) == 1 and str(
         cursor[0]).isdigit() else 0
-    ordered, pool_trunc = _stage_scoped_hits(conn, query, where, params)
+    ordered, pool_trunc = _stage_scoped_hits(
+        conn, query, where, params, lexical_terms, keyword_match)
     page = ordered[offset:offset + limit]
     hits = []
     for mid, eff in page:
@@ -190,7 +213,8 @@ def _recall_keyword(conn, query: str, where: list[str], params: list,
     # 如实外露且不再签"终结"游标语义
     out = {"hits": hits, "query": query, "mode": "keyword",
            "filters_applied": _filters_summary(filters),
-           "next_cursor": next_cursor, "limit": limit}
+           "next_cursor": next_cursor, "limit": limit,
+           "matched_count": total_kept}
     if pool_trunc:
         out["coverage"] = "partial_pool_cap"
         out["pool_truncated"] = True
@@ -200,10 +224,14 @@ def _recall_keyword(conn, query: str, where: list[str], params: list,
 def _recall_browse(conn, where: list[str], params: list, filters: dict,
                    limit: int, cursor: list | None) -> dict:
     """浏览模式：query 为空直接浏览池（稳定键游标 memory_date DESC）。"""
-    if cursor and len(cursor) == 2 and cursor[0]:
-        where.append("(m.memory_date < ? OR (m.memory_date = ? AND"
-                     " m.memory_id < ?))")
-        params += [cursor[0], cursor[0], cursor[1] or ""]
+    if cursor and len(cursor) == 2 and cursor[1]:
+        if cursor[0] is None:
+            where.append("m.memory_date IS NULL AND m.memory_id < ?")
+            params.append(cursor[1])
+        else:
+            where.append("(m.memory_date < ? OR (m.memory_date = ? AND"
+                         " m.memory_id < ?) OR m.memory_date IS NULL)")
+            params += [cursor[0], cursor[0], cursor[1]]
     sql = ("SELECT m.memory_id, m.memory_date, m.compression_state,"
            " m.current_version_no FROM memories m"
            f" WHERE {' AND '.join(where)}"
@@ -220,7 +248,9 @@ def _recall_browse(conn, where: list[str], params: list, filters: dict,
 
 
 def recall(conn, query: str = "", filters: dict | None = None,
-           limit: int = 20, cursor: list | None = None) -> dict:
+           limit: int = 20, cursor: list | None = None,
+           lexical_terms: list[str] | None = None,
+           keyword_match: str = "any") -> dict:
     """v2 统一召回（spec_v2 §9 / §3.1 白名单）。
 
     - 结构化筛选先缩小候选池（分类 any/all、心情标签、事件日期范围）；
@@ -232,11 +262,17 @@ def recall(conn, query: str = "", filters: dict | None = None,
       关键词=offset；每条带 matched_by / matched_fields / 表示版本。
     """
     filters = filters or {}
+    if keyword_match not in ("any", "all"):
+        raise Forbidden("keyword_match must be any or all",
+                        code="INVALID_ARGUMENT")
+    dr = filters.get("event_date") or {}
+    if dr.get("from") and dr.get("to") and dr["from"] > dr["to"]:
+        raise Forbidden("开始日期不能晚于结束日期", code="INVALID_ARGUMENT")
     limit = max(1, min(int(limit), 100))
     where, params = _pool_where(filters)
-    if (query or "").strip():
+    if (query or "").strip() or lexical_terms:
         return _recall_keyword(conn, query, where, params, filters, limit,
-                               cursor)
+                               cursor, lexical_terms, keyword_match)
     return _recall_browse(conn, where, params, filters, limit, cursor)
 
 

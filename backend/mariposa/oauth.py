@@ -105,6 +105,22 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def revoke_token(token: str) -> None:
+    """撤销同一 bearer 对应的 access/refresh；未知 token 也幂等成功。"""
+    token_hash = _hash_token(token)
+    with db.formal() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("UPDATE client_bindings SET revoked=1"
+                         " WHERE token_hash=?", (token_hash,))
+            conn.execute("DELETE FROM oauth_refresh_tokens"
+                         " WHERE refresh_hash=?", (token_hash,))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 def issue_access_token(principal_id: str, ttl_s: int = ACCESS_TTL_S,
                        entry_source: str = "oauth") -> dict:
     """发 access token：哈希入 client_bindings（带过期），返回明文。

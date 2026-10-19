@@ -285,9 +285,9 @@ class TestReauditRound:
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow-lgap', ?, 1, 'qiaosheng',"
-                " '列表gap话语', 'verbatim', 'raw_msg:legacy-x',"
+                " '列表gap话语', 'raw_msg:legacy-x',"
                 " 'jiaming', datetime('now'))",
                 (out["memory_id"],))
         words = ow.list_for(out["memory_id"])
@@ -320,9 +320,9 @@ class TestReview3Fixes:
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow-pvid', ?, 1, 'qiaosheng',"
-                " '按提供者id引用的话语', 'verbatim', 'source_msg:pv3-m1',"
+                " '按提供者id引用的话语', 'source_msg:pv3-m1',"
                 " 'jiaming', datetime('now'))",
                 (out["memory_id"],))
         words = ow.list_for(out["memory_id"])

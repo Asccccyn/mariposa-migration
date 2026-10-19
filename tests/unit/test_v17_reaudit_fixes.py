@@ -49,27 +49,37 @@ class TestN01PayloadHashCoversBody:
     def test_metadata_only_update_changes_hash(self, actors):
         out = hold_v2(actors["jiaming"], "正文甲版本独特内容")
         mid = out["memory_id"]
+        with db.formal() as conn:
+            h0 = conn.execute(
+                "SELECT payload_hash FROM memory_versions WHERE memory_id=?"
+                " AND version_no=1", (mid,)).fetchone()["payload_hash"]
         memory_extras.update_text(
             actors["jiaming"].principal_id, mid, expected_version=1,
-)
+        )
         with db.formal() as conn:
-            hs = [r["payload_hash"] for r in conn.execute(
-                "SELECT payload_hash FROM memory_versions WHERE memory_id=?"
-                " ORDER BY version_no", (mid,))]
-        assert len(hs) == 2 and hs[0] != hs[1], \
-            "N01：只改元数据后新旧 revision 指纹相同（hash 未覆盖正文）"
+            row = conn.execute(
+                "SELECT payload_hash, version_no FROM memory_versions"
+                " WHERE memory_id=?", (mid,)).fetchone()
+        # 2026-10-18 不留档：单行就地覆写（无历史行）；hash 仍须变化
+        assert row["version_no"] == 2
+        assert row["payload_hash"] != h0, \
+            "N01：只改元数据后指纹未变（hash 未覆盖正文/标题）"
 
     def test_body_change_changes_hash(self, actors):
         out = hold_v2(actors["jiaming"], "第一版正文")
         mid = out["memory_id"]
+        with db.formal() as conn:
+            h0 = conn.execute(
+                "SELECT payload_hash FROM memory_versions WHERE memory_id=?"
+                " AND version_no=1", (mid,)).fetchone()["payload_hash"]
         memory_extras.update_text(
             actors["jiaming"].principal_id, mid, expected_version=1,
             text="完全不同的第二版正文")
         with db.formal() as conn:
-            hs = [r["payload_hash"] for r in conn.execute(
-                "SELECT payload_hash FROM memory_versions WHERE memory_id=?"
-                " ORDER BY version_no", (mid,))]
-        assert len({*hs}) == 2
+            row = conn.execute(
+                "SELECT payload_hash FROM memory_versions"
+                " WHERE memory_id=?", (mid,)).fetchone()
+        assert row["payload_hash"] != h0
 
 
 class TestN02LegacySummaryRebuild:

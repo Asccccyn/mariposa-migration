@@ -118,8 +118,7 @@ def _grant_source_excerpt():
 
 def _seed_word(principal, text="复述：崧蓝染色的傍晚"):
     return _hold(principal, "崧蓝事件正文",
-                 our_words=[{"speaker": "qiaosheng", "text": text,
-                             "expression_kind": "paraphrase"}])
+                 our_words=[{"speaker": "qiaosheng", "text": text                             }])
 
 
 # ---------------------------------------------------------------- CB-009
@@ -545,8 +544,7 @@ class TestWordsBrowseCoverage:
         """审计反例：25 个可见 words 只送判 20 仍签
         complete_within_scope 且 Raw gate=true。"""
         words = [{"speaker": "qiaosheng",
-                  "text": f"第{i}句：崧蓝染色的话语",
-                  "expression_kind": "paraphrase"} for i in range(25)]
+                  "text": f"第{i}句：崧蓝染色的话语"                  } for i in range(25)]
         _hold(actors["jiaming"], "二十五句话语的正文", our_words=words)
         r1 = _start(actors, terms=(), op="op-cb013",
                     exact_phrases=["崧蓝染色"])

@@ -50,8 +50,7 @@ class TestEstomagoProfile:
             categories=["sweet"], creation_mode="contemporaneous",
             mood={"tags": ["开心"], "text": "话语心情"},
             our_words=[{"speaker": "qiaosheng",
-                        "text": "我们的原话canary",
-                        "expression_kind": "verbatim"}],
+                        "text": "我们的原话canary"                        }],
             raw_pending=False)
         pack = bootstrap.get("jiaming", "estomago", "estomago")
         items = pack["memory_days"]["items"]
@@ -175,8 +174,7 @@ class TestRRA005StateHashCoversD6:
                                "estomago", "bj"),
             text="追加话语的事件正文", original_title="追加话语",
             categories=["sweet"], creation_mode="contemporaneous",
-            our_words=[{"speaker": "qiaosheng", "text": "NEW_WORD_CANARY",
-                        "expression_kind": "verbatim"}],
+            our_words=[{"speaker": "qiaosheng", "text": "NEW_WORD_CANARY"                        }],
             raw_pending=False)
         from mariposa.errors import SnapshotStale as _Stale
         try:
@@ -213,8 +211,7 @@ class TestRRA006BudgetAndSectioning:
             text="事" * 11000, original_title="巨桶",
             categories=["sweet"], creation_mode="contemporaneous",
             our_words=[{"speaker": "qiaosheng",
-                        "text": "话" * 1500,
-                        "expression_kind": "verbatim"}] * 2,
+                        "text": "话" * 1500                        }] * 2,
             raw_pending=False)
 
     def test_full_envelope_within_budget_and_spliceable(self, jiaming):
@@ -347,8 +344,7 @@ class TestRRA006FollowUp:
         条内 char_offset 续取拼回逐字完整。"""
         full = "话" * 10000
         mid = self._hold("small event",
-                         words=[{"speaker": "qiaosheng", "text": full,
-                                 "expression_kind": "verbatim"}]
+                         words=[{"speaker": "qiaosheng", "text": full                                 }]
                          )["memory_id"]
         pack = bootstrap.get("jiaming", "estomago", "estomago")
         assert _env_bytes(pack) <= 24576, \
@@ -384,8 +380,7 @@ class TestRRAThirdFollowUpControlEscape:
         import json as _json
         event = "EVENT-" + "\x01" * 4000
         word = "\x02" * 10000
-        self._hold(event, [{"speaker": "jiaming", "text": word,
-                            "expression_kind": "paraphrase"}])
+        self._hold(event, [{"speaker": "jiaming", "text": word                            }])
         pack = bootstrap.get("jiaming", "estomago", "estomago")
         blob = len(_json.dumps({"ok": True, "data": pack},
                                ensure_ascii=False,
@@ -432,8 +427,7 @@ class TestRRAThirdFollowUpManyShortWords:
         from tests.conftest import reset_all as _reset
         for n in (700, 1400, 2800):
             _reset()
-            words = [{"speaker": "qiaosheng", "text": str(i % 10),
-                      "expression_kind": "paraphrase"}
+            words = [{"speaker": "qiaosheng", "text": str(i % 10)                      }
                      for i in range(n)]
             expected = "".join(w["text"] for w in words)
             self._hold("small event", words)

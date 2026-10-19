@@ -47,8 +47,7 @@ class TestWordsChannel:
         """
         target = hold(actors, text="搬家事件正文",
                       our_words=[{"speaker": "qiaosheng",
-                                  "text": "叽里咕噜独有话语",
-                                  "expression_kind": "verbatim"}])
+                                  "text": "叽里咕噜独有话语"                                  }])
         hold(actors, text="另一条无关记忆", memory_date="2026-08-20")
         packet = recall_service.start(actors["jiaming"], {
             "query_plan": {
@@ -74,8 +73,7 @@ class TestWordsChannel:
     def test_word02_words_channel_finds_word(self, actors):
         """WORD-02：words 通道可命中话语资源。"""
         m = hold(actors, text="搬家事件正文",
-                 our_words=[{"speaker": "qiaosheng", "text": "搬家要一起选窗帘",
-                             "expression_kind": "verbatim"}])
+                 our_words=[{"speaker": "qiaosheng", "text": "搬家要一起选窗帘"                             }])
         # WP05 统一入口：session 化 packet（≤3 + judged）
         out = words_recall(actors, query="窗帘")
         refs = [h["resource_ref"] for h in out["candidates"]]
@@ -89,10 +87,8 @@ class TestWordsChannel:
     def test_word03_speaker_uses_formal_field(self, actors):
         """WORD-03：'找我说的'按正式 speaker 字段过滤。"""
         hold(actors, text="搬家事件",
-             our_words=[{"speaker": "jiaming", "text": "窗帘颜色听你的",
-                         "expression_kind": "verbatim"},
-                        {"speaker": "qiaosheng", "text": "窗帘颜色我说了算",
-                         "expression_kind": "verbatim"}])
+             our_words=[{"speaker": "jiaming", "text": "窗帘颜色听你的"                         },
+                        {"speaker": "qiaosheng", "text": "窗帘颜色我说了算"                         }])
         out = words_recall(actors, query="窗帘",
                            explicit_constraints={"speaker": "qiaosheng"})
         assert out["candidates"]
@@ -102,8 +98,7 @@ class TestWordsChannel:
     def test_word04_mixed_keeps_channel_roles(self, actors):
         """WORD-04：mixed 返回中 event 与 words 证据角色独立。"""
         hold(actors, text="搬家事件正文",
-             our_words=[{"speaker": "qiaosheng", "text": "搬家要一起选窗帘",
-                         "expression_kind": "paraphrase"}])
+             our_words=[{"speaker": "qiaosheng", "text": "搬家要一起选窗帘"                         }])
         packet = recall_service.start(actors["jiaming"], {
             "query_plan": {
                 "original_request": "搬家的事和我们说过的话",
@@ -113,14 +108,13 @@ class TestWordsChannel:
                  for c in packet["candidates"]}
         assert any(ch == "event" and k == "authored_event"
                    for ch, k in kinds)
-        assert any(ch == "words" and k == "word_paraphrase"
+        assert any(ch == "words" and k == "word_unverified"
                    for ch, k in kinds)
 
     def test_word05_words_recall_no_renewal_side_effect(self, actors):
         """WORD-05：words recall / preview 不触发普通记忆续期（无查看回执）。"""
         m = hold(actors, text="搬家事件",
-                 our_words=[{"speaker": "qiaosheng", "text": "窗帘话语",
-                             "expression_kind": "verbatim"}])
+                 our_words=[{"speaker": "qiaosheng", "text": "窗帘话语"                             }])
         with db.formal() as conn:
             before = conn.execute(
                 "SELECT COUNT(*) AS n FROM memory_view_receipts"
@@ -140,8 +134,7 @@ class TestEvidenceKinds:
     def test_evid02_paraphrase_not_verbatim(self, actors):
         """EVID-02：word_paraphrase 不满足 verbatim_required。"""
         hold(actors, text="搬家事件",
-             our_words=[{"speaker": "qiaosheng", "text": "复述版搬家话语",
-                         "expression_kind": "paraphrase"}])
+             our_words=[{"speaker": "qiaosheng", "text": "复述版搬家话语"                         }])
         packet = recall_service.start(actors["jiaming"], {
             "query_plan": {
                 "original_request": "我当时原话是什么",
@@ -176,8 +169,7 @@ class TestForgottenWords:
         """RAWX-05：遗忘后的 words 显式检索 disabled（PENDING_OWNER_DECISION）。"""
         from mariposa import schema  # noqa: F401
         m = hold(actors, text="搬家事件",
-                 our_words=[{"speaker": "qiaosheng", "text": "搬家窗帘话语",
-                             "expression_kind": "verbatim"}])
+                 our_words=[{"speaker": "qiaosheng", "text": "搬家窗帘话语"                             }])
         with db.formal() as conn:
             conn.execute(
                 "UPDATE memories SET compression_state='forgotten_summary'"
@@ -224,14 +216,12 @@ class TestScopedBm25WordsS05S06:
                  memory_date="2026-09-20", date_confidence="exact",
                  original_title="t", categories=["daily"],
                  creation_mode="contemporaneous", raw_pending=False,
-                 our_words=[{"speaker": "qiaosheng", "text": "锚词甲乙出现在这里",
-                             "expression_kind": "verbatim"}])
+                 our_words=[{"speaker": "qiaosheng", "text": "锚词甲乙出现在这里"                             }])
         mem.hold(actors["jiaming"], text="scope排名事件二",
                  memory_date="2026-09-21", date_confidence="exact",
                  original_title="t", categories=["daily"],
                  creation_mode="contemporaneous", raw_pending=False,
-                 our_words=[{"speaker": "qiaosheng", "text": "也提到锚词甲乙",
-                             "expression_kind": "verbatim"}])
+                 our_words=[{"speaker": "qiaosheng", "text": "也提到锚词甲乙"                             }])
         from mariposa import db
         with db.formal() as conn:
             first = [h["word_id"] for h in self._search(conn)["hits"]]
@@ -243,8 +233,7 @@ class TestScopedBm25WordsS05S06:
                      original_title="t", categories=["daily"],
                      creation_mode="contemporaneous", raw_pending=False,
                      our_words=[{"speaker": "jiaming",
-                                 "text": f"排除者说的锚词甲乙{i}",
-                                 "expression_kind": "verbatim"}])
+                                 "text": f"排除者说的锚词甲乙{i}"                                 }])
         with db.formal() as conn:
             after = [h["word_id"]
                      for h in self._search(conn)["hits"]]

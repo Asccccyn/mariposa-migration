@@ -103,8 +103,7 @@ class TestContinuationCas:
                 date_confidence="exact", original_title="sa",
                 categories=["daily"], creation_mode="contemporaneous",
                 raw_pending=False,
-                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚",
-                            "expression_kind": "paraphrase"}])
+                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的傍晚"                            }])
             p = recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "我当时的原话",
                                "channels": ["words"],
@@ -159,8 +158,7 @@ class TestFirstPageOffsetClamped:
                 date_confidence="exact", original_title="sa2",
                 categories=["daily"], creation_mode="contemporaneous",
                 raw_pending=False,
-                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的清晨",
-                            "expression_kind": "paraphrase"}])
+                our_words=[{"speaker": "qiaosheng", "text": "复述：崧蓝的清晨"                            }])
             p = recall_service.start(actors["jiaming"], {
                 "query_plan": {"original_request": "我当时的原话",
                                "channels": ["words"],

@@ -63,7 +63,6 @@ class TestWriteSideTightening:
         with pytest.raises(Forbidden) as ei:
             _hold(actors, "raw前缀话语", our_words=[
                 {"speaker": "qiaosheng", "text": "随手写的raw引用",
-                 "expression_kind": "verbatim",
                  "source_ref": "raw_msg:whatever"}])
         assert ei.value.code == "INVALID_SOURCE_REF"
 
@@ -71,7 +70,6 @@ class TestWriteSideTightening:
         with pytest.raises(Forbidden) as ei:
             _hold(actors, "悬空引用话语", our_words=[
                 {"speaker": "qiaosheng", "text": "指向不存在消息",
-                 "expression_kind": "verbatim",
                  "source_ref": "source_msg:no-such-msg"}])
         assert ei.value.code == "INVALID_SOURCE_REF"
 
@@ -83,14 +81,12 @@ class TestWriteSideTightening:
         with pytest.raises(Forbidden):
             _hold(actors, "未发布引用话语", our_words=[
                 {"speaker": "qiaosheng", "text": "指向未发布消息",
-                 "expression_kind": "verbatim",
                  "source_ref": f"source_msg:{msg_id}"}])
 
     def test_published_source_accepted(self, actors):
         msg_id = _seed_published_msg("okref")
         out = _hold(actors, "合法引用话语", our_words=[
             {"speaker": "qiaosheng", "text": "指向已发布消息",
-             "expression_kind": "verbatim",
              "source_ref": f"source_msg:{msg_id}"}])
         with db.formal() as conn:
             n = conn.execute(
@@ -107,9 +103,9 @@ class TestDeletionGateIgnoresDangling:
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow-dangling-test', ?, 1,"
-                " 'qiaosheng', 'legacy悬空引用', 'verbatim',"
+                " 'qiaosheng', 'legacy悬空引用',"
                 " 'raw_msg:legacy-xyz', 'jiaming', datetime('now'))",
                 (out["memory_id"],))
         from mariposa.deletion import service as deletion
@@ -124,7 +120,6 @@ class TestDeletionGateIgnoresDangling:
         msg_id = _seed_published_msg("gate")
         out = _hold(actors, "有效引用的桶", our_words=[
             {"speaker": "qiaosheng", "text": "有效来源话语",
-             "expression_kind": "verbatim",
              "source_ref": f"source_msg:{msg_id}"}])
         from mariposa.deletion import service as deletion
         with pytest.raises(DeleteBlocked) as ei:
@@ -147,9 +142,9 @@ class TestReadSideGapLabels:
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow-legacy-read', ?, 1,"
-                " 'qiaosheng', 'legacy话语', 'verbatim',"
+                " 'qiaosheng', 'legacy话语',"
                 " 'raw_msg:old', 'jiaming', datetime('now'))",
                 (out["memory_id"],))
         evs = self._evidence_state(out["memory_id"])

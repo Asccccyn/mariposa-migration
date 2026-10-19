@@ -11,19 +11,21 @@ export const session = {
   token: '',
   principal: '' as string,
   expiresAt: 0,
+  generation: 0,
 }
 
 export class ApiError extends Error {
   code: string
-  constructor(code: string, message: string) {
+  detail: Record<string, unknown>
+  constructor(code: string, message: string, detail: Record<string, unknown> = {}) {
     super(message)
     this.code = code
+    this.detail = detail
   }
 }
 
 function onUnauthorized() {
-  session.token = ''
-  session.principal = ''
+  logout()
   window.dispatchEvent(new CustomEvent('mariposa:unauthorized'))
 }
 
@@ -43,15 +45,29 @@ export async function login(password: string): Promise<string> {
   session.token = body.access_token
   session.principal = body.principal_id || ''
   session.expiresAt = Date.now() + (body.expires_in || 0) * 1000
+  session.generation++
   return session.principal
 }
 
 export function logout() {
   session.token = ''
   session.principal = ''
+  session.expiresAt = 0
+  session.generation++
+}
+
+export const operationId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
+
+export function errorMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error)
+  const detail = error.detail
+  const suffix = detail.retry_after ? `（请在 ${detail.retry_after} 秒后重试）`
+    : detail.current != null ? `（当前版本 ${detail.current}，请重新打开）` : ''
+  return error.message + suffix
 }
 
 export async function api<T = any>(capability: string, args?: object, idem?: string): Promise<T> {
+  const generation = session.generation
   const headers: Record<string, string> = {
     Authorization: 'Bearer ' + session.token,
     'Content-Type': 'application/json',
@@ -62,6 +78,7 @@ export async function api<T = any>(capability: string, args?: object, idem?: str
     headers,
     body: JSON.stringify({ arguments: args || {} }),
   })
+  if (generation !== session.generation) throw new ApiError('SESSION_CHANGED', '登录身份已改变，请重试')
   if (res.status === 401) {
     onUnauthorized()
     throw new ApiError('UNAUTHORIZED', '登录已过期，请重新输入密码')
@@ -71,22 +88,31 @@ export async function api<T = any>(capability: string, args?: object, idem?: str
     throw new ApiError(
       String(body.error?.code || res.status),
       String(body.error?.message || body.error?.detail || res.status),
+      body.error?.detail || {},
     )
   }
+  if (generation !== session.generation) throw new ApiError('SESSION_CHANGED', '登录身份已改变，请重试')
   return body.data as T
 }
 
 export async function uploadSource(file: File): Promise<string> {
+  const generation = session.generation
   // RSRC-03：上传必须带 filename query（服务端按原始扩展名分流格式）
   const res = await fetch('/api/source/upload?filename=' + encodeURIComponent(file.name), {
     method: 'PUT',
     headers: { Authorization: 'Bearer ' + session.token },
     body: file,
   })
+  if (generation !== session.generation) throw new ApiError('SESSION_CHANGED', '登录身份已改变，请重试')
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new ApiError('UNAUTHORIZED', '登录已过期，请重新输入密码')
+  }
   const body = await res.json().catch(() => ({}))
   if (!res.ok || body.ok === false) {
-    throw new ApiError(String(body.error?.code || res.status), String(body.error?.message || res.status))
+    throw new ApiError(String(body.error?.code || res.status), String(body.error?.message || res.status), body.error?.detail || {})
   }
+  if (generation !== session.generation) throw new ApiError('SESSION_CHANGED', '登录身份已改变，请重试')
   return body.data.upload_path
 }
 
@@ -95,14 +121,13 @@ export type Word = {
   word_id: string
   speaker: 'jiaming' | 'qiaosheng'
   text: string
-  expression_kind: 'verbatim' | 'paraphrase' | 'unspecified'
 }
 export type Recollection = {
   recollection_id: string
   text: string
   author?: string
   author_principal?: string
-  created_at?: string
+  written_at?: string
 }
 export type RelationEdge = {
   relation_id: string
@@ -110,6 +135,7 @@ export type RelationEdge = {
   other_memory: string
   relation_type: 'continuation_of' | 'related_to' | 'contradicts' | 'custom'
   custom_label?: string | null
+  reverse_label?: string | null
 }
 export type Binding = {
   binding_id: string
@@ -117,6 +143,7 @@ export type Binding = {
   start_message_id: string
   end_message_id: string
 }
+export type KeepMark = { mark_id: string; owner: string; revoked_at?: string | null }
 export type Bucket = {
   memory_id: string
   memory_date: string | null
@@ -127,11 +154,35 @@ export type Bucket = {
   version: number
   representation?: string
   compression_state?: string
+  creation_mode?: string
+  content_gap?: { code: string; reason: string; note: string }
   // 附加面（memory.cards.batch）
   words?: Word[]
   recollections?: Recollection[]
   relations?: RelationEdge[]
   bindings?: Binding[]
+  keeps?: KeepMark[]
+}
+
+export type OpenedBucket = Bucket & { view_receipt: string; confirm_key?: string }
+export type ViewReceipt = { memoryId: string; version: number; id: string; confirmKey?: string }
+
+export async function loadBucket(id: string, opened?: Bucket): Promise<Bucket> {
+  const [bucket, extra, keeps] = await Promise.all([
+    opened ? Promise.resolve(opened) : api<Bucket>('memory.get', { memory_id: id }),
+    api<{ cards: Record<string, Partial<Bucket>> }>('memory.cards.batch', { memory_ids: [id] }),
+    api<{ marks: KeepMark[] }>('memory.keeps.list', { memory_id: id }),
+  ])
+  return { ...bucket, ...extra.cards[id], keeps: keeps.marks }
+}
+
+export async function loadBucketsByIds(ids: string[]): Promise<Bucket[]> {
+  if (!ids.length) return []
+  const extra = await api<{ cards: Record<string, Partial<Bucket> & { memory: Bucket }> }>('memory.cards.batch', { memory_ids: ids, include_memory: true })
+  return ids.map(id => {
+    const { memory, ...fields } = extra.cards[id]
+    return { ...memory, ...fields }
+  })
 }
 
 export async function loadAllBuckets(): Promise<Bucket[]> {
@@ -144,18 +195,7 @@ export async function loadAllBuckets(): Promise<Bucket[]> {
     items.push(...d.items)
     cursor = d.next_cursor
   } while (cursor)
-  // 附加面批量（cards.batch ≤100/次；逐卡拉取是 429 根因，禁止回退）
-  for (let i = 0; i < items.length; i += 100) {
-    const ids = items.slice(i, i + 100).map((b) => b.memory_id)
-    const d = await api<{ cards: Record<string, any> }>('memory.cards.batch', { memory_ids: ids })
-    for (const b of items.slice(i, i + 100)) {
-      const c = d.cards[b.memory_id] || {}
-      b.words = c.words || []
-      b.recollections = c.recollections || []
-      b.relations = c.relations || []
-      b.bindings = c.bindings || []
-    }
-  }
+  // 首页只需标题/事件；附加面在详情、关系页按需批量读取。
   return items
 }
 

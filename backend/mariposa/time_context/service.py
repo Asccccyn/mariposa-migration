@@ -15,7 +15,6 @@ from zoneinfo import ZoneInfo
 from .. import config, db
 from ..errors import Forbidden
 
-HANDOFF_ACTIVE_HOURS = 72
 
 
 def _now() -> datetime:

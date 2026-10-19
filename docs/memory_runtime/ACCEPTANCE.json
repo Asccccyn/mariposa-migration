@@ -2,7 +2,7 @@
   "contract_version": "recall_runtime_acceptance_v1.7",
   "baseline_head": "f734a81",
   "verified_on": "2026-10-04",
-  "note": "requirement → 当前代表 nodeid → 状态。条款来自 docs/memory_runtime/CURRENT.md（v1.7）与 2026-10-04 裁定；只列正式验收合同，不为每个 pytest 用例反向登记。真实模型项保持 NOT_RUN_REAL_MODEL，不伪装 PASS。",
+  "note": "requirement → 当前代表 nodeid → 状态。条款来自 docs/memory_runtime/CURRENT.md（v1.7）与 2026-10-04 裁定；只列正式验收合同，不为每个 pytest 用例反向登记。真实模型项保持 NOT_RUN_REAL_MODEL，不伪装 PASS。 2026-10-15 静态更新证据映射不代表整套重跑；verified_on 保留原执行日期，旧前端 E2E 已降为 NOT_COVERED。",
   "requirements": [
     {
       "id": "V17-R1",
@@ -28,22 +28,25 @@
     },
     {
       "id": "V17-R3",
-      "title": "Round1 管线（分字段索引/Jev 门/0-3 卡/ROUND1_COMPLETE 回执）",
+      "title": "Round1 管线（分字段/开启判断有界交付/关闭判断全候选分页）",
       "clause": "CURRENT §4",
       "evidence": [
         "tests/unit/test_v17_pipeline.py::TestFieldProjection",
         "tests/unit/test_v17_pipeline.py::TestRound2Gate::test_round1_receipt_auto_issued_by_start",
-        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_missing_round1_receipt_blocks"
+        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_missing_round1_receipt_blocks",
+        "tests/unit/test_judge_policy_switch.py::TestJudgeModes"
       ],
       "status": "PASS"
     },
     {
       "id": "V17-R4",
-      "title": "Round2 gate（八条件服务端事实 + raw 深搜仍经 Jev）",
+      "title": "Round2 gate（服务端事实、provider 无关许可、关闭判断分页）",
       "clause": "CURRENT §4",
       "evidence": [
         "tests/unit/test_v17_pipeline.py::TestRound2Gate",
-        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_round1_then_round2_delivers_judged_raw"
+        "tests/unit/test_closure_wp04_round2.py::TestRound2FullChain::test_round1_then_round2_delivers_judged_raw",
+        "tests/unit/test_round2_policy_switch.py::TestR01OffModeRound2",
+        "tests/unit/test_paging_freeze_integrity.py::TestPolicyEpoch"
       ],
       "status": "PASS"
     },
@@ -166,13 +169,14 @@
     },
     {
       "id": "V17-R17",
-      "title": "E2E 隔离实例（认证通路 + 退役端点 404）",
+      "title": "新 React 前端隔离浏览器流程（认证、编辑、来源、删除与退役入口）",
       "clause": "审计 2026-10-03 测试失效#3",
       "evidence": [
-        "apps/web/e2e/forget-loop.spec.ts"
+        "tests/e2e/library.smoke.cjs",
+        "scripts/run_browser_checks.py"
       ],
       "status": "PASS",
-      "note": "Playwright 隔离实例 2026-10-04 实跑通过"
+      "note": "本轮在合成独立数据根、127.0.0.1:18881、独立无头Chrome执行四条流程通过；包含退役memory.pin返回404。旧apps/web证据不参与当前验收。Jev/dense真实模型仍未运行。"
     },
     {
       "id": "V17-R18",
@@ -182,5 +186,6 @@
       "status": "NOT_RUN_REAL_MODEL",
       "note": "credential/计费/非确定性；不作为静态修复验收阻断，不伪装 PASS"
     }
-  ]
+  ],
+  "mapping_reviewed_on": "2026-10-15"
 }

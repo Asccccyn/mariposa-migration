@@ -430,9 +430,9 @@ class TestFullAuditP2Misc:
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow-wr03', ?, 1, 'qiaosheng',"
-                " '无来源话语', 'verbatim', NULL, 'jiaming',"
+                " '无来源话语', NULL, 'jiaming',"
                 " datetime('now'))", (out["memory_id"],))
         with pytest.raises(Forbidden):
             ow.correct_source("jiaming", "ow-wr03", None,

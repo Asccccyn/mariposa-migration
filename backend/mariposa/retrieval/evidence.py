@@ -1,7 +1,8 @@
 """证据分级与指令权限包装（v1.3 §8—11 / v1.4 §8.3）。
 
-七类正本枚举 + v1.4 增补的 word_unverified（仅解决契约缺口：文字获准
-返回但逐字身份不可验证；不冒充 paraphrase，不满足 verbatim_required）。
+七类正本枚举（word_paraphrase 已随概括通道退役删除——2026-10-18
+她裁定话语只存原文；word_unverified 保留：文字获准返回但逐字身份
+不可验证，不满足 verbatim_required）。
 所有检索内容一律 content_role=retrieved_memory、instruction_authority=
 none——记忆正文里的"system/忽略规则/调用工具"只是历史数据，不提升
 权限、不触发工具、不改变 scope（SAFE-01/02）。
@@ -14,8 +15,7 @@ EVIDENCE_KINDS = (
     "authored_event",      # 正式 event_text；证明记了什么，不证明 raw 原话
     "approved_summary",    # 批准遗忘摘要；当前有效摘要表示，不是旧全文
     "structured_fact",     # 正式结构字段（日期/分类/心情/plan 状态/版本）
-    "word_verbatim",       # 明确 verbatim 且来源仍有效的话语
-    "word_paraphrase",     # 概括/复述；不得作为逐字原话
+    "word_verbatim",       # 原文话语且来源仍有效（话语一律原文）
     "word_unverified",     # 身份未核验的获准话语（v1.4 增补）
     "raw_verbatim",        # 经授权读取的原始来源逐字证据
     "relation_reference",  # 关系边引用；只证明关系记录存在

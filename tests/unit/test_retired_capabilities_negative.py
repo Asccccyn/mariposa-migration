@@ -6,6 +6,7 @@ HTTP handler / fresh DB 不建退役表 / 无旧模块新写入路径。
 from __future__ import annotations
 
 import re
+import sqlite3
 
 import pytest
 
@@ -30,6 +31,37 @@ RETIRED = re.compile(
     r"workspace\.quotes\.|memory\.meanings\.|raw\.|"
     r"workspace\.(tasks|runs|candidates)\.|memory\.(candidates|emotions)\.)")
 
+# 2026-10-13 两次合同差集：9 + 37，精确名单防新能力误撞旧前缀。
+RETIRED_20261013 = frozenset({
+    "handoff.latest", "handoff.write", "presence.handoff.latest",
+    "presence.handoff.write", "memory.anchor", "memory.by_tag",
+    "memory.pin", "memory.protect", "memory.tags.add",
+    "chat.cancel", "chat.conversations.create", "chat.conversations.get",
+    "chat.conversations.list", "chat.conversations.messages",
+    "chat.messages.list", "chat.send", "group.archive.get",
+    "group.archive.list", "group.history", "group.list", "group.profile",
+    "group.send", "group.send_message", "group.status", "listening.enqueue",
+    "listening.join", "listening.leave", "listening.pause", "listening.play",
+    "listening.queue", "listening.seek", "listening.status", "listening.sync",
+    "memory.reengagement.record", "settings.update", "voice.call.end",
+    "voice.call.get", "voice.call.start", "voice.send", "voice.status",
+    "wakeup.configure", "wakeup.status", "wishstar.get", "wishstar.list",
+    "wishstar.respond", "wishstar.write",
+})
+
+
+def _retired(name: str) -> bool:
+    return bool(RETIRED.match(name)) or name in RETIRED_20261013
+
+
+def _retired_tool(name: str) -> bool:
+    # 精确名正向编码，保留 send_message 等原名中的下划线身份。
+    return (name in {"mariposa_" + n.replace(".", "_")
+                     for n in RETIRED_20261013}
+            or bool(RETIRED.match(name.removeprefix("mariposa_")
+                                  .replace("_", "."))))
+
+
 RETIRED_TABLES = [
     "letters", "letter_versions", "home", "home_versions",
     "self_entries", "self_versions", "diary_entries", "diary_versions",
@@ -37,45 +69,42 @@ RETIRED_TABLES = [
     "moment_reactions", "stickers", "quotes", "quote_versions",
     "memory_meanings", "raw_conversations", "raw_messages",
     "memory_raw_refs", "provisional_sources",
+    "handoffs", "memory_tags", "memory_reengagements",
+    "anniversary_definitions", "anniversary_occurrences",
 ]
+RETIRED_MEMORY_COLUMNS = {"pinned", "protected", "anchor"}
 
 
 class TestRetiredCapabilitiesNegative:
     def test_not_in_registry(self):
         from mariposa.capabilities.registry import REGISTRY
-        left = [k for k in REGISTRY if RETIRED.match(k)]
+        left = [k for k in REGISTRY if _retired(k)]
         assert left == [], f"Registry 仍暴露退役能力：{left}"
 
     def test_not_in_mcp_tools_list(self, actors):
         from mariposa.capabilities.mcp_adapter import _tools_for
         tools = _tools_for(actors["jiaming"])
-        # 审计 2026-10-03：transport 工具名固定 mariposa_ 前缀+下划线，
-        # canonical 正则直接匹配 transport 名恒不命中（守卫恒绿）——
-        # 先映射回 canonical 再比对
-        def _canonical(tool_name: str) -> str:
-            return (tool_name.removeprefix("mariposa_")
-                    .replace("_", "."))
-
-        left = [t["name"] for t in tools if RETIRED.match(_canonical(
-            t["name"]))]
+        left = [t["name"] for t in tools if _retired_tool(t["name"])]
         assert left == [], f"MCP tools/list 仍暴露：{left}"
 
     def test_guard_catches_injected_retired_tools(self):
         """自证映射有效：注入的退役 transport 名必须被同一规则命中
         （否则上面的负测是恒真空转）。"""
         fakes = ["mariposa_letter_write", "mariposa_diary_write",
-                 "mariposa_raw_search"]
-        caught = [f for f in fakes
-                  if RETIRED.match(f.removeprefix("mariposa_")
-                                   .replace("_", "."))]
+                 "mariposa_raw_search", "mariposa_group_send_message",
+                 "mariposa_presence_handoff_write"]
+        caught = [f for f in fakes if _retired_tool(f)]
         assert caught == fakes, f"映射漏抓：{set(fakes) - set(caught)}"
+        assert len(RETIRED_20261013) == 46
+        assert not _retired("memory.mood.update"), "授权心情编辑应保留"
 
     def test_invoke_rejected(self, actors):
         from mariposa.capabilities import registry
         for cap in ["letter.write", "diary.write", "calendar.day",
                     "reminder.create", "moments.post", "sticker.add",
                     "memory.quotes.keep", "memory.meanings.append",
-                    "raw.search", "workspace.tasks.claim"]:
+                    "raw.search", "workspace.tasks.claim",
+                    *sorted(RETIRED_20261013)]:
             with pytest.raises(NotFound):
                 registry.invoke(actors["jiaming"], cap, {}, None)
 
@@ -85,6 +114,28 @@ class TestRetiredCapabilitiesNegative:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
         present = [t for t in RETIRED_TABLES if t in names]
         assert present == [], f"fresh 正式库仍创建退役表：{present}"
+        with db.formal() as conn:
+            columns = {r["name"] for r in conn.execute(
+                "PRAGMA table_info(memories)")}
+        assert not columns & RETIRED_MEMORY_COLUMNS
+
+    def test_oct13_upgrade_removes_only_retired_schema(self):
+        """历史迁移跑完但未清理的部署形态，经当前清理收敛且重复安全。"""
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            schema._apply(conn, schema.FORMAL_MIGRATIONS)
+            before = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            assert {"handoffs", "memory_tags", "memory_reengagements"} <= before
+            schema._drop_deleted_columns(conn)
+            schema._drop_deleted_columns(conn)
+            after = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            assert not set(RETIRED_TABLES) & after
+            assert {"memory_keeps", "memories", "source_import_batches"} <= after
+            columns = {r["name"] for r in conn.execute(
+                "PRAGMA table_info(memories)")}
+            assert not columns & RETIRED_MEMORY_COLUMNS
 
     def test_fresh_workspace_has_no_review_tables(self):
         with db.workspace() as conn:

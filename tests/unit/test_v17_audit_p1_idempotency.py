@@ -272,4 +272,5 @@ class TestF10ReadNoResponseCache:
             n = conn.execute(
                 "SELECT COUNT(*) AS c FROM memory_versions WHERE"
                 " memory_id=?", (out["memory_id"],)).fetchone()["c"]
-        assert n == 2, "写幂等重放产生了第二个版本"
+        # 2026-10-18 不留档：单行就地覆写——重放后仍只有当前版本一行
+        assert n == 1, "写幂等重放产生了第二个版本行"

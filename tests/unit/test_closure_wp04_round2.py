@@ -68,8 +68,7 @@ def _seed_word(principal, text="复述：崧蓝染色的傍晚"):
                        date_confidence="exact", original_title="w",
                        categories=["daily"],
                        creation_mode="contemporaneous", raw_pending=False,
-                       our_words=[{"speaker": "qiaosheng", "text": text,
-                                   "expression_kind": "paraphrase"}])
+                       our_words=[{"speaker": "qiaosheng", "text": text                                   }])
 
 
 def _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT", op="op-w4-r2"):

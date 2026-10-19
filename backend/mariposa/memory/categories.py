@@ -1,9 +1,9 @@
-"""九分类平行多选（v1.7 §3.2：daily/milestone/sad/sweet/date/plan/sex/anniversary/reloplay）。
+"""十分类平行多选（v1.7 §3.2 九分类 + diary；diary=她 2026-10-17 裁定加"日记"）。
 
 同一桶可同时属于多个分类（平行，无主副）；一个分类只存一行。
-期限取桶内所有分类的最长自然日周期；重大转折/纪念为永久类，
-含永久类的桶不进入自动遗忘。'plan' 分类本身没有独立期限：计划资源
-由 plan 终结周期管理，纯 plan 分类桶标记 plan_managed，不自动压缩。
+期限取桶内所有分类的最长自然日周期；重大转折/纪念/日记为永久类，
+含永久类的桶永久处于 WIDE。'plan' 分类本身没有独立期限：计划资源
+由 plan 终结周期管理，纯 plan 分类桶的阶段由关联计划是否终结决定。
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .. import db
 from ..errors import Forbidden, NotFound
 
 CATEGORIES = ("daily", "milestone", "sad", "sweet", "date", "plan",
-              "sex", "anniversary", "reloplay")
+              "sex", "anniversary", "reloplay", "diary")
 
 LABELS = {
     "daily": "日常",
@@ -25,10 +25,12 @@ LABELS = {
     "sex": "做爱",
     "anniversary": "纪念",
     "reloplay": "重演",
+    "diary": "日记",
 }
 
-#: 自然日周期；None = 永久（不自动遗忘）。plan 无独立期限（plan_managed）。
-PERMANENT = {"milestone", "anniversary"}
+#: 自然日周期；永久类别不参与按时间淡出。plan 无独立期限（plan_managed）。
+#: diary 永久（她 2026-10-17："日记不衰减"）。
+PERMANENT = {"milestone", "anniversary", "diary"}
 
 
 def validate(categories: list[str]) -> list[str]:
