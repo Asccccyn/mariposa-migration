@@ -108,8 +108,16 @@ def test_surface_full_chain_over_http(c, policy_on):
     pdata = p.json()["data"]
     assert pdata["status"] == "prepared"
     assert pdata["selected_count"] == 1
+    # P2（她 1020 二批复）：标题"7.9 记忆库"连续出现在原话 + 日期 exact PASS +
+    # 证据 PASS + 日期集唯一 → 确定性准入，**prepare 阶段零 JEV 请求**；
+    # 交付阶段仍按 P0 合同调 relevant_now（下方单独记账）
     judge_calls_after_prepare = policy_on.calls
-    assert judge_calls_after_prepare >= 1
+    assert judge_calls_after_prepare == 0
+    det = pdata["coverage"]["deterministic"]["ev_1"]
+    assert det["outcome"] == "confirmed_deterministic"
+    assert det["strong_match"]["kind"] == "title"
+    assert det["coverage"]["date_set_truncated"] is False
+    assert pdata["coverage"]["judge_requests_prepare"] == 0
 
     # 幂等重放：同 op 同 payload 不再付费
     p2 = call(c, "jiaming", "memory.surfacing.prepare", _prepare_args())
@@ -131,6 +139,8 @@ def test_surface_full_chain_over_http(c, policy_on):
     vdata = v.json()["data"]
     assert vdata["status"] == "ready"
     judge_calls_after_validate = policy_on.calls   # validate 的 delivery 判断是合法新增
+    # 分账：prepare 0 / delivery ≥1（她 1020：不许只报一个总计）
+    assert judge_calls_after_validate >= 1
     item = vdata["items"][0]
     assert item["memory_id"] == memory_id
     assert item["event_text"] == LONG_TEXT      # 全文原样，不截断

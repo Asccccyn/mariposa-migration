@@ -209,6 +209,10 @@ SURFACE_PROMPT_DELIVERY = "surface_delivery_v2"
 SURFACE_JUDGE_SCHEMA_VERSION = "surface-judge-v2"
 # 确定性硬校验规则版本（facts.py）；进合同指纹与 policy 快照
 SURFACE_FACTS_RULES_VERSION = "facts-v2"
+# P2（她 2026-10-20 二批复）：召回词项/强事件身份规则与确定性准入规则版本，
+# 同样进合同指纹——任一变化即换缓存键、使旧 run 在 validate 处失效
+SURFACE_ANCHORS_RULES_VERSION = "anchors-v1"
+SURFACE_DETERMINISTIC_RULES_VERSION = "deterministic-v1"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -264,6 +268,13 @@ SURFACE_RISK_NOUL_THRESHOLD = _env_float(
 # 交付还要过 facts 与竞争合同。
 SURFACE_SAME_OCCURRENCE_THRESHOLD = _env_float(
     "MARIPOSA_SURFACE_SAME_OCCURRENCE_THRESHOLD", 0.98)
+# P2 确定性准入：唯一性只能在**未截断**的日期集上证明；日期集超过此规模
+# 一律 UNKNOWN（不声明唯一）。Dense 每作业预算：确定性失败后才按预算补查，
+# 且只在模型已常驻、不重嵌入时运行。
+SURFACE_DETERMINISTIC_MAX_DATE_SET = _env_int(
+    "MARIPOSA_SURFACE_DETERMINISTIC_MAX_DATE_SET", 200)
+SURFACE_DENSE_QUERIES_PER_JOB = _env_int(
+    "MARIPOSA_SURFACE_DENSE_QUERIES_PER_JOB", 1)
 SURFACE_MAX_JUDGE_REQUEST_BYTES = _env_int(
     "MARIPOSA_SURFACE_MAX_JUDGE_REQUEST_BYTES", 65536)
 SURFACE_MAX_JUDGE_JOB_INPUT_BYTES = _env_int(

@@ -21,7 +21,14 @@ BATCH = 8
 INSTRUCT = ("Given a web search query, retrieve relevant passages "
             "that answer the query")
 
-_state = {"model": None, "tokenizer": None}
+_state = {"model": None, "tokenizer": None, "model_root": None}
+
+
+def is_resident() -> bool:
+    """**只读**：本进程是否已加载模型，且加载目录与当前配置一致（P2，
+    她 1020：仅 _state['model'] 非空不代表身份一致）。不触发加载。"""
+    return (_state["model"] is not None and _state["tokenizer"] is not None
+            and _state["model_root"] == model_root())
 
 
 def model_root() -> str:
@@ -51,6 +58,7 @@ def _load():
     model.eval()
     _state["model"] = model
     _state["tokenizer"] = tokenizer
+    _state["model_root"] = model_root()
 
 
 def _last_token_pool(hidden, attention_mask):

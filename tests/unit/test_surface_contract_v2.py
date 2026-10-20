@@ -213,7 +213,10 @@ class TestAdmit:
         assert C.verdict_for(C.UNKNOWN) == "uncertain"
 
     def test_no_producer_for_deterministic_outcome(self):
-        """P2 未施工：admit 对任何输入都不产生 CONFIRMED_DETERMINISTIC。"""
+        """语义路径 admit() 对任何输入都不产生 CONFIRMED_DETERMINISTIC——
+        它的唯一生产者是 P2 的 contract.admit_deterministic（见
+        test_surface_tiered_retrieval）。"""
+        assert callable(C.admit_deterministic)
         statuses = ("pass", "conflict", "unknown", "not_required")
         seen = set()
         for sem, t, p, e, req_t, req_p in itertools.product(

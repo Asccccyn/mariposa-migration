@@ -164,15 +164,41 @@ def reindex(conn: sqlite3.Connection, memory_id: str) -> bool:
     return True
 
 
+def dense_ready() -> bool:
+    """**只读**就绪判定（P2，她 1020：不能制造假就绪、不触发加载）。
+
+    - qwen3e4b：本进程已加载且加载目录与当前配置一致（qwen_embed.is_resident）
+    - local_bge_zh：模块级 _provider 已是构造好的 fastembed 实例——**不调
+      get_provider()**，它会构造即加载
+    - 未配置/未知 provider：False
+    推理可用性无法不付代价地预检：查询时 embed 失败由调用方记降级，
+    不在请求路径重试加载。
+    """
+    if config.SEMANTIC_PROVIDER == "qwen3e4b":
+        from . import qwen_embed
+        return qwen_embed.is_resident()
+    if config.SEMANTIC_PROVIDER == "local_bge_zh":
+        p = _provider
+        if p is None or isinstance(p, _QwenEmbeddingAdapter):
+            return False
+        return type(p).__name__ == "TextEmbedding"
+    return False
+
+
 def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
                     extra_where: list[str] | None = None,
-                    extra_params: list | None = None) -> list[dict]:
+                    extra_params: list | None = None,
+                    reindex_budget: int | None = None) -> list[dict]:
     """在有效投影集合上做精确余弦 top-k；返回带 matched_by 的命中。
 
     v1.4 §5.2：extra_where/extra_params 让调用方把权限、日期、分类与
     session 排除等过滤**前置**到候选池与评分阶段——不允许先全库 Top-K
     再过滤（范围内正确候选可能已被别的池挤掉）。不传时行为与旧接口
     一致（兼容 memory.search）。
+
+    reindex_budget：本次查询允许就地补嵌入的失效向量数；None=模块默认
+    REINDEX_BUDGET；surfacing 请求路径传 0（不在请求中做重型补嵌入，待补
+    数量以 __pending_vectors__ 哨兵回报，调用方必须标 coverage 不完整）。
     """
     if config.SEMANTIC_PROVIDER not in LOCAL_PROVIDERS:
         return []
@@ -191,7 +217,7 @@ def semantic_search(conn: sqlite3.Connection, query: str, limit: int = 20,
     # 补齐缺失/失效向量（迟到向量原则：hash 校验后才可安装）。
     # 查询路径限流：每次最多补 REINDEX_BUDGET 个，其余下次查询继续
     # （首次冷启动全量预热走 maintenance.semantic.warmup）。
-    budget = REINDEX_BUDGET
+    budget = REINDEX_BUDGET if reindex_budget is None else int(reindex_budget)
     pending = 0
     for r in rows:
         valid = conn.execute(

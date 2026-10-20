@@ -86,18 +86,21 @@ def event_candidates(conn, plan: dict, rejected: set[str],
 
 
 def dense_tail(conn, plan, terms, phrases, base_where, base_params,
-               rejected, coverage, degraded) -> list[dict]:
+               rejected, coverage, degraded,
+               reindex_budget: int | None = None) -> list[dict]:
     """dense 路独立函数（v1.7 接线后与阶段词法路并列）。
 
     S04/WP03：dense 不以词法命中为前提——纯 semantic_query 也可运行
-    （query-only 语义检索）。"""
+    （query-only 语义检索）。reindex_budget 透传 semantic_search（surfacing
+    请求路径传 0：不就地补嵌入）。"""
     dense_hits: list[dict] = []
     if plan.get("semantic_query"):
         from ..retrieval.semantic import LOCAL_PROVIDERS
         if config.SEMANTIC_PROVIDER in LOCAL_PROVIDERS:
             sem_raw = semantic.semantic_search(
                 conn, plan["semantic_query"], config.RECALL_DENSE_K,
-                extra_where=base_where, extra_params=base_params)
+                extra_where=base_where, extra_params=base_params,
+                reindex_budget=reindex_budget)
             pending = 0
             sem = []
             for entry in sem_raw:

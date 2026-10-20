@@ -111,6 +111,27 @@ def _map_status(status: str) -> bool | None:
     return {"pass": True, "conflict": False}.get(status)
 
 
+def partition_hypotheses(source_input: dict, hypotheses: list[dict]) -> list[EventGroup]:
+    """分组降级为分区（她 1020 裁定默认选择 1）。
+
+    每个假设一个事件，grouping_confirmed 恒 True——分区只定义竞争域，
+    **不代表已证明是独立事件**；同一往事被拆成多个分区时由 selection 的
+    跨分区同 resource_ref 合并兜底，不会重复浮现。不再发起 distinct_event /
+    pair_same 付费问句。每分区提取用户原话的事实约束（日期/具名人物），
+    供 facts 硬校验、P2 分级检索与 run 快照。
+    """
+    groups = []
+    text = source_input.get("text") or ""
+    for idx, h in enumerate(hypotheses):
+        span = text[h.get("start_cp", 0):h.get("end_cp", 0)] or text
+        groups.append(EventGroup(
+            event_id=f"ev_{idx + 1}",
+            hypothesis_ids=[h["hypothesis_id"]],
+            grouping_confirmed=True,
+            constraints=facts.extract_constraints(span)))
+    return groups
+
+
 class SurfaceJudge:
     """两阶段判断会话。transport 复用所选 provider 的 HTTP 通道
     （typesafe_jev 实例：同凭据/超时/429·529 有限重试边界——timeout/
@@ -255,16 +276,23 @@ class SurfaceJudge:
     # ------------------------------------------------------------- prepare
 
     def judge_prepare(self, source_input: dict, recent_dialogue: list[dict],
-                      hypotheses: list[dict],
-                      pool: list[dict]) -> JudgeDecision:
+                      hypotheses: list[dict], pool: list[dict],
+                      groups: list[EventGroup] | None = None,
+                      skip_events: set[str] | None = None) -> JudgeDecision:
+        """P2：groups 可由调用方预先分区（已带约束）；skip_events 是已由
+        确定性准入解决的分区——**不出站任何问句**（prepare 零 JEV）。"""
         ctx = _context_hash("prepare", source_input, recent_dialogue)
-        groups = self._partition(source_input, hypotheses)
+        groups = groups if groups is not None else self._partition(
+            source_input, hypotheses)
+        skip = skip_events or set()
         by_hyp: dict[str, list[dict]] = {}
         for c in pool:
             for h in c.get("hypotheses") or []:
                 by_hyp.setdefault(h, []).append(c)
         assessments: list[CandidateAssessment] = []
         for g in groups:
+            if g.event_id in skip:
+                continue
             seen: set[str] = set()
             cand_refs: list[dict] = []
             for h in g.hypothesis_ids:
@@ -285,24 +313,7 @@ class SurfaceJudge:
             contract_fingerprint=self.contract_fingerprint)
 
     def _partition(self, source_input, hypotheses) -> list[EventGroup]:
-        """分组降级为分区（她 1020 裁定默认选择 1）。
-
-        每个假设一个事件，grouping_confirmed 恒 True——分区只定义竞争
-        域，**不代表已证明是独立事件**；同一往事被拆成多个分区时由
-        selection 的跨分区同 resource_ref 合并兜底，不会重复浮现。
-        不再发起 distinct_event / pair_same 付费问句。每分区提取用户
-        原话的事实约束（日期/具名人物），供 facts 硬校验与 run 快照。
-        """
-        groups = []
-        text = source_input.get("text") or ""
-        for idx, h in enumerate(hypotheses):
-            span = text[h.get("start_cp", 0):h.get("end_cp", 0)] or text
-            groups.append(EventGroup(
-                event_id=f"ev_{idx + 1}",
-                hypothesis_ids=[h["hypothesis_id"]],
-                grouping_confirmed=True,
-                constraints=facts.extract_constraints(span)))
-        return groups
+        return partition_hypotheses(source_input, hypotheses)
 
     # ------------------------------------------------------------- 评估
 
@@ -318,6 +329,22 @@ class SurfaceJudge:
         fingerprints = {k: fp for k in questions}
         state = _state(source_input, recent_dialogue, hypotheses,
                        target_input, candidates=[cand])
+        # P2：事实先行——硬冲突候选不花一次付费问句（她 1020：冲突候选不送 JEV）
+        f = facts.hard_checks(cand, constraints or {})
+        pre = contract.admit(contract.SEM_UNKNOWN, f)
+        if pre.outcome == contract.REJECT_FACTS:
+            return CandidateAssessment(
+                event_id=event_id, candidate_ref=cand["resource_ref"],
+                candidate_version=str(cand.get("content_version") or ""),
+                verdict="rejected", outcome=contract.REJECT_FACTS,
+                semantic=contract.SEM_UNKNOWN,
+                checks={"same_occurrence": None,
+                        "participants_consistent": _map_status(
+                            f["participants"]["status"]),
+                        "time_status_consistent": _map_status(f["time"]["status"]),
+                        "evidence_sufficient": _map_status(f["evidence"]["status"])},
+                facts=f, rank_signal=None, reason_code=pre.reason_code,
+                resolved_model=self.resolved_model)
         try:
             answers = self._ask(phase, prompt, state, questions,
                                 fingerprints, ctx)
@@ -346,7 +373,7 @@ class SurfaceJudge:
                                 else False if float(rn) <= self.risk
                                 else None)
 
-        f = facts.hard_checks(cand, constraints or {})
+        f = facts.hard_checks(cand, constraints or {}) if f is None else f
         adm = contract.admit(
             semantic, f, relevant_now=relevant_now,
             require_relevance=(phase == "delivery"))

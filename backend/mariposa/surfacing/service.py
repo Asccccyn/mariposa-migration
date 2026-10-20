@@ -21,10 +21,27 @@ from ..memory import detail as memory_detail
 from ..recall import judge_policy
 from . import candidates as cand_mod
 from . import contract, facts
+from . import judge as judge_mod
 from . import selection as sel_mod
 from . import store
 from .judge import REQUIRED_GRANTS, SurfaceJudge
 from .models import SurfaceBlocked, surface_policy_snapshot
+
+
+def _source_year(source: dict) -> int:
+    """无年份日期的逐年枚举上界：源消息时间的年份（缺则 UTC 当前年）。"""
+    import datetime as _dt
+    raw = source.get("occurred_at")
+    if isinstance(raw, str) and len(raw) >= 4 and raw[:4].isdigit():
+        return int(raw[:4])
+    return _dt.datetime.now(_dt.timezone.utc).year
+
+
+def _evidence_ref(entry: dict) -> str | None:
+    for e in entry.get("evidence") or []:
+        if isinstance(e, dict) and e.get("source_ref"):
+            return e["source_ref"]
+    return None
 
 
 def _blocked_result(reason: str, **extra) -> dict:
@@ -166,13 +183,88 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
                 "coverage": {"queries": 0},
                 "expires_at": _run_expiry(run_id), "reason_code": None}
 
+    src_dict = {"message_id": source["message_id"],
+                "revision": source["revision"], "text": source["text"],
+                "body_hash": source["body_hash"]}
+    groups = judge_mod.partition_hypotheses(src_dict, hypotheses)
+    now_year = _source_year(source)
+    text = source["text"]
+    span_of = {g.event_id: (text[hypotheses[i]["start_cp"]:hypotheses[i]["end_cp"]]
+                            or text) for i, g in enumerate(groups)}
+
+    # —— P2 分级检索（Tier0–2）+ 事实 + 确定性准入；Dense 只在确定性失败
+    #    后按预算补；JEV 只问未解决分区里 facts 未否定的候选 ——
+    retrieval: dict[str, dict] = {}
+    deterministic: dict[str, contract.DeterministicAdmission] = {}
     with db.formal() as conn:
-        pool, coverage = cand_mod.build_candidate_pool(
-            conn, source["text"], hypotheses, policy)
-    if not pool:
+        for g in groups:
+            r = cand_mod.tiered_partition_retrieval(
+                conn, span_of[g.event_id], g.hypothesis_ids[0],
+                g.constraints, now_year)
+            for e in r["candidates"]:
+                e["facts"] = facts.hard_checks(e, g.constraints)
+                e["evidence_ref"] = _evidence_ref(e)
+            deterministic[g.event_id] = contract.admit_deterministic(
+                r["candidates"], g.constraints, r["completeness"], policy)
+            retrieval[g.event_id] = r
+        dense_budget = int(policy["dense_queries_per_job"])
+        for g in groups:
+            if deterministic[g.event_id].outcome in contract.CONFIRMED_OUTCOMES:
+                continue
+            r = retrieval[g.event_id]
+            existing = {e["memory_id"]: e for e in r["candidates"]}
+            added, status = cand_mod.dense_supplement(
+                conn, span_of[g.event_id], g.hypothesis_ids[0], existing,
+                dense_budget)
+            r["tiers"]["dense"] = status
+            if status["status"] in ("complete_within_scope",
+                                    "partial_vectors_pending"):
+                dense_budget -= 1
+            for e in added:
+                e["facts"] = facts.hard_checks(e, g.constraints)
+                e["evidence_ref"] = _evidence_ref(e)
+                r["candidates"].append(e)
+
+    skip = {ev for ev, d in deterministic.items()
+            if d.outcome in contract.CONFIRMED_OUTCOMES}
+    cap = int(policy["per_hypothesis_cap"])
+    judge_pool: list[dict] = []
+    selection_pool: list[dict] = []
+    for g in groups:
+        r = retrieval[g.event_id]
+        d = deterministic[g.event_id]
+        if g.event_id in skip:
+            winner = next(c for c in r["candidates"]
+                          if c["resource_ref"] == d.candidate_ref)
+            selection_pool.append(winner)
+            continue
+        ordered = sorted(r["candidates"], key=lambda c: (
+            -int(c.get("strong_match") is not None), -int(bool(c.get("recall_hit"))),
+            -float(c.get("dense_score") or 0.0), c["resource_ref"]))
+        judge_pool.extend(ordered[:cap])
+        selection_pool.extend(ordered[:cap])
+    degraded = sorted({
+        f"dense_{r['tiers']['dense']['status']}" for r in retrieval.values()
+        if r["tiers"]["dense"]["status"] not in ("not_requested",
+                                                  "complete_within_scope")})
+    coverage = {
+        "queries": len(groups),
+        "pool_size": len(selection_pool),
+        "tiers": {ev: r["tiers"] for ev, r in retrieval.items()},
+        "deterministic": {ev: d.as_dict() for ev, d in deterministic.items()},
+        "union_cap": policy["candidate_union_cap"],
+        "per_hypothesis_cap": cap,
+    }
+    if degraded:
+        coverage["degraded"] = degraded
+    if not selection_pool:
+        coverage["judge_requests_prepare"] = 0
         run_id = store.new_surface_run(
             op_key, str(a["conversation_scope"]), "empty",
-            {"winners": [], "hypotheses": hypotheses}, coverage,
+            {"winners": [], "hypotheses": hypotheses,
+             "constraints": {g.event_id: g.constraints for g in groups},
+             "deterministic": coverage["deterministic"],
+             "tiers": coverage["tiers"]}, coverage,
             policy["policy_revision"], policy["prompt_prepare"], None)
         return {**base, "surface_run_id": run_id, "status": "empty",
                 "candidate_snapshot_ref": run_id, "selected_count": 0,
@@ -188,11 +280,16 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
 
     judge = SurfaceJudge(jp["provider"], policy)
     try:
-        decision = judge.judge_prepare(
-            {"message_id": source["message_id"],
-             "revision": source["revision"], "text": source["text"],
-             "body_hash": source["body_hash"]},
-            a.get("recent_dialogue") or [], hypotheses, pool)
+        if judge_pool:
+            decision = judge.judge_prepare(
+                src_dict, a.get("recent_dialogue") or [], hypotheses,
+                judge_pool, groups=groups, skip_events=skip)
+        else:
+            decision = judge_mod.JudgeDecision(
+                schema_version=config.SURFACE_JUDGE_SCHEMA_VERSION,
+                phase="prepare", event_groups=groups, assessments=[],
+                resolved_model=None,
+                contract_fingerprint=judge.contract_fingerprint)
     except SurfaceBlocked as sb:
         store.record_judge_requests(op_key, "prepare", jp["provider"],
                                     judge.request_count, None, "blocked")
@@ -203,15 +300,24 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
     store.record_judge_requests(
         op_key, "prepare", jp["provider"], judge.request_count,
         None, "completed")
+    coverage["judge_requests_prepare"] = judge.request_count
 
+    det_assessments = [
+        {"event_id": ev, "candidate_ref": d.candidate_ref,
+         "verdict": "confirmed", "outcome": d.outcome,
+         "checks": {"same_occurrence": None, "participants_consistent": None,
+                    "time_status_consistent": True, "evidence_sufficient": True},
+         "rank_signal": None, "reason_code": d.reason}
+        for ev, d in deterministic.items() if ev in skip]
     winners, abstain = sel_mod.choose_winners(
         [{"event_id": g.event_id, "hypothesis_ids": g.hypothesis_ids,
           "grouping_confirmed": g.grouping_confirmed}
-         for g in decision.event_groups],
-        [{"event_id": x.event_id, "candidate_ref": x.candidate_ref,
-          "verdict": x.verdict, "outcome": x.outcome, "checks": x.checks,
-          "rank_signal": x.rank_signal, "reason_code": x.reason_code}
-         for x in decision.assessments], pool)
+         for g in groups],
+        det_assessments + [
+            {"event_id": x.event_id, "candidate_ref": x.candidate_ref,
+             "verdict": x.verdict, "outcome": x.outcome, "checks": x.checks,
+             "rank_signal": x.rank_signal, "reason_code": x.reason_code}
+            for x in decision.assessments], selection_pool)
     winners = sel_mod.finalize_prepare(winners, policy)
     usable = [w for w in winners if not w.get("skipped_reason")]
 
@@ -222,11 +328,13 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
                          "revision": source["revision"],
                          "body_hash": source["body_hash"]},
         # 每分区的用户原话事实约束：交付时按当前记忆状态重跑 facts
-        "constraints": {g.event_id: g.constraints
-                        for g in decision.event_groups},
+        "constraints": {g.event_id: g.constraints for g in groups},
+        "deterministic": coverage["deterministic"],
+        "tiers": coverage["tiers"],
+        "judge_requests_prepare": judge.request_count,
         "abstain": abstain,
         "coverage": coverage,
-        "contract_fingerprint": decision.contract_fingerprint,
+        "contract_fingerprint": judge.contract_fingerprint,
         "resolved_model": decision.resolved_model,
     }
     status = "prepared" if usable else "empty"
@@ -250,7 +358,7 @@ def _snapshot_winner(w: dict) -> dict:
         "memory_date", "date_confidence", "occurred_start",
         "occurred_end", "event_text", "body_hash", "domain_versions",
         "evidence", "skipped_reason", "judge_reason", "judge_outcome",
-        "merged_event_ids", "rank_signal")}
+        "merged_event_ids", "rank_signal", "tier_hits", "strong_match")}
 
 
 def _run_expiry(run_id: str) -> str | None:

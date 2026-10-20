@@ -142,7 +142,147 @@ def contract_fingerprint(policy: dict, requested_model: str) -> str:
         "positive_threshold": policy.get("positive_threshold"),
         "risk_threshold": policy.get("risk_threshold"),
         "facts_rules_version": policy.get("facts_rules_version"),
+        "anchors_rules_version": policy.get("anchors_rules_version"),
+        "deterministic_rules_version": policy.get("deterministic_rules_version"),
+        "deterministic_max_date_set": policy.get("deterministic_max_date_set"),
         "requested_model": requested_model,
     }
     return hashlib.sha256(json.dumps(
         payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+# ------------------------------------------------------- 确定性准入（P2）
+
+#: 确定性路径的失败原因（全部落 UNKNOWN；它们是"证据不足正确弃权"的分类）
+DET_NO_DATE_CONSTRAINT = "NO_DATE_CONSTRAINT"
+DET_DATE_SET_TOO_LARGE = "DATE_SET_TOO_LARGE"
+DET_LEXICAL_TRUNCATED = "LEXICAL_TRUNCATED"
+DET_NO_CANDIDATE = "NO_CANDIDATE"
+DET_NO_STRONG_IDENTITY = "NO_STRONG_IDENTITY"
+DET_DATE_NOT_EXACT = "DATE_NOT_EXACT"
+DET_EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
+DET_PARTICIPANTS_UNVERIFIED = "PARTICIPANTS_UNVERIFIED"
+DET_NOT_UNIQUE = "NOT_UNIQUE"
+
+
+@dataclass(frozen=True)
+class DeterministicAdmission:
+    """确定性准入的**可核验记录**（她 1020：不能用一个布尔 confirmed=true
+    取代判定依据）。outcome ∈ {CONFIRMED_DETERMINISTIC, UNKNOWN}。"""
+
+    outcome: str
+    reason: str
+    rules: dict
+    date_constraint: list
+    candidate_ref: str | None
+    candidate_version: str | None
+    strong_match: dict | None
+    competitors_checked: int
+    non_competitors: int
+    coverage: dict
+    evidence_ref: str | None = None
+
+    def as_dict(self) -> dict:
+        return {
+            "outcome": self.outcome, "reason": self.reason, "rules": self.rules,
+            "date_constraint": self.date_constraint,
+            "candidate_ref": self.candidate_ref,
+            "candidate_version": self.candidate_version,
+            "strong_match": self.strong_match,
+            "competitors_checked": self.competitors_checked,
+            "non_competitors": self.non_competitors,
+            "coverage": self.coverage, "evidence_ref": self.evidence_ref,
+        }
+
+
+def admit_deterministic(candidates: list[dict], constraints: dict,
+                        completeness: dict, policy: dict) -> DeterministicAdmission:
+    """免 JEV 的确定性准入（她 1020 六处修订的合同实现）。
+
+    candidates 每项：{resource_ref, content_version, date_confidence,
+    facts (facts.hard_checks), strong_match (anchors.strong_identity_match
+    的记录或 None), recall_hit (bool), evidence_ref}。candidates 必须是
+    **未截断**的日期集 ∪ 全作用域词法命中（含日期集之外、无日期但强身份
+    命中的候选——它们是竞争者）。
+
+    全部条件：显式日期约束 / 完整性（日期集未截断且 ≤ 上限，词法
+    complete_within_scope）/ 候选 date_confidence=exact 且 time pass /
+    强事件身份（召回 n-gram 不算）/ 证据 pass / 人物非冲突且非"必需却
+    未核验" / 竞争者为零。竞争者 = {time pass ∧ 有锚点关系} ∪
+    {time unknown ∧ 强身份}；噪声 = {time conflict} ∪ {无锚点关系}，
+    噪声不阻断、不当作 NOT_SAME，只计数。
+    """
+    rules = {"deterministic": policy.get("deterministic_rules_version"),
+             "anchors": policy.get("anchors_rules_version"),
+             "facts": policy.get("facts_rules_version")}
+    dates = list(constraints.get("dates") or [])
+    cov = {"date_set_size": int(completeness.get("date_set_size") or 0),
+           "date_set_truncated": bool(completeness.get("date_set_truncated")),
+           "lexical": completeness.get("lexical_coverage")}
+
+    def unknown(reason: str, competitors=0, noise=0) -> DeterministicAdmission:
+        return DeterministicAdmission(
+            UNKNOWN, reason, rules, dates, None, None, None,
+            competitors, noise, cov)
+
+    if not dates:
+        return unknown(DET_NO_DATE_CONSTRAINT)
+    if (cov["date_set_truncated"]
+            or cov["date_set_size"] > int(policy.get("deterministic_max_date_set") or 0)):
+        return unknown(DET_DATE_SET_TOO_LARGE)
+    if cov["lexical"] != "complete_within_scope":
+        return unknown(DET_LEXICAL_TRUNCATED)
+
+    identity: list[dict] = []
+    competitors: list[dict] = []
+    noise = 0
+    blockers: list[str] = []
+    for c in candidates:
+        f = c.get("facts") or {}
+        t = (f.get("time") or {}).get("status")
+        p = f.get("participants") or {}
+        e = (f.get("evidence") or {}).get("status")
+        strong = c.get("strong_match")
+        exact = c.get("date_confidence") == "exact"
+        related = bool(c.get("recall_hit")) or strong is not None
+        if not related:
+            noise += 1
+            continue
+        if t == "conflict":
+            if exact or strong is None:
+                noise += 1               # 可靠日期明确冲突 / 仅弱召回 → 噪声
+            else:
+                competitors.append(c)    # 日期不可靠（inferred/unknown，含写入
+                # 日回填）却强身份：不能用不可靠日期排除它 → 竞争者
+            continue
+        if t == "pass":
+            if strong is None:
+                blockers.append(DET_NO_STRONG_IDENTITY)
+                competitors.append(c)
+            elif not exact:
+                blockers.append(DET_DATE_NOT_EXACT)
+                competitors.append(c)
+            elif e != "pass":
+                blockers.append(DET_EVIDENCE_INSUFFICIENT)
+                competitors.append(c)
+            elif p.get("status") == "conflict" or (
+                    p.get("required") and p.get("status") == "unknown"):
+                blockers.append(DET_PARTICIPANTS_UNVERIFIED)
+                competitors.append(c)
+            else:
+                identity.append(c)
+        elif t == "unknown" and strong is not None:
+            competitors.append(c)        # 无日期但强身份：可能同一事件
+        else:
+            noise += 1                   # time unknown 且仅召回命中 = 噪声
+
+    if not identity:
+        reason = blockers[0] if blockers else DET_NO_CANDIDATE
+        return unknown(reason, len(competitors), noise)
+    if len(identity) > 1 or competitors:
+        return unknown(DET_NOT_UNIQUE, len(identity) - 1 + len(competitors), noise)
+    w = identity[0]
+    return DeterministicAdmission(
+        CONFIRMED_DETERMINISTIC, "EXACT_MATCH", rules, dates,
+        w["resource_ref"], str(w.get("content_version") or ""),
+        w.get("strong_match"), 0, noise, cov, w.get("evidence_ref"))
