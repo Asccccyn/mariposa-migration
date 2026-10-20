@@ -513,7 +513,7 @@
       "write": true,
       "status": "available",
       "idempotent": false,
-      "description": "整组替换九分类（平行多选，非空必填）"
+      "description": "整组替换分类（十类平行多选，非空必填；剧本/日记须单分类）"
     },
     {
       "canonical_name": "memory.context.validate",
@@ -653,7 +653,7 @@
       "write": true,
       "status": "available",
       "idempotent": false,
-      "description": "写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；自动化路径可带 operation_id+source_selections（同事务回执）"
+      "description": "写入一条正式记忆（v1.7 分层：标题/分类（十类平行多选，剧本/日记须单分类）/事件/同期心情/我们的话）；自动化路径可带 operation_id+source_selections（同事务回执）"
     },
     {
       "canonical_name": "memory.hold.status",

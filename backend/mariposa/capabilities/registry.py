@@ -96,7 +96,8 @@ def _register() -> dict[str, Capability]:
         caps[name] = Capability(name, handler, set(allowed), write, idempotent, description, status)
 
     add("memory.hold", _hold, {"qiaosheng", "jiaming"}, True,
-        description="写入一条正式记忆（v1.7 分层：标题/九分类/事件/同期心情/我们的话）；"
+        description="写入一条正式记忆（v1.7 分层：标题/分类（十类平行多选，"
+                    "剧本/日记须单分类）/事件/同期心情/我们的话）；"
                     "自动化路径可带 operation_id+source_selections（同事务回执）")
     add("memory.hold.status", _hold_status, _owners(), False,
         description="按 operation_id 查 hold 完成回执（历史成功与当前"
@@ -133,7 +134,7 @@ def _register() -> dict[str, Capability]:
     add("memory.our_words.list", _our_words_list, _owners(), False,
         description="列出桶内双方话语（按 ordinal）")
     add("memory.categories.replace", _categories_replace, _owners(), True,
-        description="整组替换九分类（平行多选，非空必填）")
+        description="整组替换分类（十类平行多选，非空必填；剧本/日记须单分类）")
     add("i.get", _i_get, _owners(), False, description="I 正本当前版（char写）")
     add("i.write", _i_write, {"jiaming"}, True,
         description="兼容单条 i_main 写入；进入多条目模式后拒绝整篇覆盖")

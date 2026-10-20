@@ -44,6 +44,14 @@ const CATEGORIES: { key: string; label: string }[] = [
   { key: 'diary', label: '日记' },
 ]
 const CAT_LABELS: Record<string, string> = Object.fromEntries(CATEGORIES.map((c) => [c.key, c.label]))
+// 剧本/日记单分类（她 2026-10-20 终裁）：选中即独占整组；之后再选其他分类会替换掉独占类
+const EXCLUSIVE_CATS = ['reloplay', 'diary']
+const normalizeCats = (v: string[]): string[] => {
+  const last = v[v.length - 1]
+  if (last && EXCLUSIVE_CATS.includes(last)) return [last]
+  const rest = v.filter((c) => !EXCLUSIVE_CATS.includes(c))
+  return rest.length ? rest : v.filter((c) => EXCLUSIVE_CATS.includes(c))
+}
 // 心情七大类：登录后从 memory.mood.vocab 动态拉取（单一事实源），
 // 未拉到前用 2026-10-05 终版表兜底显示
 const MOOD_FALLBACK = ['开心', '爱', '生气', '吃醋', '悲伤', '渴望', '不安']
@@ -916,7 +924,7 @@ function BucketDetail({ b, receipt, opening, onReopen, moods, onClose, onSaved, 
             <>
               <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={30} className={`${field} serif text-xl font-bold text-[#1f3a68]`} />
               <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-                <MultiSelect value={cats.map((c) => CAT_LABELS[c] || c)} options={CATEGORIES.map((c) => c.label)} editing onChange={(labels) => setCats(labels.map((l) => CATEGORIES.find((c) => c.label === l)?.key || l))} tone="blue" />
+                <MultiSelect value={cats.map((c) => CAT_LABELS[c] || c)} options={CATEGORIES.map((c) => c.label)} editing onChange={(labels) => setCats(normalizeCats(labels.map((l) => CATEGORIES.find((c) => c.label === l)?.key || l)))} tone="blue" />
                 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="bg-transparent border-0 border-b border-dashed border-[#d9b44a]/70 px-0.5 py-0.5 text-sm text-[#7a5d14] tabular-nums outline-none focus:border-solid" />
               </div>
             </>
