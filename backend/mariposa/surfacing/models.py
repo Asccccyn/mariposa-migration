@@ -51,40 +51,50 @@ class EventHypothesis:
 
 @dataclass
 class CandidateAssessment:
-    """单个 (event, candidate) 的归一化判断结果（provider 无关）。"""
+    """单个 (event, candidate) 的归一化判断结果（provider 无关）。
+
+    v2：`outcome` 是 contract.admit 给出的五终态之一，是唯一准入依据；
+    `verdict` 只是其三值投影（兼容旧消费者）。`checks` 保留旧键名供
+    诊断，值从 facts/语义映射：pass→True、conflict→False、unknown/
+    not_required→None。
+    """
 
     event_id: str
     candidate_ref: str
     candidate_version: str
     verdict: str                      # confirmed | rejected | uncertain
+    outcome: str = "unknown"          # contract.OUTCOMES
+    semantic: str = "unknown"         # contract.SEM_*（JEV 三段结果）
     checks: dict = field(default_factory=dict)
     # checks: same_occurrence / participants_consistent / time_status_consistent
-    #         / evidence_sufficient / ambiguity_resolved / relevant_now
-    #         每项 True/False/None（None=unknown/缺项）
+    #         / evidence_sufficient / relevant_now（delivery 阶段才有）
+    facts: dict = field(default_factory=dict)   # facts.hard_checks 原样
     rank_signal: float | None = None  # [0,1]，仅排序用，不是确认
     reason_code: str = "INSUFFICIENT_EVIDENCE"
+    resolved_model: str | None = None  # 本次判断实际应答的模型版本
 
     def strictly_confirmed(self) -> bool:
-        """严格通过=verdict confirmed 且基础五项检查全 True。
-
-        relevant_now 仅 delivery 阶段评估（存在时也必须为 True）；
-        rank_signal 不参与确认（分数不是确认，R35）。
-        """
-        if self.verdict != "confirmed":
+        """可交付 = outcome ∈ CONFIRMED_*，且 delivery 阶段 relevant_now 为
+        True。与 selection / service 消费同一份 contract，不另列清单。"""
+        from . import contract
+        if self.outcome not in contract.CONFIRMED_OUTCOMES:
             return False
-        if self.checks.get("relevant_now") is False:
-            return False
-        return all(self.checks.get(k) is True for k in (
-            "same_occurrence", "participants_consistent",
-            "time_status_consistent", "evidence_sufficient",
-            "ambiguity_resolved"))
+        if "relevant_now" in self.checks:
+            return self.checks.get("relevant_now") is True
+        return True
 
 
 @dataclass
 class EventGroup:
+    """v2：分组降级为**分区**——每个假设一个事件、grouping_confirmed 恒
+    True；它只是竞争域（同分区 UNKNOWN 才互相竞争），不证明是独立事件。
+    跨分区同一 resource_ref 的赢家由 selection 合并为一条。"""
+
     event_id: str
     hypothesis_ids: list[str]
     grouping_confirmed: bool
+    #: 该分区用户原话里的事实约束（facts.extract_constraints），进 run 快照
+    constraints: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -96,42 +106,28 @@ class JudgeDecision:
     phase: str
     event_groups: list[EventGroup]
     assessments: list[CandidateAssessment]
-
-
-# 判断问句键（prompts/typesafe_questions.json 的实例化模板）
-def q_hypothesis_distinct(h: str) -> str:
-    return f"hypothesis_{h}_distinct_event"
-
-
-def q_hypothesis_pair(h: str, j: str) -> str:
-    return f"hypothesis_{h}_{j}_same_occurrence"
-
-
-def q_event_candidate(c: str, suffix: str) -> str:
-    return f"{c}_{suffix}"
-
-
-#: TypeSafe 问句后缀 → 检查名 映射（relevant_now 仅 delivery 阶段）
-QUESTION_SUFFIX_CHECKS = (
-    ("same_occurrence", "same_occurrence"),
-    ("participants", "participants_consistent"),
-    ("time_status", "time_status_consistent"),
-    ("sufficient_evidence", "evidence_sufficient"),
-    ("ambiguity_risk", "ambiguity_resolved"),   # 反向问：risk 高=未消歧
-    ("relevant_now", "relevant_now"),
-)
+    resolved_model: str | None = None
+    contract_fingerprint: str | None = None
 
 
 def surface_policy_snapshot() -> dict:
     """政策快照：版本/阈值/上限一次取齐（prepare/validate 各自固定一份，
-    提交前核对同一快照——沿 recall 政策纪元 fencing 先例）。"""
+    提交前核对同一快照——沿 recall 政策纪元 fencing 先例）。
+
+    v2 新增 same_occurrence_threshold / facts_rules_version /
+    judge_schema_version：全部进 contract_fingerprint，任何一项漂移都
+    使判断缓存换键、使 run 在 validate 处 SURFACE_POLICY_CHANGED。
+    """
     return {
         "policy_revision": config.SURFACE_POLICY_REVISION,
         "policy_version": config.SURFACE_POLICY_VERSION,
         "prompt_prepare": config.SURFACE_PROMPT_PREPARE,
         "prompt_delivery": config.SURFACE_PROMPT_DELIVERY,
+        "judge_schema_version": config.SURFACE_JUDGE_SCHEMA_VERSION,
+        "facts_rules_version": config.SURFACE_FACTS_RULES_VERSION,
         "positive_threshold": config.SURFACE_POSITIVE_NOUL_THRESHOLD,
         "risk_threshold": config.SURFACE_RISK_NOUL_THRESHOLD,
+        "same_occurrence_threshold": config.SURFACE_SAME_OCCURRENCE_THRESHOLD,
         "candidate_union_cap": config.SURFACE_CANDIDATE_UNION_CAP,
         "per_hypothesis_cap": config.SURFACE_CANDIDATES_PER_HYPOTHESIS_CAP,
         "max_hypotheses": config.SURFACE_MAX_EVENT_HYPOTHESES,

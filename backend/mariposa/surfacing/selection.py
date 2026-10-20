@@ -1,16 +1,20 @@
-"""surface 严格选择：一事件 0/1 个已确认最高桶（docs/03）。
+"""surface 严格选择 v2：一事件 0/1 个已准入最高桶（docs/03 + 她 1020 P0）。
 
-- 只有严格通过的候选参与赢家选择；评分只排序已通过者，RRF/relevance
-  第一名不自动当通过（R35）。
-- 同事件唯一最高者；等价桶并列按 明确证据优先 → 当前完整正文 →
-  稳定 ID 打破同分（不是多送一条）。
-- 分立发生但 judge 无法区分 → 该事件零桶（abstain）。
+- 只消费 contract.admit 的 outcome：CONFIRMED_* 才能当赢家；分数只排序
+  已准入者，RRF/relevance 第一名不自动当通过（R35）。
+- 竞争语义：**同分区**的 UNKNOWN 候选=可能是同一事件 → 保守弃权；
+  REJECT_FACTS / NOT_SAME 已确知不是它 → 不阻断（旧合同里任何
+  uncertain 都阻断，造成"确认了却选不出来"）。
+- 同事件 ≥2 个不同桶都确认 = 竞争 → 弃权（不挑分高的）。
+- 跨分区同一 resource_ref 的赢家合并为一条（分区只是竞争域，不证明
+  独立事件；同一往事被拆成多个分区不得重复浮现）。
 - 选定后又发现已覆盖/超预算/已修订/复核失败：本事件零注入，**不退到
   第二名**（她"不要放宽"硬规则 R34）。
 """
 from __future__ import annotations
 
 from .. import config
+from . import contract
 
 
 def _valid_rank(v) -> bool:
@@ -18,12 +22,17 @@ def _valid_rank(v) -> bool:
             and float(v) == float(v) and 0.0 <= float(v) <= 1.0)
 
 
+def _outcome(a: dict) -> str:
+    # 缺 outcome 的旧形状一律按 UNKNOWN——不再信任裸 verdict=confirmed
+    return a.get("outcome") or contract.UNKNOWN
+
+
 def choose_winners(groups: list[dict], assessments: list[dict],
                    pool: list[dict]) -> tuple[list[dict], dict]:
-    """每个已确认事件组选一个赢家。
+    """每个分区选 0/1 个赢家，再跨分区按 resource_ref 合并。
 
     返回 (winners, abstain)。winners 项 = pool 候选 + event_id + 判断
-    依据；abstain[event_id] = 原因码（零桶事件）。
+    依据（+merged_event_ids 若有合并）；abstain[event_id] = 原因码。
     """
     by_ref = {c["resource_ref"]: c for c in pool}
     abstain: dict[str, str] = {}
@@ -31,33 +40,31 @@ def choose_winners(groups: list[dict], assessments: list[dict],
     for g in groups:
         ev = g["event_id"]
         if not g.get("grouping_confirmed", False):
+            # v2 分区恒 True；保留防御以兼容旧快照
             abstain[ev] = "SURFACE_EVENT_AMBIGUOUS"
             continue
         assessed = [a for a in assessments if a["event_id"] == ev]
         if not assessed:
             abstain[ev] = "SURFACE_UNCERTAIN"
             continue
-        relevant = [a for a in assessed if a["candidate_ref"] in
-                    {c["resource_ref"] for c in _event_pool(pool, g)}]
-        confirmed = [a for a in relevant
-                     if a.get("verdict") == "confirmed"
-                     and all(a.get("checks", {}).get(k) is True for k in (
-                         "same_occurrence", "participants_consistent",
-                         "time_status_consistent", "evidence_sufficient",
-                         "ambiguity_resolved"))]
-        if not confirmed:
+        pool_refs = {c["resource_ref"] for c in _event_pool(pool, g)}
+        relevant = [a for a in assessed if a["candidate_ref"] in pool_refs]
+        eligible = [a for a in relevant
+                    if _outcome(a) in contract.CONFIRMED_OUTCOMES
+                    and a.get("reason_code") != "TOPIC_CHANGED"]
+        competing = [a for a in relevant if _outcome(a) == contract.UNKNOWN]
+        if not eligible:
             reasons = {a.get("reason_code") for a in relevant}
             abstain[ev] = ("SURFACE_NOT_RELEVANT_NOW"
-                           if reasons == {"TOPIC_CHANGED"} else
-                           "SURFACE_EVENT_AMBIGUOUS" if "AMBIGUOUS_EVENT"
-                           in reasons else "SURFACE_UNCERTAIN")
+                           if relevant and reasons == {"TOPIC_CHANGED"}
+                           else "SURFACE_UNCERTAIN")
             continue
-        # 未判完/不确定的同事件竞争候选压低置信：有 plausible 竞争者
-        # 未严格通过 → 弃权该事件（reference.choose_winners 同语义：
-        # unjudged or ambiguous competitor suppresses event——验收优先
-        # 阻止误注入，允许明确记录漏召/弃权）
-        unresolved = [a for a in relevant if a.get("verdict") == "uncertain"]
-        if unresolved:
+        if competing:
+            # 同分区仍有无法排除的候选：可能是同一事件 → 保守弃权
+            abstain[ev] = "SURFACE_EVENT_AMBIGUOUS"
+            continue
+        if len({a["candidate_ref"] for a in eligible}) > 1:
+            # 多个不同桶都被确认 = 竞争，不挑分高的（R34）
             abstain[ev] = "SURFACE_EVENT_AMBIGUOUS"
             continue
 
@@ -67,13 +74,25 @@ def choose_winners(groups: list[dict], assessments: list[dict],
                     -_evidence_priority(cand),
                     -int(bool(cand.get("event_text"))),
                     cand["resource_ref"])
-        best = sorted(confirmed, key=sort_key)[0]
+        best = sorted(eligible, key=sort_key)[0]
         cand = dict(by_ref[best["candidate_ref"]])
         cand["event_id"] = ev
         cand["judge_reason"] = best.get("reason_code")
+        cand["judge_outcome"] = _outcome(best)
         cand["rank_signal"] = best.get("rank_signal")
         winners.append(cand)
-    return winners, abstain
+
+    merged: list[dict] = []
+    by_winner_ref: dict[str, dict] = {}
+    for w in winners:
+        ref = w["resource_ref"]
+        if ref in by_winner_ref:
+            by_winner_ref[ref].setdefault("merged_event_ids", []).append(
+                w["event_id"])
+            continue
+        by_winner_ref[ref] = w
+        merged.append(w)
+    return merged, abstain
 
 
 def _event_pool(pool: list[dict], group: dict) -> list[dict]:
@@ -83,9 +102,14 @@ def _event_pool(pool: list[dict], group: dict) -> list[dict]:
 
 
 def _evidence_priority(cand: dict) -> int:
-    """明确证据优先：authored_event > approved_summary > 无。"""
+    """明确证据优先：authored_event > approved_summary > 无。
+
+    生产证据条目键名是 evidence_kind（retrieval/evidence.make_evidence）；
+    旧实现读 kind 使本并列打破从未生效——兼容两种键名。
+    """
     ev = cand.get("evidence") or []
-    kinds = {e.get("kind") for e in ev if isinstance(e, dict)}
+    kinds = {(e.get("evidence_kind") or e.get("kind"))
+             for e in ev if isinstance(e, dict)}
     if "authored_event" in kinds:
         return 2
     if "approved_summary" in kinds:

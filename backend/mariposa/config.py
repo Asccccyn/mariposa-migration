@@ -197,12 +197,18 @@ GATE_RATE_ANON_PER_MIN = max(1, _env_int(
 # 默认关闭；judge 全局开关（recall_judge_policy 行）独立于本 flag——
 # 两者任一关闭，自动路径都 blocked，不偷偷调用付费判断。
 SURFACE_ENABLED = _flag("MARIPOSA_SURFACE_ENABLED", "")
-SURFACE_POLICY_REVISION = 1
-SURFACE_POLICY_VERSION = "surface-v1"
-SURFACE_PROMPT_PREPARE = "surface_prepare_v1"
-SURFACE_PROMPT_DELIVERY = "surface_delivery_v1"
+# v2（她 2026-10-20 裁定 P0）：判断→分组→选择→交付统一到 surfacing/contract.py
+# 一份准入合同。revision 升 2 使 v1 下 prepare 的 run 在 validate 处按
+# SURFACE_POLICY_CHANGED 失效；v1 判断缓存因 schema 版本换键自然不可达，
+# 不删不截。
+SURFACE_POLICY_REVISION = 2
+SURFACE_POLICY_VERSION = "surface-v2"
+SURFACE_PROMPT_PREPARE = "surface_prepare_v2"
+SURFACE_PROMPT_DELIVERY = "surface_delivery_v2"
 # 判断 schema 版本（judge-decision.schema.json 的 schema_version const）
-SURFACE_JUDGE_SCHEMA_VERSION = "surface-judge-v1"
+SURFACE_JUDGE_SCHEMA_VERSION = "surface-judge-v2"
+# 确定性硬校验规则版本（facts.py）；进合同指纹与 policy 快照
+SURFACE_FACTS_RULES_VERSION = "facts-v2"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -252,6 +258,12 @@ SURFACE_POSITIVE_NOUL_THRESHOLD = _env_float(
     "MARIPOSA_SURFACE_POSITIVE_NOUL_THRESHOLD", 0.98)
 SURFACE_RISK_NOUL_THRESHOLD = _env_float(
     "MARIPOSA_SURFACE_RISK_NOUL_THRESHOLD", 0.02)
+# same_occurrence 确认门（唯一语义门）。默认 0.98 是保守值=实际不会
+# 自动确认任何候选；校准需她另批并按审计包装规则跑真测。历史真例
+# 分布 .51–.71、负例 .03–.72（S05 日期冲突），不能用单一分数定交付——
+# 交付还要过 facts 与竞争合同。
+SURFACE_SAME_OCCURRENCE_THRESHOLD = _env_float(
+    "MARIPOSA_SURFACE_SAME_OCCURRENCE_THRESHOLD", 0.98)
 SURFACE_MAX_JUDGE_REQUEST_BYTES = _env_int(
     "MARIPOSA_SURFACE_MAX_JUDGE_REQUEST_BYTES", 65536)
 SURFACE_MAX_JUDGE_JOB_INPUT_BYTES = _env_int(

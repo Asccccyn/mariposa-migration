@@ -20,6 +20,7 @@ from ..errors import Forbidden, NotFound
 from ..memory import detail as memory_detail
 from ..recall import judge_policy
 from . import candidates as cand_mod
+from . import contract, facts
 from . import selection as sel_mod
 from . import store
 from .judge import REQUIRED_GRANTS, SurfaceJudge
@@ -208,7 +209,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
           "grouping_confirmed": g.grouping_confirmed}
          for g in decision.event_groups],
         [{"event_id": x.event_id, "candidate_ref": x.candidate_ref,
-          "verdict": x.verdict, "checks": x.checks,
+          "verdict": x.verdict, "outcome": x.outcome, "checks": x.checks,
           "rank_signal": x.rank_signal, "reason_code": x.reason_code}
          for x in decision.assessments], pool)
     winners = sel_mod.finalize_prepare(winners, policy)
@@ -220,8 +221,13 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
         "source_input": {"message_id": source["message_id"],
                          "revision": source["revision"],
                          "body_hash": source["body_hash"]},
+        # 每分区的用户原话事实约束：交付时按当前记忆状态重跑 facts
+        "constraints": {g.event_id: g.constraints
+                        for g in decision.event_groups},
         "abstain": abstain,
         "coverage": coverage,
+        "contract_fingerprint": decision.contract_fingerprint,
+        "resolved_model": decision.resolved_model,
     }
     status = "prepared" if usable else "empty"
     reason = None
@@ -243,7 +249,8 @@ def _snapshot_winner(w: dict) -> dict:
         "event_id", "resource_ref", "memory_id", "content_version",
         "memory_date", "date_confidence", "occurred_start",
         "occurred_end", "event_text", "body_hash", "domain_versions",
-        "evidence", "skipped_reason", "judge_reason", "rank_signal")}
+        "evidence", "skipped_reason", "judge_reason", "judge_outcome",
+        "merged_event_ids", "rank_signal")}
 
 
 def _run_expiry(run_id: str) -> str | None:
@@ -334,13 +341,15 @@ def validate(principal, a: dict) -> dict:
 
     judge = SurfaceJudge(jp["provider"], policy)
     source_input = run["snapshot"]["source_input"]
+    constraints_by_event = run["snapshot"].get("constraints") or {}
     try:
         decision = judge.judge_delivery(
             {"message_id": source_input["message_id"],
              "revision": source_input["revision"],
              "body_hash": source_input["body_hash"]},
             a.get("recent_dialogue") or [], a["target_input"],
-            run["snapshot"].get("hypotheses") or [], winners)
+            run["snapshot"].get("hypotheses") or [], winners,
+            constraints_by_event)
     except SurfaceBlocked as sb:
         store.record_judge_requests(op_key, "delivery", jp["provider"],
                                     judge.request_count, None, "blocked")
@@ -358,11 +367,12 @@ def validate(principal, a: dict) -> dict:
     rejected = 0
     reason_code = None
     for w, asm in zip(winners, decision.assessments):
+        # 同一份合同：delivery 语义 + relevant_now（contract.admit 内）
         if not asm.strictly_confirmed():
             rejected += 1
             reason_code = reason_code or (
                 "SURFACE_NOT_RELEVANT_NOW"
-                if asm.checks.get("relevant_now") is False else
+                if asm.reason_code == "TOPIC_CHANGED" else
                 "SURFACE_UNCERTAIN")
             continue
         # 版本/正文/跨域向量复核：赢家与当前正式状态不一致 → 该事件
@@ -381,6 +391,21 @@ def validate(principal, a: dict) -> dict:
         if stale:
             rejected += 1
             reason_code = reason_code or "SURFACE_VERSION_STALE"
+            continue
+        # 事实按**当前状态**重走同一份合同（她 1020：交付前事实/版本/
+        # 权限基于当前状态重验，不只读 prepare 时的确认标记）
+        facts_now = facts.hard_checks(
+            {**w, **cur}, constraints_by_event.get(w["event_id"]) or {})
+        adm_now = contract.admit(
+            asm.semantic, facts_now,
+            relevant_now=asm.checks.get("relevant_now"),
+            require_relevance=True)
+        if not adm_now.deliverable:
+            rejected += 1
+            reason_code = reason_code or (
+                "SURFACE_NOT_RELEVANT_NOW"
+                if adm_now.reason_code == "TOPIC_CHANGED" else
+                "SURFACE_UNCERTAIN")
             continue
         detail_ref = "sdr_" + secrets.token_hex(16)
         items.append({

@@ -183,13 +183,15 @@ def domain_version_vector(conn, memory_id: str) -> dict:
 
 
 def memory_current_state(conn, memory_id: str) -> dict:
-    """check/detail 复核用：当前正文+日期+版本向量。"""
+    """check/detail/validate 复核用：当前正文+日期（单日与区间）+版本向量。"""
     full = mem_service.get(conn, memory_id)
     return {
         "memory_id": memory_id,
         "content_version": str(full.get("version") or ""),
         "memory_date": full.get("memory_date"),
         "date_confidence": full.get("date_confidence"),
+        "occurred_start": full.get("occurred_start"),
+        "occurred_end": full.get("occurred_end"),
         "event_text": full.get("text") or "",
         "domain_versions": domain_version_vector(conn, memory_id),
     }
