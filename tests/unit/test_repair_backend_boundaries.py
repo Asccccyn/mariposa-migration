@@ -243,13 +243,20 @@ def test_batch_references_use_members_and_parent_path(actors, tmp_path, monkeypa
     assert binding.memories_referencing("b") == refs[msgs["b"]["id"]]
 
 
-def test_words_search_does_not_rebuild_unused_fts(actors, monkeypatch):
+def test_words_search_does_not_rebuild_unused_fts(actors):
+    """10-18 合同：words 检索只读正表，绝不作为搜索副作用重建派生索引
+    （原 monkeypatch 目标 ensure_index_current 已作为死代码删除——本测试
+    改为直接观察指纹状态不被搜索改动）。"""
     hold(actors["jiaming"], our_words=[{"speaker": "qiaosheng", "text": "南瓜灯"}])
-    def must_not_rebuild(*args):
-        raise AssertionError("query attempted legacy index rebuild")
-    monkeypatch.setattr(words, "ensure_index_current", must_not_rebuild)
     with db.formal() as conn:
+        assert words.rebuild_words_index(conn) >= 1          # 先写入基线指纹
+        conn.execute("DELETE FROM mariposa_db_meta WHERE key=?",
+                     (words.WORDS_INDEX_META_KEY,))          # 制造过期
         assert words.words_search(conn, {"lexical_terms": ["南瓜灯"]})["hits"]
+        meta = conn.execute(
+            "SELECT value FROM mariposa_db_meta WHERE key=?",
+            (words.WORDS_INDEX_META_KEY,)).fetchone()
+    assert meta is None, "检索不得触发派生索引重建"
 
 
 @pytest.mark.parametrize("single", [True, False])

@@ -101,28 +101,6 @@ def _rebuild_rows(conn) -> int:
     return len(rows)
 
 
-def ensure_index_current(conn) -> bool:
-    """读取时校验：正表指纹与派生索引不一致即重建（含遗忘行清除）。
-
-    P1-02（2026-10-05 审计）：重建走**专用写连接 + 单事务**，事务内
-    二次核指纹——并发读到同一个过期指纹时，后拿写锁的一方在锁内
-    看到前者已重建的新指纹即跳过，不再出现双方同时重建撞主键。
-    检测仍用调用方连接（只读，不动调用方事务状态）。
-    """
-    if _index_fresh(conn):
-        return False
-    with db.formal() as wconn:
-        wconn.execute("BEGIN IMMEDIATE")
-        try:
-            if not _index_fresh(wconn):
-                _rebuild_rows(wconn)
-            wconn.execute("COMMIT")
-        except Exception:
-            wconn.execute("ROLLBACK")
-            raise
-    return True
-
-
 def _index_fresh(conn) -> bool:
     """指纹一致判定（只读；不成立不代表没人正在重建，锁内还会复核）。"""
     meta = conn.execute(
