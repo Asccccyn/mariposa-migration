@@ -254,7 +254,10 @@ class TestChunkedBodyCap:
 
         chunks = [b"a" * 1024] * 100  # 100KB 总量，上限 4KB
         fs = FakeStream(chunks)
-        req = type("R", (), {"stream": lambda self: fs})()
+        # _read_body_capped 10-01 复审起先读 headers（Content-Length 快路径）：
+        # 假请求补空 headers（.get → None 即走流式累计路径）
+        req = type("R", (), {"stream": lambda self: fs,
+                             "headers": {}})()
 
         async def run():
             from mariposa.errors import MariposaError

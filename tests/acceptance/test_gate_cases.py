@@ -14,18 +14,9 @@ from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden, NotFound, SnapshotStale
 from mariposa.identity import service as identity
-from mariposa.memory import listing, reengagement, relations, service as memory
+from mariposa.memory import service as memory
 from mariposa.retrieval import search as retrieval
 from tests.conftest import TOKENS, reset_all
-
-
-def _qid_of(memory_id):
-    with db.formal() as conn:
-        row = conn.execute(
-            "SELECT q.id FROM quotes q JOIN quote_versions v ON"
-            " v.quote_id=q.id WHERE v.raw_ref LIKE ?",
-            (f"%{memory_id}%",)).fetchone()
-    return row["id"]
 
 
 @pytest.fixture()

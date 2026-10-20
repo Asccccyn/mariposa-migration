@@ -108,7 +108,13 @@ class TestWordsIndexConcurrency:
         assert all(r["coverage"] in ("complete_within_scope",
                                      "partial_topk_window")
                    for r in results)
-        # 二次确认：重建后指纹已一致（index_rebuilt 至少一个 True）
+        # 10-18 起 words 检索只读正表（scoped BM25），**不再作为搜索副作用
+        # 重建**派生索引（边界测试 test_repair_backend_boundaries 同款约定）：
+        # 过期指纹保持过期（meta 行仍缺），由显式 rebuild_words_index 收口
+        with db.formal() as conn:
+            assert not wm._index_fresh(conn)
+            rebuilt = wm.rebuild_words_index(conn)
+        assert rebuilt >= 1
         with db.formal() as conn:
             assert wm._index_fresh(conn)
 

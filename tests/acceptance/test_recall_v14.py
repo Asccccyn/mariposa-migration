@@ -344,8 +344,9 @@ class TestRuntime:
         from mariposa.memory import extras
         m = hold(actors, "搬家事件", "2026-08-10")
         p = start(actors)
-        extras.update_text("jiaming", m["memory_id"], 1, "修订版", None,
-                           None)
+        # 10-18 起关键字参数合同（位置式 None=显式置空，会被 NOT NULL 拒绝）
+        extras.update_text(actors["jiaming"].principal_id, m["memory_id"], 1,
+                           text="修订版")
         st = recall_service.status(actors["jiaming"], {
             "session_id": p["recall_session_id"]})
         assert st["receipts_revalidated"]["invalid_refs"]
@@ -370,8 +371,9 @@ class TestRuntime:
             "lexical_terms": ["搬家"]}})
         sid = p["recall_session_id"]
         first = p["candidates"][0]
+        # 10-19 候选卡瘦身：交付层只带 resource_ref；reject 接受 resource_ref
         recall_service.reject(actors["jiaming"], {
-            "session_id": sid, "candidate_ref": first["candidate_ref"],
+            "session_id": sid, "resource_ref": first["resource_ref"],
             "reject_target": "word"})
         p2 = recall_service.refine(actors["jiaming"], {
             "session_id": sid, "query_plan": {

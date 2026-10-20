@@ -72,10 +72,11 @@ class TestInvalidation:
         m = hold(actors, "搬家事件甲", "2026-08-10")
         p = start(actors)
         sid = p["recall_session_id"]
-        # 正式内容修订（版本前进）
+        # 正式内容修订（版本前进）——update_text 10-18 起为关键字参数合同
+        # （旧位置式 None 会被当作显式 date_confidence=NULL 写库而拒绝）
         from mariposa.memory import extras
         extras.update_text(actors["jiaming"].principal_id, m["memory_id"],
-                           1, "搬家事件甲修订版", None, None)
+                           1, text="搬家事件甲修订版")
         st = recall_service.status(actors["jiaming"], {"session_id": sid})
         assert st["receipts_revalidated"]["invalid_refs"]
         assert st["session"]["status"] == "STALE_RETRY_REQUIRED"
@@ -93,12 +94,14 @@ class TestInvalidation:
     def test_forgetting_invalidates_word_receipts(self, actors):
         """遗忘生效使 our_word 回执失效（读取时重校验兜底）。"""
         m = hold(actors, "搬家事件甲", "2026-08-10")
+        # 10-18 话语只剩原文：expression_kind 列已删（迁移 39 DROP COLUMN）；
+        # 直插行不再携带该列，无 source_ref → 证据分级 word_unverified
         with db.formal() as conn:
             conn.execute(
                 "INSERT INTO memory_our_words(word_id, memory_id, ordinal,"
-                " speaker, text, expression_kind, source_ref, created_by,"
+                " speaker, text, source_ref, created_by,"
                 " created_at) VALUES('ow_t1',?,1,'qiaosheng','搬家话语',"
-                "'verbatim',NULL,'jiaming','2026-08-10')",
+                "NULL,'jiaming','2026-08-10')",
                 (m["memory_id"],))
         p = recall_service.start(actors["jiaming"], {"query_plan": {
             "original_request": "找话", "channels": ["words"],

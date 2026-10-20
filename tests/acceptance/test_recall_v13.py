@@ -194,8 +194,7 @@ class TestV13Word:
 
     def test_word04(self, actors):
         hold(actors, "搬家事件", "2026-08-10",
-             our_words=[{"speaker": "qiaosheng", "text": "搬家话语",
-                         "expression_kind": "verbatim"}])
+             our_words=[{"speaker": "qiaosheng", "text": "搬家话语"}])
         p = recall_service.start(actors["jiaming"], {"query_plan": {
             "original_request": "事件和话", "channels": ["event", "words"],
             "lexical_terms": ["搬家"]}})
@@ -203,7 +202,9 @@ class TestV13Word:
             assert c["channel"] in ("event", "words")
             assert c["evidence"][0]["content_role"] == "retrieved_memory"
         kinds = {c["evidence"][0]["evidence_kind"] for c in p["candidates"]}
-        assert "authored_event" in kinds and "word_verbatim" in kinds
+        # 10-18 证据分级=出处驱动：无 source_ref 的话语是 word_unverified
+        # （word_verbatim 需有效来源）
+        assert "authored_event" in kinds and "word_unverified" in kinds
 
     def test_word05(self, actors):
         m = hold(actors, "事件", "2026-08-10",
