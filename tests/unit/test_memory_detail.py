@@ -234,3 +234,68 @@ def _explicit_open(mem_id):
         return conn.execute(
             "SELECT last_explicit_open_at FROM memories WHERE memory_id=?",
             (mem_id,)).fetchone()[0]
+
+
+class TestR08OversizedStructuredItems:
+    """她 1021 指令收口：R08 审计执行包移植——超大单条结构项稳定续页片段合同。"""
+
+    def _pages(self, sections, status=None):
+        from mariposa.memory import detail as d
+        st = status or {k: ("complete" if k in sections else "empty")
+                        for k in d.SECTION_ORDER}
+        pages = d._paginate(sections, st, 1024)
+        return pages, [d._page_view(
+            {"snapshot_id": "sds_" + "f" * 32, "memory_id": "a",
+             "memory_version": "1", "domain_versions": {}, "pages": pages,
+             "section_status": st}, i) for i in range(len(pages))]
+
+    def test_oversized_single_item_fragments_exact_reassembly(self):
+        text = "😀字" * 5000
+        pages, output = self._pages({"source": [{"seq": 1, "text": text}]})
+        snap = {"snapshot_id": "sds_" + "f" * 32, "memory_id": "a",
+                "memory_version": "1", "domain_versions": {},
+                "pages": pages, "section_status": {}}
+        from mariposa.memory import detail as d
+        output = [d._page_view(snap, i) for i in range(len(pages))]
+        assert len(pages) > 1
+        import json
+        assert all(len(json.dumps(p, ensure_ascii=False, separators=(",", ":")).encode()) <= 1024
+                   for p in pages), "分页本体字节有界（修前单页驮整条 30KB）"
+        assert all(len(json.dumps(p, ensure_ascii=False, separators=(",", ":")).encode()) <= 1424
+                   for p in output), "出站=本体+信封余量（section_status 等约 400B）"
+        frags = [row for p in output for row in p["sections"].get("source", [])]
+        assert all(f.get("partial_item") is True and f.get("item_index") == 0 for f in frags)
+        joined = "".join(f["text"] for f in sorted(frags, key=lambda f: f["text_range"][0]))
+        assert joined == text, "同 index 按序拼接精确还原"
+
+    def test_large_list_mixes_batches_and_fragments(self):
+        items = [{"seq": i, "text": f"第{i}条合成消息"} for i in range(600)]
+        items[317] = {"seq": 317, "text": "超大单条" * 3000}
+        pages, _ = self._pages({"source": items})
+        from mariposa.memory import detail as d
+        snap = {"snapshot_id": "sds_" + "f" * 32, "memory_id": "a",
+                "memory_version": "1", "domain_versions": {}, "pages": pages,
+                "section_status": {}}
+        output = [d._page_view(snap, i) for i in range(len(pages))]
+        rows = [row for p in output for row in p["sections"].get("source", [])]
+        by_seq: dict = {}
+        for row in rows:
+            by_seq.setdefault(row.get("seq"), []).append(row)
+        for i in range(600):
+            if i == 317:
+                continue
+            assert by_seq.get(i) == [{"seq": i, "text": f"第{i}条合成消息"}], f"普通条目{i}原样"
+        big = sorted(by_seq[317], key=lambda f: f["text_range"][0])
+        assert "".join(f["text"] for f in big) == "超大单条" * 3000
+
+    def test_truly_indivisible_fails_explicitly(self):
+        import pytest
+        from mariposa.surfacing.models import SurfaceBlocked
+        with pytest.raises(SurfaceBlocked, match="DETAIL_PARTIAL_UNAVAILABLE"):
+            self._pages({"source": [{"seq": 1, "numbers": list(range(4000))}]})
+
+    def test_normal_structured_unchanged(self):
+        pages, output = self._pages({"relations": [{"a": 1}, {"b": 2}]})
+        rows = [row for p in output for row in p["sections"].get("relations", [])]
+        assert rows == [{"a": 1}, {"b": 2}]
+        assert all("partial_item" not in r for r in rows)

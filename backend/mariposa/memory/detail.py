@@ -178,6 +178,64 @@ def build_sections(memory_id: str, conn) -> tuple[dict, dict, dict]:
 
 # --------------------------------------------------------------- 分页
 
+def _structured_cost(name: str, payload) -> int:
+    return _json_bytes({name: payload}) + len(name) + 8
+
+
+def _longest_text_field(value) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    best_key, best_len = None, 0
+    for k, v in value.items():
+        if isinstance(v, str) and len(v) > best_len:
+            best_key, best_len = k, len(v)
+    return best_key if best_len > 0 else None
+
+
+def _put_structured(name, payload, st, budget, put):
+    limit = budget - 192  # 与 memory 正文分片同额的信封余量
+    if not (isinstance(payload, list) and payload):
+        if _structured_cost(name, payload) <= limit:
+            put(name, payload, st)
+            return
+        _put_fragmented(name, payload, st, None, limit, put)
+        return
+    batch: list = []
+    for index, value in enumerate(payload):
+        if _structured_cost(name, [value]) > limit:
+            if batch:
+                put(name, batch, "partial")
+                batch = []
+            _put_fragmented(name, value, st, index, limit, put)
+            continue
+        if batch and _structured_cost(name, batch + [value]) > limit:
+            put(name, batch, "partial")
+            batch = []
+        batch.append(value)
+    if batch:
+        put(name, batch, st)
+
+
+def _put_fragmented(name, value, st, index, limit, put):
+    field = _longest_text_field(value)
+    if field is None:
+        raise SurfaceBlocked(
+            "DETAIL_PARTIAL_UNAVAILABLE",
+            detail="structured_item_exceeds_page_budget", section=name)
+    text = value[field]
+    base = {k: v for k, v in value.items() if k != field}
+    chunks = _chunk_text(text, limit - _structured_cost(
+        name, [{**base, field: "", "partial_item": True,
+                "item_index": index, "text_range": [0, 0]}]))
+    if not chunks:
+        raise SurfaceBlocked("DETAIL_PARTIAL_UNAVAILABLE", section=name)
+    for i, ch in enumerate(chunks):
+        frag = {**base, field: ch["text"], "partial_item": True,
+                "item_index": index,
+                "text_range": [ch["start_cp"], ch["end_cp"]]}
+        put(name, [frag], st if i == len(chunks) - 1 else "partial")
+
+
 def _paginate(sections: dict, status: dict, page_bytes: int) -> list[dict]:
     """字节有界页：长文本码点分片；每页 sections 只含本页承载的段。
 
@@ -224,9 +282,12 @@ def _paginate(sections: dict, status: dict, page_bytes: int) -> list[dict]:
                                                ch["end_cp"]]},
                         "partial" if i < len(chunks) - 1 else st)
         else:
-            # 结构化段按整体入页（超预算时独立成页整段交付——分片字段
-            # 只有受控文本；不做静默截断）
-            put(name, payload, st)
+            # R08（她 1021 指令收口：审计执行包移植）——超大单条结构项给
+            # 稳定续页片段合同：最长字符串字段按码点分片（partial_item/
+            # item_index/text_range，同 index 按序拼接精确还原），不再
+            # 无上界整段交付；真正不可分割（无文本字段）明确拒绝，绝不
+            # 静默截断或超门输出。普通条目路径零变化。
+            _put_structured(name, payload, st, budget, put)
     flush()
     if not pages:
         pages = [{"sections": {}, "status": {}}]
