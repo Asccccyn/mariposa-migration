@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from .. import config
+from .scope_pool import _pool_where  # R09：_pool_where 正本在 scope_pool
 from ..errors import Forbidden
 from ..memory import relations as relations_mod
 from . import projection, semantic
@@ -46,7 +47,7 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
     不允许 title 命中会占满取数窗，把后面的合法 event_text 挤出
     候选（false negative）。返回 [(memory_id, [命中字段...])] 按
     分数降序。"""
-    from ..recall import pipeline as pl
+    from . import scope_pool as _sp
     from . import query_plan as qp
     from . import scoped_bm25
     clauses = list(dict.fromkeys(lexical_terms or []))
@@ -57,7 +58,7 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
         return [], False
     # CB-043（2026-10-02 审计 P2）：池安全阀截断状态贯穿返回——此前
     # 丢弃后零命中与"池未查尽"无法区分（false negative + 不诚实覆盖）
-    pool_ids, pool_trunc = pl._scope_pool_ids(conn, where, params)
+    pool_ids, pool_trunc = _sp.fetch_all(conn, where, params)
     pool_ids = [m for m in pool_ids if m]
     if not pool_ids:
         return [], pool_trunc
@@ -100,75 +101,6 @@ def _stage_scoped_hits(conn, query: str, where: list[str],
             pool_trunc)
 
 
-def _pool_where(filters: dict) -> tuple[list[str], list]:
-    """结构化筛选 → (where 片段, 参数)。跨维度 AND；同维度默认 any（D04）。"""
-    where = ["m.visibility='active'"]
-    params: list = []
-
-    cats = [c for c in (filters.get("categories") or []) if c]
-    if cats:
-        marks = ",".join("?" * len(cats))
-        if filters.get("category_match", "any") == "all":
-            where.append(
-                f"m.memory_id IN (SELECT memory_id FROM memory_categories"
-                f" WHERE category IN ({marks})"
-                f" GROUP BY memory_id HAVING COUNT(DISTINCT category)=?)")
-            params += cats + [len(set(cats))]
-        else:
-            where.append(
-                f"EXISTS(SELECT 1 FROM memory_categories c WHERE"
-                f" c.memory_id=m.memory_id AND c.category IN ({marks}))")
-            params += cats
-
-    tags = [t for t in (filters.get("mood_tags") or []) if t]
-    if tags:
-        # 2026-10-05 冻结裁定（当晚修订）：mood_tags 只按大类过滤
-        # （与 by_emotion 同语义）；子心情在 mood_note，不做筛选键
-        from ..memory.service import MOOD_CATEGORIES
-        bad = [t for t in tags if t not in MOOD_CATEGORIES]
-        if bad:
-            raise Forbidden(
-                f"mood_tags 只能是大类（固定 {len(MOOD_CATEGORIES)} 个）："
-                + "、".join(MOOD_CATEGORIES),
-                code="MOOD_CATEGORY_REQUIRED", got=bad)
-        tags = list(dict.fromkeys(tags))
-        marks = ",".join("?" * len(tags))
-        if filters.get("mood_match", "any") == "all":
-            where.append(
-                f"m.memory_id IN (SELECT memory_id FROM memory_mood_tags"
-                f" WHERE tag IN ({marks})"
-                f" GROUP BY memory_id HAVING COUNT(DISTINCT tag)=?)")
-            params += tags + [len(set(tags))]
-        else:
-            where.append(
-                f"EXISTS(SELECT 1 FROM memory_mood_tags t WHERE"
-                f" t.memory_id=m.memory_id AND t.tag IN ({marks}))")
-            params += tags
-
-    dr = filters.get("event_date") or {}
-    if dr.get("from") or dr.get("to"):
-        # SEARCH-03：按事件发生时间筛（memory_date 或 occurred 区间重叠），
-        # 不按 hold/回执/入库时间。occurred 存 ISO 时刻，比较按日期前缀。
-        cond = []
-        cp: list = []
-        if dr.get("from"):
-            cond.append("m.memory_date >= ?")
-            cp.append(dr["from"])
-        if dr.get("to"):
-            cond.append("m.memory_date <= ?")
-            cp.append(dr["to"])
-        base = "(" + " AND ".join(cond) + ")"
-        overlap = ("(m.occurred_start IS NOT NULL AND"
-                   " substr(m.occurred_start,1,10) <= ?")
-        op: list = [dr.get("to", "9999-12-31")]
-        if dr.get("from"):
-            overlap += (" AND (m.occurred_end IS NULL OR"
-                        " substr(m.occurred_end,1,10) >= ?)")
-            op.append(dr["from"])
-        overlap += ")"
-        where.append(f"({base} OR {overlap})")
-        params += cp + op
-    return where, params
 
 
 def _hit(row, matched_by: str, matched_fields: list[str]) -> dict:

@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+_REGISTRY_MODULE = None  # R09：由 registry 装配时经 set_registry_module 注入
+
 from dataclasses import replace
 
 _ALIASES = {
@@ -14,9 +16,15 @@ _ALIASES = {
 }
 
 
+def set_registry_module(reg) -> None:
+    """R09：兼容注册经显式注入拿 registry（不再回调 import 形成环）。"""
+    global _REGISTRY_MODULE
+    _REGISTRY_MODULE = reg
+
+
 def register_v1_compat() -> dict:
     # registry 完成主表后晚绑定，避免模块导入成环。
-    from . import registry as R
+    R = _REGISTRY_MODULE  # R09 拆环：register 侧显式注入（见 set_registry_module）
     added = {"alias": 0, "thin": 0}
     for alias, target in _ALIASES.items():
         if alias not in R.REGISTRY:

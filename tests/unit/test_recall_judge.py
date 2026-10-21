@@ -12,6 +12,7 @@ from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.recall import service as recall_service
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from tests.conftest import reset_all
 
 
@@ -58,7 +59,7 @@ class RecordingJudge(jb.JudgeProvider):
 @pytest.fixture(autouse=True)
 def cleanup_judge():
     yield
-    jb.clear_injected()
+    judge_factory.clear_injected()
     from mariposa import config
     config.RECALL_JUDGE_PROVIDER = "disabled"
 
@@ -70,7 +71,7 @@ def enable(provider_name):
 
 def start_with_judge(actors, judge, **plan_kw):
     enable(judge.name)
-    jb.register_for_tests(judge.name, judge)
+    judge_factory.register_for_tests(judge.name, judge)
     plan = {"original_request": "找搬家的事", "channels": ["event"],
             "lexical_terms": ["搬家"]}
     plan.update(plan_kw)

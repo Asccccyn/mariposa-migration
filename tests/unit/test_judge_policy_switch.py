@@ -19,6 +19,7 @@ from mariposa.memory import service as memory
 from mariposa.recall import judge_policy, paging, service as recall_service
 from mariposa.recall import store as recall_store
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from tests.conftest import reset_all
 
 
@@ -80,7 +81,7 @@ class RecordingJudge(jb.JudgeProvider):
 @pytest.fixture(autouse=True)
 def _cleanup():
     yield
-    jb.clear_injected()
+    judge_factory.clear_injected()
     from mariposa import config
     config.RECALL_JUDGE_PROVIDER = "disabled"
 
@@ -252,7 +253,7 @@ class TestJudgeModes:
         def _no_construct(name):
             raise AssertionError(
                 f"关闭模式构造了判断 provider: {name}")
-        monkeypatch.setattr(jb, "get_provider_by_name", _no_construct)
+        monkeypatch.setattr(judge_factory, "get_provider_by_name", _no_construct)
         # 网络 spy：任何 HTTP 构造即失败
         import http.client as _hc
         monkeypatch.setattr(_hc, "HTTPConnection",
@@ -280,7 +281,7 @@ class TestJudgeModes:
         for i in range(6):
             hold(actors, f"搬家事件{i}")
         judge = RecordingJudge()
-        jb.register_for_tests("typesafe_jev", judge)
+        judge_factory.register_for_tests("typesafe_jev", judge)
         set_policy(True, provider="typesafe_jev")
         packet = start(actors)
         assert len(judge.calls) == 1
@@ -297,7 +298,7 @@ class TestJudgeModes:
         不假报无记忆、不暗切关闭或别的 provider。"""
         hold(actors, "搬家事件")
         judge = RecordingJudge(status="unavailable", reason="timeout")
-        jb.register_for_tests("typesafe_jev", judge)
+        judge_factory.register_for_tests("typesafe_jev", judge)
         set_policy(True, provider="typesafe_jev")
         packet = start(actors)
         assert packet["coverage"]["judge"] == "unavailable"
@@ -318,7 +319,7 @@ class TestJudgeModes:
                          candidate_version="1",
                          relevance_signal=0.9,
                          evaluation_status="evaluated")])
-        jb.register_for_tests("typesafe_jev", judge)
+        judge_factory.register_for_tests("typesafe_jev", judge)
         set_policy(True, provider="typesafe_jev")
         packet = start(actors)
         assert packet["coverage"]["judge"] == "unavailable"

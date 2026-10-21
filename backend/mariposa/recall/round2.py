@@ -17,6 +17,7 @@ from ..identity import Principal
 from ..retrieval import evidence as evidence_mod
 from ..retrieval import selection
 from ..retrieval.judges import base as judge_base
+from ..retrieval.judges import factory as judge_factory
 from ..retrieval.judges import typesafe_jev
 from . import budget, state_machine, store
 from .models import validate_query_plan
@@ -174,7 +175,7 @@ def _round2_gate(conn, session: dict, reason: str) -> tuple[bool, dict]:
     #    不再 isinstance TypeSafeJevJudge）；关闭=无外发不要求许可；
     #    未配置=无许可（fail-closed）
     provider = (judge_base.apply_policy_overrides(
-        judge_base.get_provider_by_name(policy["provider"]),
+        judge_factory.get_provider_by_name(policy["provider"]),
         model_id=policy.get("model_id"),
         allowed_data=(policy.get("allowed_data") or None))
         if policy["mode"] == "on" else None)
@@ -363,7 +364,7 @@ def _round2_resolve_offset(a: dict, session: dict) -> int:
         _pol = _jp.effective()
         if _pol["mode"] == "on":
             _prov = judge_base.apply_policy_overrides(
-                judge_base.get_provider_by_name(_pol["provider"]),
+                judge_factory.get_provider_by_name(_pol["provider"]),
                 model_id=_pol.get("model_id"),
                 allowed_data=(_pol.get("allowed_data") or None))
             if "source_excerpt" not in _prov.outbound_grants():
@@ -406,6 +407,7 @@ def _round2_judge_cards(sid: str, session: dict, plan: dict,
     （§4.4：无外发故不要求 provider 许可，judged_count=0）；开启：
     构造**所选** provider（provider 无关接口，不串联接力）。"""
     from ..retrieval.judges import base as judge_base
+    from ..retrieval.judges import factory as judge_factory
     from . import judge_policy
     policy = policy or judge_policy.effective()
     coverage = {"raw": ("partial_has_more" if raw_has_more
@@ -416,7 +418,7 @@ def _round2_judge_cards(sid: str, session: dict, plan: dict,
         coverage["judge"] = "bypassed_by_user"
         return raw_cards, coverage, degraded
     provider = judge_base.apply_policy_overrides(
-        judge_base.get_provider_by_name(
+        judge_factory.get_provider_by_name(
             policy["provider"] if policy["mode"] == "on" else None),
         model_id=policy.get("model_id"),
         allowed_data=(policy.get("allowed_data") or None))
@@ -534,7 +536,7 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
         # RRA-010（D-2 落实）：off 模式 raw 卡换获授权 Source 修订全文
         #（此前只有命中窗口 excerpt 且假标 truncated=false——关闭=按
         # 原本格式给char，全文经冻结分页逐页可取，长文码点分片）
-        from .service import _expand_raw_full_text
+        from .paging import _expand_raw_full_text
         for c in sel["delivered"]:
             _expand_raw_full_text(c)
         # 关闭模式（§4.4/R05）：本批候选全集冻结为分页结果集——上游
@@ -648,7 +650,7 @@ def _round2_body(principal, a: dict, op_ctx: dict | None = None,
             # ——先于 operation 行（保存结果包含最终 result_set_id 与
             # next_cursor，同 op 重放回同一首页）
             if frozen_cards is not None:
-                from .service import _persist_page_set_in_tx
+                from .paging import _persist_page_set_in_tx
                 _persist_page_set_in_tx(
                     conn, packet,
                     {"page_set": {"cards": frozen_cards,

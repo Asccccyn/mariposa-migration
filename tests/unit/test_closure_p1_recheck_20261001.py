@@ -11,8 +11,10 @@ from mariposa import config as cfg, db
 from mariposa.errors import Forbidden, NotFound
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service, store
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service, store
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all, TOKENS
 
@@ -55,7 +57,7 @@ class TestJudgeTitleOnlyReal:
         **不含**中秋——event_evidence 必须含尾部事实，不再是头部
         600 字盲窗。"""
         cap = _Cap()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
         try:
@@ -88,7 +90,7 @@ class TestJudgeTitleOnlyReal:
     def test_anchored_window_when_body_has_term(self, actors):
         """正文含查询词但命中在深处：anchored 窗生效（非头部）。"""
         cap = _Cap()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
         try:
@@ -204,7 +206,7 @@ class TestJudgeCardinality:
                         model_id="p", prompt_version="t")],
                     provider_status="evaluated")
 
-        jb.register_for_tests("partial_ret", Partial())
+        judge_factory.register_for_tests("partial_ret", Partial())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "partial_ret"
         try:
@@ -218,7 +220,7 @@ class TestJudgeCardinality:
             assert receipt["unavailable_count"] == 1, \
                 "漏返回的候选必须计入 unavailable"
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid,
                     "reason": "NO_DELIVERABLE_CANDIDATE"})
             gate = ei.value.detail["gate"]
@@ -242,7 +244,7 @@ class TestJudgeCardinality:
                         model_id="g", prompt_version="t")],
                     provider_status="evaluated")
 
-        jb.register_for_tests("ghost_ret", GhostRef())
+        judge_factory.register_for_tests("ghost_ret", GhostRef())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "ghost_ret"
         try:
@@ -253,7 +255,7 @@ class TestJudgeCardinality:
             assert "judge_cardinality_violation" in p["degraded_reasons"]
             sid = p["recall_session_id"]
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid,
                     "reason": "NO_DELIVERABLE_CANDIDATE"})
             assert ei.value.code == "ROUND2_GATE_DENIED"

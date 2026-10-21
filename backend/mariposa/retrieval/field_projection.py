@@ -46,8 +46,8 @@ def _current_texts(conn, memory_id: str) -> dict[str, str]:
         out["original_title"] = (v["original_title"] or "").strip()
         # F04：正文解析走 memory.service.version_body 统一入口
         #（event_text 优先，v1 旧版本回退 hold_text；fallback 集中实现）
-        from ..memory import service as memory_service
-        out["event_text"] = (memory_service.version_body(v) or "").strip()
+        from ..memory.representation import version_body
+        out["event_text"] = (version_body(v) or "").strip()
     words = [r["text"] for r in conn.execute(
         "SELECT text FROM memory_our_words WHERE memory_id=? ORDER BY ordinal",
         (memory_id,))]

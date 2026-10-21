@@ -5,6 +5,7 @@ HTTP / MCP / CC 都调这里注册的 handler；权限按 principal 声明，
 """
 from __future__ import annotations
 
+import sys
 import json
 from dataclasses import dataclass, field
 from typing import Callable
@@ -880,7 +881,8 @@ def _recall_round2(principal: Principal, a: dict) -> dict:
     """S13/WP04：服务端 plan + 六条件门禁 + raw 候选过同一层 Jev +
     commit-at-end 单事务；operation_id 幂等（runtime 集，不走 formal
     响应缓存）。"""
-    return _with_operation_id(principal, a, recall_service.round2)
+    from ..recall import round2 as _round2_mod
+    return _with_operation_id(principal, a, _round2_mod.round2)
 
 
 def _recall_page(principal: Principal, a: dict) -> dict:
@@ -1726,6 +1728,7 @@ REGISTRY = _register()
 # app 导入（单元测试/工具直用 REGISTRY 时同样可用；register 内部
 # 只在此处装配保留的三别名和两个能力查询入口）
 from . import v1_compat as _v1_compat  # noqa: E402
+_v1_compat.set_registry_module(sys.modules[__name__])
 _v1_compat.register_v1_compat()
 
 

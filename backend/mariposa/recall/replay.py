@@ -104,9 +104,10 @@ def revalidate_replayed(fn_name: str, saved: dict,
     # RECALL_POLICY_CHANGED/A7 早退，到这里的必为 on/unconfigured。许可核对
     # 用 provider 无关接口 outbound_grants（Jev/Codex 同一入口）。
     from ..retrieval.judges import base as _jb
+    from ..retrieval.judges import factory as _jf
     _pol = _cur_pol
     _provider = _jb.apply_policy_overrides(
-        _jb.get_provider_by_name(
+        _jf.get_provider_by_name(
             _pol.get("provider") if _pol["mode"] == "on" else None),
         model_id=_pol.get("model_id"),
         allowed_data=(_pol.get("allowed_data") or None))
@@ -131,8 +132,7 @@ def revalidate_replayed(fn_name: str, saved: dict,
         # **带正文的业务候选**；无正文结构卡（导航卡，fresh 的
         # navigate 不经 judge、任何 judge 状态下都交付）不在抑制
         # 范围——按必要角色为空集识别，与 fresh 导航同权保留
-        from ..retrieval.judges.typesafe_jev import \
-            required_excerpt_roles as _nav_roles
+        from ..retrieval.judges.base import required_excerpt_roles as _nav_roles
         _nav_kept = [c for c in saved["candidates"]
                      if isinstance(c, dict) and not _nav_roles(c)]
         degraded = dict(saved)
@@ -154,8 +154,7 @@ def revalidate_replayed(fn_name: str, saved: dict,
         # 角色即剔卡——fresh 的行为是"要么带正文交付、要么不交付"，
         # 没有第三态，重放不得做段级剥除保留（会制造 fresh 没有的
         # 无正文中间态）。抑制时 operation/canonical/预算不变
-        from ..retrieval.judges.typesafe_jev import \
-            required_excerpt_roles as _need_roles
+        from ..retrieval.judges.base import required_excerpt_roles as _need_roles
         _kept = []
         _suppressed_channels: set[str] = set()
         for _c in saved["candidates"]:

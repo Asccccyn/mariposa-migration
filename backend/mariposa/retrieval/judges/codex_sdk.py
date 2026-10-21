@@ -365,7 +365,7 @@ class CodexSdkJudge(base.JudgeProvider):
         # WP-02（CX-15=C-008）：出站投影按卡必要角色过滤（与 replay/
         # selection 的 required_excerpt_roles 同源）——单许可下未许可卡
         # 的正文/证据不进 prompt；许可集为空已在上游 fail-closed。
-        from .typesafe_jev import required_excerpt_roles
+        from .base import required_excerpt_roles
         authorized = [c for c in candidates
                       if required_excerpt_roles(c) <= self._grants]
         if not authorized and candidates:

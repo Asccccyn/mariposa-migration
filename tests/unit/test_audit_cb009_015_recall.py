@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
+from mariposa.recall import round2 as recall_round2_mod
 from mariposa import config as cfg
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import pipeline, service as recall_service, store
+from mariposa.recall import pipeline
+from mariposa.recall import round2 as _r2mod
+from mariposa.recall import service as recall_service, store
 from tests.conftest import reset_all
 
 
@@ -85,6 +89,7 @@ def _round2(actors, sid, reason="EVIDENCE_INSUFFICIENT", op="op-cb-r2"):
 def _grant_source_excerpt():
     """wp04 同款：带 source_excerpt 许可的 fake judge。"""
     from mariposa.retrieval.judges import base as jb
+    from mariposa.retrieval.judges import factory as judge_factory
     from mariposa.retrieval.judges import typesafe_jev
 
     class GrantedTypeSafe(typesafe_jev.TypeSafeJevJudge):
@@ -110,7 +115,7 @@ def _grant_source_excerpt():
                 degraded_reason=None, cache_hits=0,
                 cache_misses=len(candidates), request_count=1)
 
-    jb.register_for_tests("cb_granted_typesafe", GrantedTypeSafe())
+    judge_factory.register_for_tests("cb_granted_typesafe", GrantedTypeSafe())
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "cb_granted_typesafe"
     return old
@@ -368,21 +373,21 @@ class TestRawLease:
     def test_lease_acquire_release_preempt(self):
         """租约语义：独占、释放后可抢、TTL 过期可抢占（异常退出恢复）。"""
         sid, rev, burst = "cb011-s", 3, 2
-        t1 = recall_service._acquire_raw_lease(sid, rev, burst)
+        t1 = recall_round2_mod._acquire_raw_lease(sid, rev, burst)
         assert t1
-        assert recall_service._acquire_raw_lease(sid, rev, burst) is None, \
+        assert recall_round2_mod._acquire_raw_lease(sid, rev, burst) is None, \
             "未过期租约必须互斥"
-        recall_service._release_raw_lease(sid, rev, burst, t1)
-        t2 = recall_service._acquire_raw_lease(sid, rev, burst)
+        recall_round2_mod._release_raw_lease(sid, rev, burst, t1)
+        t2 = recall_round2_mod._acquire_raw_lease(sid, rev, burst)
         assert t2 and t2 != t1, "释放后可立即再抢"
         # 模拟持有者异常退出：租约超 TTL 后可抢占
         with db.recall_runtime() as conn:
             conn.execute(
                 "UPDATE recall_raw_leases SET created_at='2020-01-01T00:00:"
                 "00+00:00' WHERE session_id=?", (sid,))
-        t3 = recall_service._acquire_raw_lease(sid, rev, burst)
+        t3 = recall_round2_mod._acquire_raw_lease(sid, rev, burst)
         assert t3, "过期租约可抢占（崩溃恢复）"
-        recall_service._release_raw_lease(sid, rev, burst, t3)
+        recall_round2_mod._release_raw_lease(sid, rev, burst, t3)
 
     def test_round2_blocked_while_lease_held(self, actors, monkeypatch):
         """租约被占（另一进程在算）→ 本进程拒绝且零昂贵调用。"""
@@ -401,7 +406,7 @@ class TestRawLease:
             sid = r1["data"]["recall_session_id"]
             _seed_source()
             s = store.get_session(sid)
-            held = recall_service._acquire_raw_lease(
+            held = recall_round2_mod._acquire_raw_lease(
                 sid, s["current_revision"], s["current_burst"])
             assert held
             try:
@@ -410,7 +415,7 @@ class TestRawLease:
                 assert ei.value.code == "RAW_ROUND_IN_PROGRESS"
                 assert calls["n"] == 0, "输家不得执行 Raw 深搜"
             finally:
-                recall_service._release_raw_lease(
+                recall_round2_mod._release_raw_lease(
                     sid, s["current_revision"], s["current_burst"], held)
             # 租约释放后正常通过
             r2 = _round2(actors, sid, op="op-cb-r2b")
@@ -446,7 +451,7 @@ class TestJudgeProofValidity:
                     degraded_reason=None, cache_hits=0,
                     cache_misses=len(candidates), request_count=1)
 
-        jb.register_for_tests("cb_wrong_version", WrongVersionJudge())
+        judge_factory.register_for_tests("cb_wrong_version", WrongVersionJudge())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "cb_wrong_version"
         try:
@@ -520,7 +525,7 @@ class TestJudgeProofValidity:
                     cache_hits=0, cache_misses=len(candidates),
                     request_count=1)
 
-        jb.register_for_tests("cb_dup_ref", DupRefJudge())
+        judge_factory.register_for_tests("cb_dup_ref", DupRefJudge())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "cb_dup_ref"
         try:

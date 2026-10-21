@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from .. import audit, config, db
 from ..errors import Forbidden, NotFound
 from . import query as source_query
+from . import scope as source_scope
 
 
 def _now() -> str:
@@ -53,7 +54,7 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
         else:
             start_id, end_id = start_message_id, end_message_id
             # 同一套区间契约（路径/偏移/发布可见性全部由 query 层校验）
-            resolved = source_query.validate_range(
+            resolved = source_scope.validate_range(
                 conversation_id, start_id, end_id,
                 start_char_offset, end_char_offset, conn=conn)
         binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
@@ -92,14 +93,14 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
                               "members_pinned": len(members) if members
                               is not None else None,
                               "offset_convention":
-                                  source_query.OFFSET_CONVENTION})
+                                  source_scope.OFFSET_CONVENTION})
         return {"binding_id": binding_id, "memory_id": memory_id,
                 "conversation_id": resolved["conversation"]["id"],
                 "start_message_id": resolved["start"]["id"],
                 "end_message_id": resolved["end"]["id"],
                 "start_content_hash": resolved["start_content_hash"],
                 "end_content_hash": resolved["end_content_hash"],
-                "offset_convention": source_query.OFFSET_CONVENTION,
+                "offset_convention": source_scope.OFFSET_CONVENTION,
                 "confidence": confidence,
                 "members_pinned": len(members) if members is not None
                 else None}
@@ -154,12 +155,12 @@ def _validate_members(conn, conversation_id: str, members: list[dict],
         if row["conversation_id"] != conv_id:
             raise Forbidden("members 跨会话", code="INVALID_ARGUMENT")
     # 成员必须都在目标会话内（conversation_id 可传行 id 或 provider id）
-    target = source_query._find_conversation(conn, conversation_id)
+    target = source_scope._find_conversation(conn, conversation_id)
     if target is None or target["id"] != conv_id:
         raise NotFound("member not in selection conversation",
                        conversation_id=conversation_id)
     # 首末区间+偏移一次性解析（路径/偏移/发布同一契约；SIBLING 拒绝）
-    resolved = source_query.validate_range(
+    resolved = source_scope.validate_range(
         conversation_id, ids[0], ids[-1], start_char_offset,
         end_char_offset, conn=conn)
     order = {mid: idx for idx, mid in enumerate(resolved["path_order"])}
@@ -204,7 +205,7 @@ def open_selection(selection: dict, include_content: bool = False) -> dict:
         raise Forbidden("selection.members 必须是非空数组",
                         code="INVALID_ARGUMENT")
     with db.formal() as conn:
-        conv = source_query._find_conversation(conn, conversation_id)
+        conv = source_scope._find_conversation(conn, conversation_id)
         if conv is None:
             raise NotFound("source conversation not found",
                            conversation_id=conversation_id)
@@ -312,49 +313,6 @@ def ranges_of(memory_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def references_for_messages(message_ids: list[str], conn=None) -> dict[str, list[dict]]:
-    """Batch inverse references by canonical message ID, using one snapshot.
-
-    Pinned bindings use their exact member manifest; legacy bindings use the
-    validated parent path. Each relevant binding is resolved once per batch.
-    """
-    if conn is None:
-        with db.formal() as c:
-            c.execute("BEGIN")
-            return references_for_messages(message_ids, conn=c)
-    out = {mid: [] for mid in message_ids}
-    if not out:
-        return out
-    by_conversation: dict[str, set[str]] = {}
-    ids = list(out)
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
-        marks = ",".join("?" for _ in chunk)
-        for row in conn.execute(
-                f"SELECT id, conversation_id FROM source_messages WHERE id IN ({marks})", chunk):
-            by_conversation.setdefault(row["conversation_id"], set()).add(row["id"])
-    for cid, wanted in by_conversation.items():
-        bindings = conn.execute(
-            "SELECT * FROM memory_source_bindings WHERE conversation_id=?"
-            " ORDER BY created_at, binding_id", (cid,)).fetchall()
-        pinned = {}
-        for member in conn.execute(
-                "SELECT m.binding_id, m.source_message_id FROM memory_source_binding_members m"
-                " JOIN memory_source_bindings b ON b.binding_id=m.binding_id"
-                " WHERE b.conversation_id=?", (cid,)):
-            pinned.setdefault(member["binding_id"], set()).add(member["source_message_id"])
-        for row in bindings:
-            members = pinned.get(row["binding_id"])
-            if members is None:
-                try:
-                    resolved = source_query.validate_range(
-                        cid, row["start_message_id"], row["end_message_id"], conn=conn)
-                    members = set(resolved["path_order"])
-                except (NotFound, Forbidden):
-                    continue
-            for mid in wanted & members:
-                out[mid].append(dict(row))
-    return out
 
 
 def memories_referencing(message_id: str) -> list[dict]:
@@ -365,7 +323,7 @@ def memories_referencing(message_id: str) -> list[dict]:
                or source_query._find_message(conn, provider_message_id=message_id))
         if msg is None:
             return []
-        return references_for_messages([msg["id"]], conn=conn)[msg["id"]]
+        return source_scope.references_for_messages([msg["id"]], conn=conn)[msg["id"]]
 
 
 def bindings_of_conversation(conversation_id: str) -> list[dict]:
@@ -378,7 +336,7 @@ def bindings_of_conversation(conversation_id: str) -> list[dict]:
     为准）。conversation_id 可传行 id 或 provider id。
     """
     with db.formal() as conn:
-        conv = source_query._find_conversation(conn, conversation_id)
+        conv = source_scope._find_conversation(conn, conversation_id)
         if conv is None:
             raise NotFound("conversation not found",
                            conversation_id=conversation_id)

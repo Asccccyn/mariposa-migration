@@ -26,6 +26,7 @@ from mariposa import db
 from mariposa.recall import judge_policy, paging, service as recall_service
 from mariposa.recall import store as recall_store
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.errors import Forbidden
 from tests.conftest import reset_all
 
@@ -131,7 +132,7 @@ class RecordingJudge(jb.JudgeProvider):
 @pytest.fixture(autouse=True)
 def _cleanup():
     yield
-    jb.clear_injected()
+    judge_factory.clear_injected()
 
 
 # ------------------------------------------------------- JFA-007 冻结完整性
@@ -316,7 +317,7 @@ class TestEmptyGrantsFailClosed:
             def outbound_grants(self):
                 return frozenset()
 
-        jb.register_for_tests("test_deterministic", EmptyGrantsJudge())
+        judge_factory.register_for_tests("test_deterministic", EmptyGrantsJudge())
         r2 = start(actors, ["南瓜灯"], "op-t6", ref="t6-alpha")
         assert r2["candidates"] == [], "空许可面重放不得释放正文"
         assert "allowed_data_empty" in (r2.get("degraded_reasons") or []), \
@@ -509,7 +510,7 @@ class TestInFlightPolicyFencing:
                 enabled=False, provider=pol["provider"],
                 idempotency_key="t10-mid")
 
-        jb.register_for_tests("test_deterministic",
+        judge_factory.register_for_tests("test_deterministic",
                               RecordingJudge(on_judge=_switch_mid_judge))
         set_policy(True, provider="test_deterministic")
         with pytest.raises(Forbidden) as ei:
@@ -517,7 +518,7 @@ class TestInFlightPolicyFencing:
         assert ei.value.code == "RECALL_POLICY_CHANGED"
         assert ei.value.detail["current_mode"] == "off"
         # 同纪元对照：judge 正常返回、政策不动 → 提交成功
-        jb.register_for_tests("test_deterministic", RecordingJudge())
+        judge_factory.register_for_tests("test_deterministic", RecordingJudge())
         pol = judge_policy.get_policy()
         set_policy(True, provider="test_deterministic", key="t10-back",
                    expected=pol["revision"])

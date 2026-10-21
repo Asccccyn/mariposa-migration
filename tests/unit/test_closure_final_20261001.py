@@ -13,8 +13,10 @@ from mariposa import config as cfg, db
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all, TOKENS
 
@@ -49,7 +51,7 @@ def _grant():
             return jb.JudgeBatchResult(items=items,
                                        provider_status="evaluated")
 
-    jb.register_for_tests("g_final", G())
+    judge_factory.register_for_tests("g_final", G())
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "g_final"
     return old
@@ -93,7 +95,7 @@ class TestRound2ConcurrentSingleWinner:
 
             def call(tag):
                 try:
-                    recall_service.round2(actors["jiaming"], {
+                    _r2mod.round2(actors["jiaming"], {
                         "session_id": sid,
                         "reason": "EVIDENCE_INSUFFICIENT",
                         "operation_id": f"op-race-{tag}"})
@@ -146,7 +148,7 @@ class TestTitleOnlyMidBodyFact:
         """复审反例：标题唯一命中，事实在 1700 字正文**中段**——
         头+尾双窗不覆盖，分段覆盖窗必须让 Jev 看到。"""
         cap = _CapturingJudge()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
         try:

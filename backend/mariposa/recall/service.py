@@ -19,10 +19,12 @@ from ..errors import Forbidden, NotFound
 from ..memory import service as _mem_svc
 canonical_hash = _mem_svc.canonical_hash
 from ..retrieval import evidence as evidence_mod
+from .paging import _persist_page_set_in_tx as _paging_persist
 from ..retrieval import query_plan as qp
 from ..retrieval import semantic, selection, words as words_mod
 from ..retrieval import fusion
 from ..retrieval.judges import base as judge_base
+from ..retrieval.judges import factory as judge_factory
 
 from . import budget, state_machine, store
 # 依赖边界批：共享原语自 shared 单向引入（重绑定本名——测试对
@@ -192,7 +194,7 @@ def _judge_pass(session, plan, event_fused, words_hits, raw_pre,
     # on / unconfigured：走判断门（unconfigured 用 DisabledJudge 表达
     # not_configured，交付被 S10 硬门拦下）
     provider = judge_base.apply_policy_overrides(
-        judge_base.get_provider_by_name(
+        judge_factory.get_provider_by_name(
             policy.get("provider") if policy["mode"] == "on" else None),
         model_id=policy.get("model_id"),
         allowed_data=(policy.get("allowed_data") or None))
@@ -582,26 +584,6 @@ def _run_round_compute(session: dict, plan: dict,
     return packet, effects
 
 
-def _expand_raw_full_text(card: dict) -> None:
-    """off 模式 raw 卡全文化（RRA-010，D-2"按原本格式"落实）。
-
-    excerpt 命中窗口与 raw_verbatim 证据换获授权 Source 修订全文
-    （_row.text，随检索命中携带；_finalize_cards/project_card 出站前
-    剥离 _row）；分页装配器对超长载体按码点分片，翻尽=全文。
-    """
-    if card.get("channel") != "raw":
-        return
-    full = (card.get("_row") or {}).get("text")
-    if not full:
-        return
-    card["excerpt"] = full
-    card.pop("truncated", None)  # 全文化=未截断：缺省即 false（瘦身批）
-    for ev in card.get("evidence") or []:
-        if ev.get("evidence_kind") == "raw_verbatim":
-            ev["snippet"] = full
-            ev.pop("truncated", None)
-
-
 def _expand_full_text(card: dict) -> None:
     """关闭模式全量投影（§4.3）：事件正文换完整获授权原文。
 
@@ -679,25 +661,6 @@ def _record_op_in_tx(conn, op_ctx: dict | None, result: dict) -> None:
 
 
 
-
-
-def _persist_page_set_in_tx(conn, packet: dict, effects: dict,
-                            session: dict, plan: dict) -> None:
-    """off 模式最终事务内：冻结结果集落库 + 首页续页游标签发。
-
-    必须先于 operation 行记录调用——保存的 operation 结果要包含最终
-    result_set_id 与 next_cursor（同 key 重放回同一首页与同一游标）。
-    """
-    from . import paging as _paging
-    ps = effects["page_set"]
-    rsid = _paging.freeze_set(
-        conn, session=session, plan=plan, policy=ps["policy"],
-        cards=ps["cards"], coverage=effects["coverage"])
-    packet["pagination"]["result_set_id"] = rsid
-    _np = packet["pagination"].pop("next_position", None)
-    if _np is not None:
-        packet["pagination"]["next_cursor"] = _paging.get_or_issue_cursor(
-            conn, rsid, tuple(_np))
 
 
 
@@ -825,7 +788,7 @@ def start(principal, a: dict, op_ctx: dict | None = None) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         try:
             if effects.get("page_set"):
-                _persist_page_set_in_tx(conn, packet, effects, draft,
+                _paging_persist(conn, packet, effects, draft,
                                         plan)
             if op_ctx:
                 store.record_operation_row(
@@ -907,7 +870,7 @@ def refine(principal, a: dict, op_ctx: dict | None = None) -> dict:
                     store.consume_continue_ref(conn, sid, cont_ref,
                                                expected_revision)
                 if effects.get("page_set"):
-                    _persist_page_set_in_tx(conn, packet, effects,
+                    _paging_persist(conn, packet, effects,
                                             vsession, plan)
                 if op_ctx:
                     store.record_operation_row(
@@ -1403,5 +1366,3 @@ def words_recall(principal, a: dict, op_ctx: dict | None = None) -> dict:
 
 # ---------- 拆分批（2026-10-04）：重放校验与 Round2 外迁，重导出兼容 ----------
 from .replay import revalidate_replayed  # noqa: E402,F401
-from .round2 import (_acquire_raw_lease, _reason_fact_supported,  # noqa: E402,F401
-                     _release_raw_lease, round2)

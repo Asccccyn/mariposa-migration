@@ -15,6 +15,7 @@ import tempfile
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.errors import MariposaError
@@ -317,6 +318,7 @@ class TestCR01R1ReplayRoleGate:
         授权层 + fake HTTP——fresh 侧的空段不判/正文剥离由真实代码
         路径决定，重放侧才检验 revalidate_replayed 的共享判定）。"""
         from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import factory as judge_factory
         from mariposa.retrieval.judges import typesafe_jev
 
         class G(typesafe_jev.TypeSafeJevJudge):
@@ -328,7 +330,7 @@ class TestCR01R1ReplayRoleGate:
                 self._data_profile = frozenset(profile)
                 self._disabled_reason = None
 
-        jb.register_for_tests(name, G())
+        judge_factory.register_for_tests(name, G())
 
     @staticmethod
     def _fake_http(monkeypatch):

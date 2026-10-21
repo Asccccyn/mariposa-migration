@@ -103,47 +103,6 @@ def sanitize_signal(value) -> float | None:
     return v
 
 
-#: 测试/评测注入点（不进生产配置；离线对照用同一接口）
-_INJECTED: dict[str, JudgeProvider] = {}
-
-
-def register_for_tests(name: str, provider: JudgeProvider) -> None:
-    _INJECTED[name] = provider
-
-
-def clear_injected() -> None:
-    _INJECTED.clear()
-
-
-
-def get_provider_by_name(name: str | None):
-    """按政策所选 provider 名构造（未配置/未安装 → DisabledJudge）。
-
-    调用方负责先读政策：enabled=false 时不进入本函数。
-    WP-02（JFA-002 接线）：codex_sdk 真构造（与 readiness 同源；SDK
-    未装 → DisabledJudge，细因由 provider_readiness 的 sdk_not_installed
-    披露——不静默换 provider）。
-    """
-    if name in _INJECTED:
-        return _INJECTED[name]
-    if not name or name in ("disabled",):
-        return DisabledJudge()
-    if name == "typesafe_jev":
-        from . import typesafe_jev
-        return typesafe_jev.TypeSafeJevJudge()
-    if name == "codex_sdk":
-        try:
-            from . import codex_sdk
-        except ImportError:
-            return DisabledJudge()
-        if not codex_sdk.sdk_available():
-            # SDK 未装 → DisabledJudge（阻断语义）；细因由
-            # provider_readiness 的 sdk_not_installed 披露
-            return DisabledJudge()
-        return codex_sdk.CodexSdkJudge()
-    return DisabledJudge()
-
-
 def apply_policy_overrides(provider, *, model_id: str | None = None,
                            allowed_data=None):
     """WP-02（CX-03）：政策 model_id/allowed_data 注入已构造的 provider
@@ -156,3 +115,31 @@ def apply_policy_overrides(provider, *, model_id: str | None = None,
     if callable(ap):
         ap(model_id=model_id, allowed_data=allowed_data)
     return provider
+
+
+def required_excerpt_roles(candidate: dict) -> frozenset:
+    """候选**必要证据角色**集合（无副作用共享判定，CR-01-R1/R2/R3）。
+
+    语义以 2026-10-05 三轮复审的六场景 × 32 许可子集实测矩阵为准
+    （fresh 交付 ⟺ 必要角色齐备）：
+    - raw/source 通道 → source_excerpt；
+    - words 专项通道 → word_excerpt；
+    - **其余全部 event 卡——包括 our_words 命中（word-target）与
+      event_text+our_words 双命中——恒为 event_excerpt**：fresh 对
+      word-target 在 event 许可下交付（match 段可由事件正文回退
+      支撑），缺 event 许可时不交付。matched_fields 里出现
+      our_words **不改变通道归属**，不得当成 words 专项（CR-01-R3
+      上下两版的教训：双必要误杀 event-only 格、单凭 word 许可
+      又漏正文——正解是通道单一真源）。
+    """
+    channel = candidate.get("channel") or "event"
+    # 导航卡（temporal_navigate）：结构事实卡——fresh 的 navigate
+    # 不经 judge、无文本段外发（evidence snippet 恒空），任何
+    # profile 下都交付；重放不得按 event 通道误杀（自查②，2026-10-05）
+    if "temporal_navigate" in (candidate.get("matched_by") or []):
+        return frozenset()
+    if channel in ("raw", "source"):
+        return frozenset({"source_excerpt"})
+    if channel in ("word", "words"):
+        return frozenset({"word_excerpt"})
+    return frozenset({"event_excerpt"})

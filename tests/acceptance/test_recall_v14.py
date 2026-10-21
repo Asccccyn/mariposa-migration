@@ -15,6 +15,7 @@ from mariposa.recall import budget, service as recall_service, store
 from mariposa.retrieval import fusion, query_plan as qp, selection
 from mariposa.retrieval import evidence as em
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.errors import Forbidden
 from tests.conftest import reset_all
 
@@ -99,7 +100,7 @@ class TestHybrid:
                            for c in candidates])
         probe = Probe()
         config.RECALL_JUDGE_PROVIDER = probe.name
-        jb.register_for_tests(probe.name, probe)
+        judge_factory.register_for_tests(probe.name, probe)
         try:
             hold(actors, "搬家事件", "2026-08-10",
                  original_title="标题探针ZZ",
@@ -108,7 +109,7 @@ class TestHybrid:
             assert "标题探针ZZ" not in probe.blob
             assert "心情探针ZZ" not in probe.blob
         finally:
-            jb.clear_injected()
+            judge_factory.clear_injected()
             config.RECALL_JUDGE_PROVIDER = "disabled"
 
     def test_hybrid06_scoped_stats(self, actors):
@@ -152,11 +153,11 @@ class TestHybrid:
 class TestJev:
     def _with_probe(self, actors, probe):
         config.RECALL_JUDGE_PROVIDER = probe.name
-        jb.register_for_tests(probe.name, probe)
+        judge_factory.register_for_tests(probe.name, probe)
         try:
             return start(actors)
         finally:
-            jb.clear_injected()
+            judge_factory.clear_injected()
             config.RECALL_JUDGE_PROVIDER = "disabled"
 
     def test_jev01(self):

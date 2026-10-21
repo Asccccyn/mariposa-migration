@@ -27,6 +27,7 @@ from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.recall import judge_policy, service as recall_service
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import codex_sdk
 from tests.conftest import reset_all
 
@@ -94,7 +95,7 @@ def actors():
 @pytest.fixture(autouse=True)
 def _cleanup():
     yield
-    jb.clear_injected()
+    judge_factory.clear_injected()
     codex_sdk.set_transport_for_tests(None)
     sys.modules.pop("openai_codex", None)
 
@@ -113,7 +114,7 @@ class TestWiring:
         monkeypatch.setitem(sys.modules, "openai_codex",
                             _fake_sdk_module())
         assert codex_sdk.sdk_available() is True
-        p = jb.get_provider_by_name("codex_sdk")
+        p = judge_factory.get_provider_by_name("codex_sdk")
         assert isinstance(p, codex_sdk.CodexSdkJudge)
         assert not isinstance(p, jb.DisabledJudge)
         # readiness 与运行时同源识别 SDK 在场（不再报 sdk_not_installed；
@@ -127,7 +128,7 @@ class TestWiring:
         readiness 披露 sdk_not_installed（阻断不静默换 provider）。"""
         sys.modules.pop("openai_codex", None)
         assert codex_sdk.sdk_available() is False
-        p = jb.get_provider_by_name("codex_sdk")
+        p = judge_factory.get_provider_by_name("codex_sdk")
         assert isinstance(p, jb.DisabledJudge)
         rd = judge_policy.provider_readiness("codex_sdk")
         assert rd["ready"] is False
@@ -292,13 +293,13 @@ class TestPolicyModelId:
         assert eff["model_id"] == "policy-model-y"
         # 运行时构造点形态：构造 + 政策注入（政策胜出）
         p = jb.apply_policy_overrides(
-            jb.get_provider_by_name("codex_sdk"),
+            judge_factory.get_provider_by_name("codex_sdk"),
             model_id=eff.get("model_id"),
             allowed_data=(eff.get("allowed_data") or None))
         assert isinstance(p, codex_sdk.CodexSdkJudge)
         assert p._model_id == "policy-model-y", "政策 model_id 胜出"
         # 未注入（env 回落语义保留）
-        p2 = jb.get_provider_by_name("codex_sdk")
+        p2 = judge_factory.get_provider_by_name("codex_sdk")
         assert p2._model_id == "env-model-x", "无政策值时回落 env"
 
 
@@ -400,7 +401,7 @@ class TestRRAFollowUpLiveGateAndProductionKinds:
         assert rd["blocked_reason"] == "live_gate_closed", \
             "合成配置齐备也必须被可执行 live 门拦住"
         # 直构 provider：judge 在 _call_model 之前拒绝（live 边界不可达）
-        p = jb.get_provider_by_name("codex_sdk")
+        p = judge_factory.get_provider_by_name("codex_sdk")
         assert isinstance(p, codex_sdk.CodexSdkJudge)
         out = p.judge({"original_request": "x", "lexical_terms": ["x"]},
                       [], {})

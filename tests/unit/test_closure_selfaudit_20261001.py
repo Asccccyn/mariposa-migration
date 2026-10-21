@@ -13,8 +13,10 @@ from mariposa import db
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service, store
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service, store
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all
 
@@ -51,7 +53,7 @@ def _grant_source_excerpt():
             return jb.JudgeBatchResult(
                 items=items, provider_status="evaluated")
 
-    jb.register_for_tests("granted_typesafe_sa", GrantedTypeSafe())
+    judge_factory.register_for_tests("granted_typesafe_sa", GrantedTypeSafe())
     from mariposa import config as cfg
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "granted_typesafe_sa"
@@ -122,18 +124,18 @@ class TestContinuationCas:
             f.write_text(_json.dumps(convs, ensure_ascii=False),
                          encoding="utf-8")
             importer.import_file("jiaming", str(f))
-            p1 = recall_service.round2(actors["jiaming"], {
+            p1 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "operation_id": "op-sa-p1"})
             tok = p1["continuation"]["continuation_token"]
             # 第一次翻页成功（消费 tok，签新 token）
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "continuation_token": tok,
                 "operation_id": "op-sa-p2a"})
             # 同 tok 再来（并发双花败者的确定性形态）→ 拒
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                     "continuation_token": tok,
                     "operation_id": "op-sa-p2b"})
@@ -177,7 +179,7 @@ class TestFirstPageOffsetClamped:
             f.write_text(_json.dumps(convs, ensure_ascii=False),
                          encoding="utf-8")
             importer.import_file("jiaming", str(f))
-            p1 = recall_service.round2(actors["jiaming"], {
+            p1 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "offset": 20,          # 自由起跳企图
                 "operation_id": "op-sb-p1"})

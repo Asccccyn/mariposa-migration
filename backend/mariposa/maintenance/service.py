@@ -73,7 +73,7 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
     """
     from ..errors import NotFound as _NF
     from datetime import datetime as _dt
-    from ..capabilities import registry as _reg
+    from ..capabilities import transport as _transport
     from ..audit import service as _audit
     stale_seconds = max(int(stale_seconds or 0), MIN_RECONCILE_STALE_S)
     with db.formal() as conn:
@@ -86,7 +86,7 @@ def idempotency_reconcile(principal_id: str, record_principal: str,
             "SELECT * FROM idempotency_records WHERE principal_id=? AND"
             " capability=? AND idempotency_key=?",
             (record_principal, capability,
-             _reg._transport_key(idempotency_key))).fetchone()
+             _transport._transport_key(idempotency_key))).fetchone()
         if row is None:
             row = conn.execute(
                 "SELECT * FROM idempotency_records WHERE principal_id=? AND"

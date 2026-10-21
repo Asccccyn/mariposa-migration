@@ -18,6 +18,7 @@ from mariposa.memory import service as memory
 from mariposa.recall import judge_policy, paging, service as recall_service
 from mariposa.recall import store
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from tests.conftest import reset_all
 
 
@@ -105,7 +106,7 @@ class GrantedProvider(jb.JudgeProvider):
 @pytest.fixture(autouse=True)
 def _cleanup():
     yield
-    jb.clear_injected()
+    judge_factory.clear_injected()
 
 
 def _r1_scenario_off(actors, op="op-r2s"):
@@ -217,7 +218,7 @@ class TestR04ProviderAgnosticGate:
     def test_r04_generic_provider_own_grant_passes(self, actors):
         """R04：非 TypeSafeJevJudge 的 provider 凭自身 source_excerpt
         许可通过门禁（不再 isinstance 认 Jev）。"""
-        jb.register_for_tests("granted_generic", GrantedProvider())
+        judge_factory.register_for_tests("granted_generic", GrantedProvider())
         set_policy(True, provider="granted_generic")
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
@@ -237,7 +238,7 @@ class TestR04ProviderAgnosticGate:
             def judge(self, plan, candidates, ctx):
                 return jb.JudgeBatchResult(provider_status="evaluated")
 
-        jb.register_for_tests("nogrant_generic", NoGrant())
+        judge_factory.register_for_tests("nogrant_generic", NoGrant())
         set_policy(True, provider="nogrant_generic")
         hold(actors["jiaming"], "崧蓝事件正文",
              our_words=[{"speaker": "qiaosheng",
@@ -345,7 +346,7 @@ class TestR08ContinuationGates:
         if not cont:  # 本批翻尽：多种一条保证 has_more
             _seed_source("补充原文崧蓝内容", tag="t2")
         # 切到 on 且选无许可 provider
-        jb.register_for_tests("granted_generic", GrantedProvider())
+        judge_factory.register_for_tests("granted_generic", GrantedProvider())
         set_policy(True, provider="granted_generic", key="r8-on")
         if cont:
             with pytest.raises(Forbidden) as ei:
@@ -374,7 +375,7 @@ class TestR08ContinuationGates:
         RECALL_POLICY_CHANGED（回执冻结模式 vs 当前模式）。"""
         r1 = _r1_scenario_off(actors, op="op-j8r2")
         sid = r1["recall_session_id"]
-        jb.register_for_tests("granted_generic", GrantedProvider())
+        judge_factory.register_for_tests("granted_generic", GrantedProvider())
         set_policy(True, provider="granted_generic", key="j8-on")
         _seed_source()
         with pytest.raises(Forbidden) as ei:

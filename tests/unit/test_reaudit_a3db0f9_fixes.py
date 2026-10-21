@@ -7,6 +7,7 @@ GATE-01（三档解耦）、GATE-02（门禁错误序列化）、GATE-03（回�
 （审计隔离事务）。
 """
 from __future__ import annotations
+from mariposa.retrieval.judges import factory as judge_factory
 
 import json
 import pathlib
@@ -47,6 +48,7 @@ class TestCR01R2TitleOnlyRole:
     @staticmethod
     def _register(name, profile):
         from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import factory as judge_factory
         from mariposa.retrieval.judges import typesafe_jev
 
         class G(typesafe_jev.TypeSafeJevJudge):
@@ -56,7 +58,7 @@ class TestCR01R2TitleOnlyRole:
                 self._data_profile = frozenset(profile)
                 self._disabled_reason = None
 
-        jb.register_for_tests(name, G())
+        judge_factory.register_for_tests(name, G())
 
     @staticmethod
     def _fake_http(monkeypatch):
@@ -486,7 +488,7 @@ class TestCR01R3FullProfileMatrix:
                 self._data_profile = frozenset(profile)
                 self._disabled_reason = None
 
-        jb.register_for_tests(name, G())
+        judge_factory.register_for_tests(name, G())
 
     @pytest.fixture()
     def seeded(self, actors):
@@ -644,7 +646,7 @@ class TestSelfAudit20261005:
                 self._data_profile = frozenset(profile)
                 self._disabled_reason = None
 
-        jb.register_for_tests(name, G())
+        judge_factory.register_for_tests(name, G())
 
     @staticmethod
     def _fake_http(monkeypatch):
@@ -803,7 +805,7 @@ class TestFourthRound20261005:
                 self._disabled_reason = ("allowed_data_policy_missing"
                                          if disabled else None)
 
-        jb.register_for_tests(name, G())
+        judge_factory.register_for_tests(name, G())
 
     @staticmethod
     def _fake_http(monkeypatch):

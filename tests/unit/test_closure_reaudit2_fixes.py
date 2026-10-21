@@ -12,9 +12,11 @@ from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service, store
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service, store
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval import scoped_bm25
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all
 
@@ -52,7 +54,7 @@ class _Cap(jb.JudgeProvider):
 
 
 def _install(cap):
-    jb.register_for_tests(cap.name, cap)
+    judge_factory.register_for_tests(cap.name, cap)
     from mariposa import config as cfg
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = cap.name
@@ -171,7 +173,7 @@ class Test3CoverageGate:
             "lexical_terms": ["qqqxyz"],
             "semantic_query": "雾隐茶室"}})
         with pytest.raises(Forbidden) as ei:
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": p["recall_session_id"],
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
         gate = ei.value.detail["gate"]

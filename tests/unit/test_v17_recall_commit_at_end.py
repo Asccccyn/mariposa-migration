@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.identity import service as identity
@@ -121,6 +122,7 @@ class TestAComputeFailureZeroTrace:
     def test_jev_exception_no_trace_then_retry(self, actors, monkeypatch):
         hold(actors)
         from mariposa.retrieval.judges import base as judge_base
+        from mariposa.retrieval.judges import factory as judge_factory
 
         class ExplodingJudge:
             def judge(self, *a, **kw):
@@ -128,7 +130,7 @@ class TestAComputeFailureZeroTrace:
 
         # MANUAL_HANDOFF_JUDGE_SWITCH_V1：judge 构造入口按政策 provider
         # 名走 get_provider_by_name（旧 get_provider 仅剩 env 兼容）
-        monkeypatch.setattr(judge_base, "get_provider_by_name",
+        monkeypatch.setattr(judge_factory, "get_provider_by_name",
                             lambda name: ExplodingJudge())
         with pytest.raises(RuntimeError):
             start_op(actors, op="op-b1")
@@ -328,14 +330,14 @@ def _child_crash(root: str, crash_at: str, op_id: str, q):
     elif crash_at == "after_jev":
         # MANUAL_HANDOFF_JUDGE_SWITCH_V1：构造入口=按政策 provider 名
         from mariposa.retrieval.judges import base as jb
-        real = jb.get_provider_by_name
+        real = judge_factory.get_provider_by_name
 
         class Wrap:
             def judge(self, *a, **kw):
                 p = real(None)
                 r = p.judge(*a, **kw)
                 os._exit(73)
-        jb.get_provider_by_name = lambda name: Wrap()
+        judge_factory.get_provider_by_name = lambda name: Wrap()
     elif crash_at == "in_final_transaction":
         real = recall_st.insert_session
 

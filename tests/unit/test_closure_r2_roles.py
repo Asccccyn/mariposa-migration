@@ -16,6 +16,7 @@ from mariposa import db
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all
 
@@ -65,7 +66,7 @@ class TestMidAutumnPair:
         """同标题、不同正文的两候选：Jev 输入同含 title cue 与
         event 事实，正文差异可见——判断依据完整。"""
         cap = PayloadCapture()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
@@ -119,7 +120,7 @@ class TestMidAutumnPair:
     def test_event_hit_segment_dual_role_no_copy(self, actors):
         """event 自身命中：同一正文段双标 match+event，不复制两段。"""
         cap = PayloadCapture()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
@@ -146,7 +147,7 @@ class TestMidAutumnPair:
         """CORE：matched_fields 不含 original_title（检索层阶段过滤），
         payload 不附 title/words 段——只有 event 事实。"""
         cap = PayloadCapture()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name

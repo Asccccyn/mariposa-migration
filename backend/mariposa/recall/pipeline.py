@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from .. import config, db
+from ..retrieval import scope_pool
 from ..errors import Forbidden
 from ..source import query as source_query
 from . import phase_policy as pp
@@ -17,45 +18,6 @@ from ..retrieval import projection
 
 # ---------------------------------------------------------------- Round 1
 
-def _scope_pool_ids(conn, where: list[str], params: list,
-                    batch: int = 500) -> tuple[list[str], bool]:
-    """S19（四轮复审前提前收口）：scope 候选池 keyset 分页取尽。
-
-    旧实现的 `LIMIT 2000` 会让第 2001+ 个作用域桶永远不被检索、
-    coverage 却仍签 complete_within_scope（林石见两轮如实申报的
-    已知未闭项）。现在分页迭代到取尽；RECALL_POOL_MAX_BUCKETS 是
-    防失控安全阀，触顶前先探针确认还有下一桶才标 truncated=True
-    ——调用方对 truncated 池不得再签 complete。返回 (ids, truncated)。
-    """
-    cap = max(1, config.RECALL_POOL_MAX_BUCKETS)
-    w = list(where or []) + ["m.memory_id > ?"]
-    cond = "WHERE " + " AND ".join(w)
-    base = list(params or [])
-    ids: list[str] = []
-    cursor = ""
-    truncated = False
-    while True:
-        rows = conn.execute(
-            f"SELECT m.memory_id FROM memories m {cond}"
-            " ORDER BY m.memory_id LIMIT ?",
-            base + [cursor, batch]).fetchall()
-        if not rows:
-            break
-        ids.extend(r["memory_id"] for r in rows)
-        if len(ids) >= cap:
-            del ids[cap:]
-            more = conn.execute(
-                f"SELECT 1 FROM memories m {cond} LIMIT 1",
-                base + [ids[-1]]).fetchone()
-            truncated = more is not None
-            break
-        if len(rows) < batch:
-            break
-        cursor = ids[-1]
-    return ids, truncated
-
-
-# ---------------------------------------------------------------- Round 2
 
 def mark_round1_complete_tx(conn, session_id: str) -> None:
     """同语义的事务内版本（commit-at-end 最终事务调用）。"""
@@ -171,7 +133,7 @@ def round1_lexical_hits(conn, plan: dict, rejected: set[str],
     if not (terms or phrases):
         return []  # 浏览模式由主线处理
 
-    pool_ids, pool_truncated = _scope_pool_ids(conn, where, params)
+    pool_ids, pool_truncated = scope_pool.fetch_all(conn, where, params)
 
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)

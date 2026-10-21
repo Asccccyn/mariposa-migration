@@ -14,6 +14,7 @@ from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.recall import judge_policy, paging, service as recall_service
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import codex_sdk
 from tests.conftest import reset_all
 
@@ -50,7 +51,7 @@ def fake_transport_ok(items_out):
 def _cleanup():
     yield
     codex_sdk.clear_transport()
-    jb.clear_injected()
+    judge_factory.clear_injected()
 
 
 def enable_codex(monkeypatch, allowed="event_excerpt,source_excerpt",
@@ -58,7 +59,7 @@ def enable_codex(monkeypatch, allowed="event_excerpt,source_excerpt",
     monkeypatch.setenv("MARIPOSA_CODEX_ALLOWED_DATA", allowed)
     monkeypatch.setenv("MARIPOSA_CODEX_MODEL_ID", model)
     judge = codex_sdk.CodexSdkJudge()
-    jb.register_for_tests("codex_sdk", judge)
+    judge_factory.register_for_tests("codex_sdk", judge)
     cur = judge_policy.get_policy()
     judge_policy.update_policy(
         "qiaosheng", expected_revision=cur["revision"], enabled=True,
@@ -96,7 +97,7 @@ class TestJ03CodexJudge:
                 jev_calls.append(candidates)
                 return jb.JudgeBatchResult(provider_status="evaluated")
 
-        jb.register_for_tests("recording_test", DecoyJev())
+        judge_factory.register_for_tests("recording_test", DecoyJev())
         enable_codex(monkeypatch)
         packet = recall_service.start(
             actors["jiaming"],
@@ -143,7 +144,7 @@ class TestJ03CodexJudge:
                         for c in candidates],
                     provider_status="evaluated")
 
-        jb.register_for_tests("recording_test", RecordingJev())
+        judge_factory.register_for_tests("recording_test", RecordingJev())
         # 先 Codex
         codex_sdk.set_transport_for_tests(codex_transport)
         enable_codex(monkeypatch)

@@ -7,8 +7,10 @@ from mariposa import db
 from mariposa.errors import Forbidden, NotFound
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all, TOKENS
 
@@ -122,7 +124,7 @@ class TestP203Round2BudgetPreview:
                 return jb.JudgeBatchResult(items=items,
                                            provider_status="evaluated")
 
-        jb.register_for_tests("g_p203", G())
+        judge_factory.register_for_tests("g_p203", G())
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "g_p203"
@@ -150,7 +152,7 @@ class TestP203Round2BudgetPreview:
             f.write_text(_json.dumps(convs, ensure_ascii=False),
                          encoding="utf-8")
             importer.import_file("jiaming", str(f))
-            r2 = recall_service.round2(actors["jiaming"], {
+            r2 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT"})
             assert r2["budget"]["rounds_used"] == 2, \
                 "Round2 首页必须预览本轮成功后的预算（P2-03）"

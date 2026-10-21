@@ -12,6 +12,7 @@ from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.recall import service as recall_service
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all, TOKENS
 
@@ -51,7 +52,7 @@ class TestJudgeQueryAnchor:
 
     def test_title_hit_long_body_anchor_window(self, actors):
         cap = _Cap()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name

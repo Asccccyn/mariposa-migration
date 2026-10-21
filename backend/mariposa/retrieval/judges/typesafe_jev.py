@@ -29,32 +29,6 @@ class JudgeUnavailable(Exception):
     """超时/429/网络失败/格式错——有界降级，不伪装成已评审。"""
 
 
-def required_excerpt_roles(candidate: dict) -> frozenset:
-    """候选**必要证据角色**集合（无副作用共享判定，CR-01-R1/R2/R3）。
-
-    语义以 2026-10-05 三轮复审的六场景 × 32 许可子集实测矩阵为准
-    （fresh 交付 ⟺ 必要角色齐备）：
-    - raw/source 通道 → source_excerpt；
-    - words 专项通道 → word_excerpt；
-    - **其余全部 event 卡——包括 our_words 命中（word-target）与
-      event_text+our_words 双命中——恒为 event_excerpt**：fresh 对
-      word-target 在 event 许可下交付（match 段可由事件正文回退
-      支撑），缺 event 许可时不交付。matched_fields 里出现
-      our_words **不改变通道归属**，不得当成 words 专项（CR-01-R3
-      上下两版的教训：双必要误杀 event-only 格、单凭 word 许可
-      又漏正文——正解是通道单一真源）。
-    """
-    channel = candidate.get("channel") or "event"
-    # 导航卡（temporal_navigate）：结构事实卡——fresh 的 navigate
-    # 不经 judge、无文本段外发（evidence snippet 恒空），任何
-    # profile 下都交付；重放不得按 event 通道误杀（自查②，2026-10-05）
-    if "temporal_navigate" in (candidate.get("matched_by") or []):
-        return frozenset()
-    if channel in ("raw", "source"):
-        return frozenset({"source_excerpt"})
-    if channel in ("word", "words"):
-        return frozenset({"word_excerpt"})
-    return frozenset({"event_excerpt"})
 
 
 class TypeSafeJevJudge(base.JudgeProvider):

@@ -12,7 +12,8 @@ from mariposa import config as cfg, db
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service
+from mariposa.recall import round2 as _r2mod
 from tests.conftest import reset_all
 
 
@@ -86,7 +87,7 @@ class TestS19Pool:
         assert p["coverage"]["event_pool"]["truncated"] is True
         assert p["candidates"] == []
         with pytest.raises(Forbidden) as ei:
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": p["recall_session_id"],
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
         gate = ei.value.detail["gate"]

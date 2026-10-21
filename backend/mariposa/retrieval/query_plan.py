@@ -73,7 +73,7 @@ class AllowedScope:
     @classmethod
     def for_plan(cls, plan: dict, rejected: set[str] | None = None) -> tuple:
         """从 QueryPlan 的明确条件构建（event 通道白名单字段）。"""
-        from . import search as search_mod
+        from . import scope_pool as search_mod
 
         ec = dict(plan.get("explicit_constraints") or {})
         filters: dict = {}

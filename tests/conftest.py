@@ -87,6 +87,7 @@ os.environ.setdefault("MARIPOSA_RECALL_JUDGE_PROVIDER", "test_deterministic")
 
 def _install_test_judge() -> None:
     from mariposa.retrieval.judges import base as judge_base
+    from mariposa.retrieval.judges import factory as judge_factory
 
     class DeterministicJudge(judge_base.JudgeProvider):
         name = "test_deterministic"
@@ -120,11 +121,12 @@ def _install_test_judge() -> None:
             return frozenset({"event_excerpt", "word_excerpt",
                               "source_excerpt"})
 
-    judge_base.register_for_tests("test_deterministic", DeterministicJudge())
+    judge_factory.register_for_tests("test_deterministic", DeterministicJudge())
 
 
 import pytest  # noqa: E402
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db, schema  # noqa: E402
 
 
@@ -134,9 +136,9 @@ _install_test_judge()
 @pytest.fixture(autouse=True)
 def _ensure_test_judge():
     """任何测试 clear_injected 后自动重装（防顺序依赖连锁失败）。"""
-    from mariposa.retrieval.judges import base as _jb
+    from mariposa.retrieval.judges import factory as judge_factory
     from mariposa import config as _cfg
-    if "test_deterministic" not in _jb._INJECTED:
+    if "test_deterministic" not in judge_factory._INJECTED:
         _install_test_judge()
     # 个别测试 cleanup 会把 provider 硬置 disabled 且不还原——
     # 每个测试的默认态恢复为确定性 judge（显式 disabled 的测试在

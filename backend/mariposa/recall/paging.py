@@ -573,3 +573,46 @@ def serve_page(principal, a: dict) -> dict:
                 raise
     page["pagination"]["result_set_id"] = rsid
     return page
+
+
+# ---------- R09 拆环：共享载体/结果集持久化正本（service↔round2 单向） ----------
+
+def _expand_raw_full_text(card: dict) -> None:
+    """off 模式 raw 卡全文化（RRA-010，D-2"按原本格式"落实）。
+
+    excerpt 命中窗口与 raw_verbatim 证据换获授权 Source 修订全文
+    （_row.text，随检索命中携带；_finalize_cards/project_card 出站前
+    剥离 _row）；分页装配器对超长载体按码点分片，翻尽=全文。
+    """
+    if card.get("channel") != "raw":
+        return
+    full = (card.get("_row") or {}).get("text")
+    if not full:
+        return
+    card["excerpt"] = full
+    card.pop("truncated", None)  # 全文化=未截断：缺省即 false（瘦身批）
+    for ev in card.get("evidence") or []:
+        if ev.get("evidence_kind") == "raw_verbatim":
+            ev["snippet"] = full
+            ev.pop("truncated", None)
+
+
+
+def _persist_page_set_in_tx(conn, packet: dict, effects: dict,
+                            session: dict, plan: dict) -> None:
+    """off 模式最终事务内：冻结结果集落库 + 首页续页游标签发。
+
+    必须先于 operation 行记录调用——保存的 operation 结果要包含最终
+    result_set_id 与 next_cursor（同 key 重放回同一首页与同一游标）。
+    """
+    ps = effects["page_set"]
+    rsid = freeze_set(
+        conn, session=session, plan=plan, policy=ps["policy"],
+        cards=ps["cards"], coverage=effects["coverage"])
+    packet["pagination"]["result_set_id"] = rsid
+    _np = packet["pagination"].pop("next_position", None)
+    if _np is not None:
+        packet["pagination"]["next_cursor"] = get_or_issue_cursor(
+            conn, rsid, tuple(_np))
+
+

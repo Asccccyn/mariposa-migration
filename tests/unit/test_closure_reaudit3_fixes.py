@@ -12,8 +12,10 @@ from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service, store
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service, store
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all
 
@@ -51,7 +53,7 @@ def _grant_source_excerpt():
             return jb.JudgeBatchResult(
                 items=items, provider_status="evaluated")
 
-    jb.register_for_tests("granted_typesafe_r3", GrantedTypeSafe())
+    judge_factory.register_for_tests("granted_typesafe_r3", GrantedTypeSafe())
     from mariposa import config as cfg
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "granted_typesafe_r3"
@@ -82,7 +84,7 @@ class _Cap(jb.JudgeProvider):
 
 
 def _install_cap(cap):
-    jb.register_for_tests(cap.name, cap)
+    judge_factory.register_for_tests(cap.name, cap)
     from mariposa import config as cfg
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = cap.name
@@ -135,7 +137,7 @@ class Test1CoverageGateWhitelist:
             assert cov.get("lexical_scorer"), \
                 f"前置失败：coverage 应含 lexical_scorer：{sorted(cov)}"
             assert cov.get("event") == "complete_within_scope"
-            out = recall_service.round2(actors["jiaming"], {
+            out = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid,
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
             assert out["round"] == 2, \
@@ -170,7 +172,7 @@ class Test1CoverageGateWhitelist:
             cov = receipt["coverage"]
             assert cov.get("words_forgotten"), \
                 f"前置失败：应有 words_forgotten 注记：{sorted(cov)}"
-            r2 = recall_service.round2(actors["jiaming"], {
+            r2 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid,
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
             assert r2["round"] == 2, \
@@ -188,7 +190,7 @@ class Test1CoverageGateWhitelist:
             "lexical_terms": ["qqqxyz"],
             "semantic_query": "雾隐茶室"}})
         with pytest.raises(Forbidden) as ei:
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": p["recall_session_id"],
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
         gate = ei.value.detail["gate"]
@@ -230,13 +232,13 @@ class Test2Continuation:
         old, sid = self._legit_r2(actors)
         try:
             self._seed_25()
-            p1 = recall_service.round2(actors["jiaming"], {
+            p1 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "operation_id": "op-r3-p1"})
             cont = p1["continuation"]
             assert cont and cont["available"], "25 条 > 20 页容量"
             assert cont["continuation_token"], "服务端游标必带 token"
-            p2 = recall_service.round2(actors["jiaming"], {
+            p2 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "continuation_token": cont["continuation_token"],
                 "operation_id": "op-r3-p2"})
@@ -263,11 +265,11 @@ class Test2Continuation:
         old, sid = self._legit_r2(actors)
         try:
             self._seed_25()
-            p1 = recall_service.round2(actors["jiaming"], {
+            p1 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "operation_id": "op-r3-q1"})
             cont = p1["continuation"]
-            p2 = recall_service.round2(actors["jiaming"], {
+            p2 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "continuation_token": cont["continuation_token"],
                 "operation_id": "op-r3-q2"})
@@ -284,16 +286,16 @@ class Test2Continuation:
         old, sid = self._legit_r2(actors)
         try:
             self._seed_25()
-            p1 = recall_service.round2(actors["jiaming"], {
+            p1 = _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "operation_id": "op-r3-t1"})
             tok = p1["continuation"]["continuation_token"]
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "continuation_token": tok,
                 "operation_id": "op-r3-t2"})
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                     "continuation_token": tok,
                     "operation_id": "op-r3-t3"})
@@ -306,11 +308,11 @@ class Test2Continuation:
         old, sid = self._legit_r2(actors)
         try:
             self._seed_25()
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                 "operation_id": "op-r3-g1"})
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid, "reason": "EVIDENCE_INSUFFICIENT",
                     "continuation_token": "f" * 32,
                     "operation_id": "op-r3-g2"})

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
+from mariposa.recall import round2 as recall_round2_mod
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
@@ -83,6 +85,7 @@ class TestRawLeaseFencing:
         接管——A 不得外发（judge=0）、不得提交（raw 轮 0）。"""
         from mariposa import config as cfg
         from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import factory as judge_factory
         from mariposa.retrieval.judges import typesafe_jev
 
         class Granted(typesafe_jev.TypeSafeJevJudge):
@@ -111,7 +114,7 @@ class TestRawLeaseFencing:
                     cache_misses=len(candidates), request_count=1)
 
         provider = Granted()
-        jb.register_for_tests("ra002_typesafe", provider)
+        judge_factory.register_for_tests("ra002_typesafe", provider)
         old_prov = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "ra002_typesafe"
         try:
@@ -140,7 +143,7 @@ class TestRawLeaseFencing:
                         "UPDATE recall_raw_leases SET created_at="
                         "'2020-01-01T00:00:00+00:00' WHERE session_id=?",
                         (sid,))
-                recall_service._acquire_raw_lease(
+                recall_round2_mod._acquire_raw_lease(
                     sid, s["current_revision"], s["current_burst"])
                 return out
 
@@ -205,7 +208,7 @@ class TestJudgeValidity:
                     degraded_reason=None, cache_hits=0,
                     cache_misses=len(candidates), request_count=1)
 
-        jb.register_for_tests("ra003_nan", NaNJudge())
+        judge_factory.register_for_tests("ra003_nan", NaNJudge())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "ra003_nan"
         try:
@@ -284,7 +287,7 @@ class TestJudgeValidity:
                     cache_hits=0, cache_misses=len(candidates),
                     request_count=1)
 
-        jb.register_for_tests("ra003_dup", DupRef())
+        judge_factory.register_for_tests("ra003_dup", DupRef())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "ra003_dup"
         try:

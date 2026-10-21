@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
@@ -95,6 +96,7 @@ class TestP11SessionOwnerIsolation:
 class TestP13Round2ReasonFacts:
     def _grant(self, monkeypatch):
         from mariposa.retrieval.judges import base as jb
+        from mariposa.retrieval.judges import factory as judge_factory
         from mariposa import config as cfg
 
         class G(typesafe_jev.TypeSafeJevJudge):
@@ -117,7 +119,7 @@ class TestP13Round2ReasonFacts:
                         model_id=self.name, prompt_version="t")
                         for c in cs], provider_status="evaluated")
 
-        jb.register_for_tests("g_p13", G())
+        judge_factory.register_for_tests("g_p13", G())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "g_p13"
         return old
@@ -231,7 +233,7 @@ class TestP14WordsIdentityAndEnvelope:
                         prompt_version="t") for c in candidates],
                     provider_status="evaluated")
 
-        jb.register_for_tests("cap_p14", Cap())
+        judge_factory.register_for_tests("cap_p14", Cap())
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "cap_p14"
@@ -378,7 +380,7 @@ class TestP26ReplayKeepsSourceMsg:
                         model_id=self.name, prompt_version="t")
                         for c in cs], provider_status="evaluated")
 
-        jb.register_for_tests("g_p26", G())
+        judge_factory.register_for_tests("g_p26", G())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "g_p26"
         try:
@@ -464,7 +466,7 @@ class TestF05RegistryLevelRoleGate:
                 self._disabled_reason = None
 
         from mariposa.retrieval.judges import base as jb
-        jb.register_for_tests("fake_title_cue_jev", G())
+        judge_factory.register_for_tests("fake_title_cue_jev", G())
         try:
             monkeypatch.setattr(typesafe_jev.urllib.request, "urlopen",
                                 fake_urlopen)

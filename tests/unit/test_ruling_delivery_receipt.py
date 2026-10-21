@@ -14,6 +14,7 @@ from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
 from mariposa.recall import store
+from mariposa.recall import round2 as _r2mod
 from tests.conftest import reset_all
 
 
@@ -68,8 +69,8 @@ class TestDeliveryReceiptSemantics:
         # 支撑（门在 raw 授权之前的 reason_fact_supported 已核过；
         # 本用例断言 gate 层判定，走 round2 真实入口会因无 raw 授权
         # 停在授权门——直接核内部 gate）
-        from mariposa.recall import service as svc
-        gate = svc._reason_fact_supported(
+        from mariposa.recall import round2 as recall_round2_mod, service as svc
+        gate = _r2mod._reason_fact_supported(
             sid, "EXPLICIT_REJECT_AFTER_DELIVERY", {})
         assert gate is True
 
@@ -86,7 +87,7 @@ class TestDeliveryReceiptSemantics:
                 " VALUES(?, 'cand-never-out', 'memory:never-out',"
                 " 'event', 'full', 'rejected', 1, datetime('now'))",
                 (sid,))
-        from mariposa.recall import service as svc
-        gate = svc._reason_fact_supported(
+        from mariposa.recall import round2 as recall_round2_mod, service as svc
+        gate = _r2mod._reason_fact_supported(
             sid, "EXPLICIT_REJECT_AFTER_DELIVERY", {})
         assert gate is False, "内部 seen 的拒绝不得背书该理由"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa import db
 from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
@@ -83,6 +84,7 @@ def _grant_source_excerpt(monkeypatch):
     层注入一个带许可的实例不可行（provider 是 DisabledJudge），
     改为注入带许可的 TypeSafe 实例到 _INJECTED。"""
     from mariposa.retrieval.judges import base as jb
+    from mariposa.retrieval.judges import factory as judge_factory
     from mariposa.retrieval.judges import typesafe_jev
 
     class GrantedTypeSafe(typesafe_jev.TypeSafeJevJudge):
@@ -110,7 +112,7 @@ def _grant_source_excerpt(monkeypatch):
                 degraded_reason=None, cache_hits=0,
                 cache_misses=len(candidates), request_count=1)
 
-    jb.register_for_tests("granted_typesafe", GrantedTypeSafe())
+    judge_factory.register_for_tests("granted_typesafe", GrantedTypeSafe())
     from mariposa import config as cfg
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "granted_typesafe"
@@ -163,7 +165,7 @@ class TestRound2FullChain:
                     provider_status="unavailable",
                     degraded_reason="provider_down")
 
-        jb.register_for_tests("faulty_w4", FaultyJudge())
+        judge_factory.register_for_tests("faulty_w4", FaultyJudge())
         from mariposa import config as cfg
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "faulty_w4"
@@ -227,7 +229,7 @@ class TestRound2FullChain:
                         for c in candidates],
                     provider_status="evaluated")
 
-        jb.register_for_tests("no_grant_test", NoGrantJudge())
+        judge_factory.register_for_tests("no_grant_test", NoGrantJudge())
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = "no_grant_test"
         try:

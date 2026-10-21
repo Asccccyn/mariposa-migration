@@ -39,8 +39,8 @@ def _provider_known(name: str | None) -> bool:
         return False
     if name in KNOWN_PROVIDERS:
         return True
-    from ..retrieval.judges import base as _jb
-    return name in _jb._INJECTED
+    from ..retrieval.judges import factory as _jf
+    return name in _jf._INJECTED
 
 
 def _now() -> str:
@@ -323,16 +323,17 @@ def provider_readiness(provider: str | None) -> dict:
         # 测试注入的 fake provider（register_for_tests）按就绪计——生产
         # _INJECTED 恒空；就绪探针零网络语义不变
         from ..retrieval.judges import base as _jb2
-        inj = _jb2._INJECTED.get(provider)
+        from ..retrieval.judges import factory as _jf2
+        inj = _jf2._INJECTED.get(provider)
         if inj is not None and not isinstance(inj, _jb2.DisabledJudge):
             return {"provider": provider, "ready": True,
                     "blocked_reason": None}
         return {"provider": provider, "ready": False,
                 "blocked_reason": "provider_unknown"}
     if provider == "typesafe_jev":
-        from ..retrieval.judges import base as _jb
+        from ..retrieval.judges import factory as _jf
         from ..retrieval.judges import typesafe_jev as _tj
-        p = _jb.get_provider_by_name("typesafe_jev")
+        p = _jf.get_provider_by_name("typesafe_jev")
         reason = None
         if isinstance(p, _tj.TypeSafeJevJudge):
             if getattr(p, "_disabled_reason", None):

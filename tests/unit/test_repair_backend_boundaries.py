@@ -14,7 +14,7 @@ from mariposa.memory import service as memory, our_words
 from mariposa.plans import service as plans
 from mariposa.recall import judge_policy, paging, replay
 from mariposa.retrieval import search, words
-from mariposa.source import binding, importer, ingest
+from mariposa.source import binding, scope as source_scope, importer, ingest
 
 
 def hold(actor, **kw):
@@ -236,7 +236,7 @@ def test_batch_references_use_members_and_parent_path(actors, tmp_path, monkeypa
             def no_new_connection():
                 raise AssertionError("batch inverse lookup opened another connection")
             patch.setattr(db, "formal", no_new_connection)
-            refs = binding.references_for_messages([m["id"] for m in msgs.values()], conn=conn)
+            refs = source_scope.references_for_messages([m["id"] for m in msgs.values()], conn=conn)
     assert {r["binding_id"] for r in refs[msgs["a"]["id"]]} == {pinned["binding_id"], regular["binding_id"]}
     assert {r["binding_id"] for r in refs[msgs["b"]["id"]]} == {regular["binding_id"]}
     assert refs[msgs["sibling"]["id"]] == []

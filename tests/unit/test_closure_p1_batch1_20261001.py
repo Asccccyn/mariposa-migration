@@ -12,8 +12,10 @@ from mariposa.capabilities import registry
 from mariposa.errors import Forbidden
 from mariposa.identity import service as identity
 from mariposa.memory import service as memory
-from mariposa.recall import service as recall_service, store
+from mariposa.recall import round2 as recall_round2_mod, service as recall_service, store
+from mariposa.recall import round2 as _r2mod
 from mariposa.retrieval.judges import base as jb
+from mariposa.retrieval.judges import factory as judge_factory
 from mariposa.retrieval.judges import typesafe_jev
 from tests.conftest import reset_all
 
@@ -50,7 +52,7 @@ def _grant_source_excerpt():
             return jb.JudgeBatchResult(
                 items=items, provider_status="evaluated")
 
-    jb.register_for_tests("granted_ts_p1", GrantedTypeSafe())
+    judge_factory.register_for_tests("granted_ts_p1", GrantedTypeSafe())
     old = cfg.RECALL_JUDGE_PROVIDER
     cfg.RECALL_JUDGE_PROVIDER = "granted_ts_p1"
     return old
@@ -77,7 +79,7 @@ class TestRound2CompletionProof:
             assert receipt["completed"] == 0, \
                 "UNAVAILABLE 轮不得标 completed"
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid,
                     "reason": "NO_DELIVERABLE_CANDIDATE"})
             gate = ei.value.detail["gate"]
@@ -109,7 +111,7 @@ class TestRound2CompletionProof:
             assert p["coverage"]["event"] == "partial_topk_window", \
                 "browse latest-K 不得签 complete"
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": p["recall_session_id"],
                     "reason": "EVIDENCE_INSUFFICIENT"})
             gate = ei.value.detail["gate"]
@@ -148,7 +150,7 @@ class TestRound2CompletionProof:
                     "前置：新 revision 自己完成"
             # 旧 revision 的回执仍在但 gate 读的是当前 revision
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid,
                     "reason": "EVIDENCE_INSUFFICIENT"})
             assert ei.value.code == "ROUND2_GATE_DENIED"
@@ -165,7 +167,7 @@ class TestRound2BurstPreflight:
 
     def test_burst_full_zero_jev_calls(self, actors):
         cap = _CountingJudge()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
         try:
@@ -194,7 +196,7 @@ class TestRound2BurstPreflight:
                 cfg.RECALL_BURST_ROUNDS, "前置：burst 满、总额未满"
             n0 = cap.calls
             with pytest.raises(Forbidden) as ei:
-                recall_service.round2(actors["jiaming"], {
+                _r2mod.round2(actors["jiaming"], {
                     "session_id": sid,
                     "reason": "NO_DELIVERABLE_CANDIDATE"})
             assert ei.value.code in ("ROUND2_GATE_DENIED",
@@ -247,7 +249,7 @@ class TestJudgedCount:
         assert receipt["unjudged_count"] == 20, \
             "event30+words30 送判40：被截掉的 20 必须如实计入 unjudged"
         with pytest.raises(Forbidden) as ei:
-            recall_service.round2(actors["jiaming"], {
+            _r2mod.round2(actors["jiaming"], {
                 "session_id": sid,
                 "reason": "NO_DELIVERABLE_CANDIDATE"})
         gate = ei.value.detail["gate"]
@@ -334,7 +336,7 @@ class TestIdempotencyBoundary:
             raw_pending=False,
             our_words=[{"speaker": "qiaosheng", "text": "梧桐叶落了"                        }])
         cap = _CountingJudge()
-        jb.register_for_tests(cap.name, cap)
+        judge_factory.register_for_tests(cap.name, cap)
         old = cfg.RECALL_JUDGE_PROVIDER
         cfg.RECALL_JUDGE_PROVIDER = cap.name
         try:
