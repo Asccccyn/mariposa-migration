@@ -497,6 +497,14 @@ from .transport import (  # noqa: E402,F401
     _revalidate_replayed_response, _transport_key, _with_operation_id,
 )
 def _hold(principal: Principal, a: dict) -> dict:
+    # Projection is outside the atomic receipt/fingerprint. Never strip the
+    # receipt used by host validation, replay or the effect ledger.
+    from ..memory.model_projection import hold_view
+    result = _hold_full(principal, {k:v for k,v in a.items() if k != "view"})
+    return hold_view(result) if a.get("view") == "model" else result
+
+
+def _hold_full(principal: Principal, a: dict) -> dict:
     # WP2（迁移 31）：宿主自动化路径 operation_id + source_selections →
     # 领域原子写（hold_in_tx + 全部绑定 + 完成回执同一事务，方案 §5）。
     # 旧手工 hold（两者皆无）行为不变；只带 selections 不带 op 拒绝
@@ -607,7 +615,11 @@ def _source_selection_open(principal: Principal, a: dict) -> dict:
 
 def _open(principal: Principal, a: dict) -> dict:
     from ..memory import views as views_mod
-    return views_mod.open_memory(principal, str(a.get("memory_id", "")))
+    result = views_mod.open_memory(principal, str(a.get("memory_id", "")))
+    if a.get("view") == "model":
+        from ..memory.model_projection import memory_view
+        return memory_view(result)
+    return result
 
 
 def _view_confirm(principal: Principal, a: dict) -> dict:

@@ -620,4 +620,8 @@ def check(principal, a: dict) -> dict:
 # --------------------------------------------------------------- detail
 
 def detail_read(principal, a: dict) -> dict:
-    return memory_detail.read_page(principal, a)
+    page = memory_detail.read_page(principal, a)
+    if a.get("view") == "model":
+        from ..memory.model_projection import detail_view
+        return detail_view(page)
+    return page

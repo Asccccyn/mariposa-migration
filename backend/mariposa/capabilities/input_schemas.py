@@ -875,6 +875,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                      "categories", "creation_mode"],
         "additionalProperties": False,
         "properties": {
+            "view": {"enum": ["full", "model"]},
             "text": {"type": "string", "minLength": 1},
             "memory_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "date_confidence": {"type": "string",
@@ -961,7 +962,8 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
     },
     "memory.open": {
         "type": "object", "required": ["memory_id"], "additionalProperties": False,
-        "properties": {"memory_id": {"type": "string", "minLength": 1}},
+        "properties": {
+            "view": {"enum": ["full", "model"]},"memory_id": {"type": "string", "minLength": 1}},
     },
     "memory.view.confirm": {
         "type": "object", "required": ["memory_id", "receipt_id"],
@@ -1450,6 +1452,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "type": "object", "required": ["detail_ref"],
         "additionalProperties": False,
         "properties": {
+            "view": {"enum": ["full", "model"]},
             "detail_ref": {"type": "string", "minLength": 1},
             "cursor": {"type": "string", "minLength": 1}},
     },
