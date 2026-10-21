@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
+import math
 import os
 import time
 import urllib.error
@@ -29,6 +31,79 @@ class JudgeUnavailable(Exception):
     """超时/429/网络失败/格式错——有界降级，不伪装成已评审。"""
 
 
+
+
+def _recover_missing_chunk_terminator(resp, exc: http.client.IncompleteRead,
+                                      payload: dict) -> dict:
+    """Accept only a complete SystemOne answer after EOF at a chunk boundary.
+
+    CPython wraps the empty next-chunk-size ValueError in two IncompleteReads.
+    Other exception shapes (including missing chunk data/CRLF) fail closed.
+    This compatibility path never retries, invents missing answers, or writes
+    cache state; the ordinary downstream model/deadline/cache checks still run.
+    """
+    def invalid():
+        raise JudgeUnavailable("incomplete_response_invalid") from None
+
+    inner = exc.__cause__
+    cause = inner.__context__ if isinstance(inner, http.client.IncompleteRead) else None
+    if (getattr(resp, "status", None) != 200
+            or resp.headers.get("Transfer-Encoding", "").strip().lower() != "chunked"
+            or resp.headers.get("Content-Length") is not None
+            or resp.headers.get("Content-Encoding", "identity").strip().lower() != "identity"
+            or resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json"
+            or not isinstance(inner, http.client.IncompleteRead)
+            or inner.partial != b"" or inner.expected is not None
+            or exc.expected is not None
+            or not isinstance(cause, ValueError)
+            or cause.args != ("invalid literal for int() with base 16: b''",)):
+        invalid()
+    raw = exc.partial
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= 262144:
+        invalid()
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(_):
+        raise ValueError("non-finite JSON constant")
+
+    try:
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
+                          parse_constant=reject_constant)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        invalid()
+    if not isinstance(body, dict) or set(body) != {"model", "answers", "usage"}:
+        invalid()
+    if not isinstance(body["model"], str) or not body["model"].strip():
+        invalid()
+    questions, answers, usage = payload.get("questions"), body["answers"], body["usage"]
+    if (not isinstance(questions, dict) or not questions
+            or not isinstance(answers, dict) or set(answers) != set(questions)
+            or not isinstance(usage, dict)):
+        invalid()
+    for name, question in questions.items():
+        answer = answers[name]
+        if (not isinstance(question, dict) or question.get("type") != "noul"
+                or not isinstance(answer, dict) or set(answer) != {"type", "noul"}
+                or answer["type"] != "noul"):
+            invalid()
+        value = answer["noul"]
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not 0 <= value <= 1 or not math.isfinite(value)):
+            invalid()
+    for key in ("input_tokens", "output_tokens"):
+        if type(usage.get(key)) is not int or usage[key] < 0:
+            invalid()
+    logging.getLogger(__name__).warning(
+        "typesafe_missing_chunk_terminator_recovered bytes=%d answers=%d",
+        len(raw), len(answers))
+    return body
 
 
 class TypeSafeJevJudge(base.JudgeProvider):
@@ -573,7 +648,8 @@ class TypeSafeJevJudge(base.JudgeProvider):
             ))
         return items
 
-    def _post_with_limited_retry(self, payload: dict) -> dict:
+    def _post_with_limited_retry(self, payload: dict, *,
+                                 deadline_monotonic: float | None = None) -> dict:
         """单次 HTTP POST + 有限重试。
 
         重试边界（幂等与崩溃恢复整改 §8）：429/529 是远端明确拒绝、
@@ -592,17 +668,36 @@ class TypeSafeJevJudge(base.JudgeProvider):
             })
         attempt = 0
         while True:
+            timeout_s = config.RECALL_JUDGE_TIMEOUT_MS / 1000
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - _time.monotonic()
+                if remaining <= 0:
+                    raise JudgeUnavailable("deadline_exceeded")
+                timeout_s = min(timeout_s, remaining)
             try:
                 with urllib.request.urlopen(
                         req,
-                        timeout=config.RECALL_JUDGE_TIMEOUT_MS / 1000
+                        timeout=timeout_s
                 ) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
+                    try:
+                        raw = resp.read()
+                    except http.client.IncompleteRead as exc:
+                        # A complete application response may precede a missing
+                        # HTTP chunk terminator. Validate before returning it.
+                        if (deadline_monotonic is not None
+                                and _time.monotonic() >= deadline_monotonic):
+                            raise JudgeUnavailable("deadline_exceeded") from None
+                        return _recover_missing_chunk_terminator(resp, exc, payload)
+                    return json.loads(raw.decode("utf-8"))
             except urllib.error.HTTPError as e:
                 # 不把响应正文或 Authorization 带进异常/日志。
                 if (e.code in self._RETRYABLE_HTTP
                         and attempt < self._RETRY_ATTEMPTS):
-                    _time.sleep(self._RETRY_BACKOFF_S[attempt])
+                    delay = self._RETRY_BACKOFF_S[attempt]
+                    if (deadline_monotonic is not None
+                            and _time.monotonic() + delay >= deadline_monotonic):
+                        raise JudgeUnavailable("deadline_exceeded") from None
+                    _time.sleep(delay)
                     attempt += 1
                     continue
                 raise JudgeUnavailable(f"http_{e.code}") from None

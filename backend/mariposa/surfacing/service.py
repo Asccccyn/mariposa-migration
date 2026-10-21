@@ -1,7 +1,7 @@
 """surface 服务编排：prepare / validate / check / detail.read。
 
 调用链（registry handler → 本模块）：E 的后台 worker 在 Uₙ 提交后调
-prepare；Uₙ₊₁ 到达、目标内容修订确定后调 validate（有界 2000ms 内）；
+prepare；同一 Uₙ 当前修订在装配时调 validate（剩余绝对期限内）；
 最终冻结前调 check（纯本地）；主模型显式调 memory_read_full →
 detail.read。全部走既有 /api/capability/{name} HTTP 面 + identity 鉴权
 与 binding 白名单（docs/06）。
@@ -278,7 +278,8 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
                 "coverage": coverage, "expires_at": None,
                 "reason_code": "SURFACE_TIMEOUT"}
 
-    judge = SurfaceJudge(jp["provider"], policy)
+    judge = SurfaceJudge(jp["provider"], policy, deadline_monotonic=(
+        started + config.SURFACE_PREPARE_DEADLINE_MS / 1000))
     try:
         if judge_pool:
             decision = judge.judge_prepare(
@@ -447,7 +448,11 @@ def validate(principal, a: dict) -> dict:
         store.complete_operation(principal.principal_id, op_key, result)
         return result
 
-    judge = SurfaceJudge(jp["provider"], policy)
+    remaining = config.SURFACE_DELIVERY_VALIDATION_DEADLINE_MS / 1000
+    if deadline_ts:
+        remaining = min(remaining, max(0.0, deadline_ts - time.time()))
+    judge = SurfaceJudge(jp["provider"], policy,
+                         deadline_monotonic=time.monotonic() + remaining)
     source_input = run["snapshot"]["source_input"]
     constraints_by_event = run["snapshot"].get("constraints") or {}
     try:
@@ -528,6 +533,14 @@ def validate(principal, a: dict) -> dict:
             "detail_ref": detail_ref,
         })
 
+    # Local version/fact checks also consume the same phase budget. Never
+    # issue a fresh receipt for a result already outside its delivery deadline.
+    if time.monotonic() >= judge.deadline_monotonic:
+        result = {**base, "status": "timed_out", "validation_receipt": None,
+                  "as_of": now.isoformat(), "expires_at": None, "items": [],
+                  "rejected_count": rejected, "reason_code": "SURFACE_TIMEOUT"}
+        store.complete_operation(principal.principal_id, op_key, result)
+        return result
     status = "ready" if items else (
         "rejected" if rejected else "empty")
     ttl = max(1, int(config.SURFACE_CANDIDATE_TTL_SECONDS))

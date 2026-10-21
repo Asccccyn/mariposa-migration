@@ -139,6 +139,7 @@ def contract_fingerprint(policy: dict, requested_model: str) -> str:
         "questions": {"prepare": list(PREPARE_QUESTIONS),
                       "delivery": list(DELIVERY_QUESTIONS)},
         "same_occurrence_threshold": policy.get("same_occurrence_threshold"),
+        "delivery_same_occurrence_threshold": policy.get("delivery_same_occurrence_threshold"),
         "positive_threshold": policy.get("positive_threshold"),
         "risk_threshold": policy.get("risk_threshold"),
         "facts_rules_version": policy.get("facts_rules_version"),

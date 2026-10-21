@@ -201,10 +201,10 @@ SURFACE_ENABLED = _flag("MARIPOSA_SURFACE_ENABLED", "")
 # 一份准入合同。revision 升 2 使 v1 下 prepare 的 run 在 validate 处按
 # SURFACE_POLICY_CHANGED 失效；v1 判断缓存因 schema 版本换键自然不可达，
 # 不删不截。
-SURFACE_POLICY_REVISION = 2
-SURFACE_POLICY_VERSION = "surface-v2"
-SURFACE_PROMPT_PREPARE = "surface_prepare_v2"
-SURFACE_PROMPT_DELIVERY = "surface_delivery_v2"
+SURFACE_POLICY_REVISION = 3
+SURFACE_POLICY_VERSION = "surface-v3-calibrated"
+SURFACE_PROMPT_PREPARE = "surface_prepare_v3"
+SURFACE_PROMPT_DELIVERY = "surface_delivery_v3"
 # 判断 schema 版本（judge-decision.schema.json 的 schema_version const）
 SURFACE_JUDGE_SCHEMA_VERSION = "surface-judge-v2"
 # 确定性硬校验规则版本（facts.py）；进合同指纹与 policy 快照
@@ -223,11 +223,11 @@ def _env_float(name: str, default: float) -> float:
 
 
 SURFACE_DELIVERY_VALIDATION_DEADLINE_MS = _env_int(
-    "MARIPOSA_SURFACE_DELIVERY_VALIDATION_DEADLINE_MS", 2000)
+    "MARIPOSA_SURFACE_DELIVERY_VALIDATION_DEADLINE_MS", 4000)
 SURFACE_MAX_RECEIPT_AGE_MS = _env_int(
     "MARIPOSA_SURFACE_MAX_RECEIPT_AGE_MS", 250)
 SURFACE_PREPARE_DEADLINE_MS = _env_int(
-    "MARIPOSA_SURFACE_PREPARE_DEADLINE_MS", 20000)
+    "MARIPOSA_SURFACE_PREPARE_DEADLINE_MS", 10000)
 SURFACE_CANDIDATE_TTL_SECONDS = _env_int(
     "MARIPOSA_SURFACE_CANDIDATE_TTL_SECONDS", 86400)
 SURFACE_CANDIDATE_UNION_CAP = _env_int(
@@ -259,15 +259,13 @@ SURFACE_DAILY_JUDGE_COST_CAP_USD = (
 SURFACE_DAILY_JUDGE_REQUEST_CAP = _env_int(
     "MARIPOSA_SURFACE_DAILY_JUDGE_REQUEST_CAP", 100)
 SURFACE_POSITIVE_NOUL_THRESHOLD = _env_float(
-    "MARIPOSA_SURFACE_POSITIVE_NOUL_THRESHOLD", 0.98)
+    "MARIPOSA_SURFACE_POSITIVE_NOUL_THRESHOLD", 0.80)
 SURFACE_RISK_NOUL_THRESHOLD = _env_float(
     "MARIPOSA_SURFACE_RISK_NOUL_THRESHOLD", 0.02)
-# same_occurrence 确认门（唯一语义门）。默认 0.98 是保守值=实际不会
-# 自动确认任何候选；校准需她另批并按审计包装规则跑真测。历史真例
-# 分布 .51–.71、负例 .03–.72（S05 日期冲突），不能用单一分数定交付——
-# 交付还要过 facts 与竞争合同。
+# Candidate admission is provisional (2026-10-21 real synthetic calibration).
+# Delivery has a stricter separate gate; facts and ambiguity remain mandatory.
 SURFACE_SAME_OCCURRENCE_THRESHOLD = _env_float(
-    "MARIPOSA_SURFACE_SAME_OCCURRENCE_THRESHOLD", 0.98)
+    "MARIPOSA_SURFACE_SAME_OCCURRENCE_THRESHOLD", 0.75)
 # P2 确定性准入：唯一性只能在**未截断**的日期集上证明；日期集超过此规模
 # 一律 UNKNOWN（不声明唯一）。Dense 每作业预算：确定性失败后才按预算补查，
 # 且只在模型已常驻、不重嵌入时运行。
@@ -283,3 +281,9 @@ SURFACE_MAX_EVENT_BODY_BYTES = _env_int(
     "MARIPOSA_SURFACE_MAX_EVENT_BODY_BYTES", 24576)
 SURFACE_MAX_SOURCE_CONTEXT_BYTES = _env_int(
     "MARIPOSA_SURFACE_MAX_SOURCE_CONTEXT_BYTES", 98304)
+
+# 2026-10-21 synthetic calibration: prepare admits candidates provisionally;
+# final delivery has a separate, stricter same-occurrence gate. Fact conflicts,
+# evidence requirements and ambiguous competitors still block delivery.
+SURFACE_DELIVERY_SAME_OCCURRENCE_THRESHOLD = _env_float(
+    "MARIPOSA_SURFACE_DELIVERY_SAME_OCCURRENCE_THRESHOLD", 0.80)

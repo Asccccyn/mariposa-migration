@@ -132,6 +132,7 @@ def surface_policy_snapshot() -> dict:
         "positive_threshold": config.SURFACE_POSITIVE_NOUL_THRESHOLD,
         "risk_threshold": config.SURFACE_RISK_NOUL_THRESHOLD,
         "same_occurrence_threshold": config.SURFACE_SAME_OCCURRENCE_THRESHOLD,
+        "delivery_same_occurrence_threshold": config.SURFACE_DELIVERY_SAME_OCCURRENCE_THRESHOLD,
         "candidate_union_cap": config.SURFACE_CANDIDATE_UNION_CAP,
         "per_hypothesis_cap": config.SURFACE_CANDIDATES_PER_HYPOTHESIS_CAP,
         "max_hypotheses": config.SURFACE_MAX_EVENT_HYPOTHESES,

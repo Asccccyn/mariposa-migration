@@ -352,18 +352,21 @@ class TestRegressionScenarios:
 class TestContractIdentity:
     def test_policy_snapshot_carries_contract_fields(self):
         p = surface_policy_snapshot()
-        assert p["same_occurrence_threshold"] == 0.98
+        assert p["same_occurrence_threshold"] == 0.75
+        assert p["delivery_same_occurrence_threshold"] == 0.80
+        assert p["positive_threshold"] == 0.80
         assert p["facts_rules_version"] == "facts-v2"
         assert p["judge_schema_version"] == "surface-judge-v2"
-        assert p["prompt_prepare"] == "surface_prepare_v2"
-        assert p["policy_revision"] == 2
+        assert p["prompt_prepare"] == "surface_prepare_v3"
+        assert p["policy_revision"] == 3
 
     def test_fingerprint_sensitive_to_every_contract_field(self):
         base = C.contract_fingerprint(_policy(), "surface:typesafe_jev:jev-latest")
         for k, v in (("same_occurrence_threshold", 0.45),
+                     ("delivery_same_occurrence_threshold", 0.95),
                      ("facts_rules_version", "facts-v3"),
-                     ("prompt_prepare", "surface_prepare_v3"),
-                     ("risk_threshold", 0.05), ("policy_revision", 3),
+                     ("prompt_prepare", "surface_prepare_v4"),
+                     ("risk_threshold", 0.05), ("policy_revision", 4),
                      ("judge_schema_version", "surface-judge-v3")):
             assert C.contract_fingerprint(_policy(**{k: v}),
                                           "surface:typesafe_jev:jev-latest") != base, k

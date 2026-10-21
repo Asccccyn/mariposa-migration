@@ -1,5 +1,9 @@
 # mariposa
 
+- 2026-10-21（工作树，未部署）：JEV 缺 chunk 结束块的完整响应严格恢复，零补发、缓存规则不变。[原因与验证](docs/reports/JEV_INCOMPLETE_READ_20261021.md)。
+
+- 2026-10-21（工作树，未部署）：JEV 同轮浮现校准、15秒总预算及编辑重发新修订任务；缓存前缀不变。[验证说明](docs/reports/JEV_SURFACING_CALIBRATION_20261021.md)。
+
 宿主用户与char的记忆与原文应用。
 
 ## 2026-10-19 · EST_MARIPOSA_AUTO_SURFACING_V1（自动浮现四能力，默认关）

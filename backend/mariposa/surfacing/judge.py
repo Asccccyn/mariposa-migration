@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 from .. import config
 from ..retrieval.judges import cache as judge_cache
@@ -38,7 +39,7 @@ REQUIRED_GRANTS = frozenset({
     "event_excerpt", "structured_metadata", "current_dialogue"})
 
 _PREPARE_PROMPT = (
-    "surface_prepare_v2：你是 Mariposa 的自动记忆浮现判断器，只作有界"
+    "surface_prepare_v3：你是 Mariposa 的自动记忆浮现判断器，只作有界"
     "判断，不负责聊天/写入/改写/补全记忆，不调用工具。这是char的"
     "记忆库，候选记录他与宿主用户的经历、约定和感受。你只回答一个问题："
     "候选是否与当前输入指向同一次具体往事——人物、日期、证据的硬核验"
@@ -51,8 +52,8 @@ _PREPARE_PROMPT = (
     "不明/只剩标题不能确认。")
 
 _DELIVERY_PROMPT = (
-    "surface_delivery_v2：你是自动记忆浮现投递前最后一道相关性判断"
-    "器。候选已针对上一条 source_input 通过准备判断，但不代表现在仍该"
+    "surface_delivery_v3：你是自动记忆浮现投递前最后一道相关性判断"
+    "器。候选已针对 source_input 通过准备判断；source 与 target 可以是同一条消息，仍需核实现在是否该"
     "送给char。你只回答两个问题：候选是否同一次具体往事、以及当前"
     "target_input 及必要近邻语境是否仍明确需要这条记忆。不重新检索、"
     "不改选候选。规则：优先判断 target_input 正在说什么；延续同一"
@@ -137,7 +138,9 @@ class SurfaceJudge:
     （typesafe_jev 实例：同凭据/超时/429·529 有限重试边界——timeout/
     连接错误不自动重发，付费请求是否已被远端执行不可判断）。"""
 
-    def __init__(self, provider_name: str, policy: dict):
+    def __init__(self, provider_name: str, policy: dict, *,
+                 deadline_monotonic: float | None = None):
+        self.deadline_monotonic = deadline_monotonic
         if provider_name != "typesafe_jev":
             # 结构化 surface-judge provider 尚不存在；如实阻断，
             # 不静默回退其他供应商（R38/docs/03）。
@@ -149,6 +152,8 @@ class SurfaceJudge:
         self.risk = float(policy["risk_threshold"])
         self.same_occurrence_threshold = float(
             policy["same_occurrence_threshold"])
+        self.delivery_threshold = float(policy.get(
+            "delivery_same_occurrence_threshold", self.same_occurrence_threshold))
         self.model_id = config.RECALL_JUDGE_MODEL_ID
         self.requested_model = f"surface:{provider_name}:{self.model_id}"
         self.contract_fingerprint = contract.contract_fingerprint(
@@ -161,15 +166,31 @@ class SurfaceJudge:
 
     # ------------------------------------------------------------- transport
 
+    def _check_deadline(self) -> None:
+        if (self.deadline_monotonic is not None
+                and time.monotonic() >= self.deadline_monotonic):
+            raise SurfaceBlocked("SURFACE_TIMEOUT")
+
     def _post(self, payload: dict) -> dict:
+        self._check_deadline()
+        self.request_count += 1
         body = None
         if _TRANSPORT_OVERRIDE is not None:
             body = _TRANSPORT_OVERRIDE(payload)
         else:
             from ..retrieval.judges import typesafe_jev
             ts = typesafe_jev.TypeSafeJevJudge()
-            body = ts._post_with_limited_retry(payload)
-        self.request_count += 1
+            try:
+                if self.deadline_monotonic is None:
+                    body = ts._post_with_limited_retry(payload)
+                else:
+                    body = ts._post_with_limited_retry(
+                        payload, deadline_monotonic=self.deadline_monotonic)
+            except typesafe_jev.JudgeUnavailable:
+                self._check_deadline()
+                raise SurfaceBlocked("SURFACE_UNKNOWN_OUTCOME",
+                                     detail="transport_unavailable") from None
+        self._check_deadline()
         if not isinstance(body, dict) or not isinstance(
                 body.get("answers"), dict):
             raise SurfaceBlocked("SURFACE_UNKNOWN_OUTCOME",
@@ -245,6 +266,7 @@ class SurfaceJudge:
         出站；缺答不补（unknown）。请求字节硬门含模板+原话+候选全文+
         JSON 封装——超门抛 SurfaceBlocked 由调用方转为该候选 unknown。
         """
+        self._check_deadline()
         answers: dict[str, float] = {}
         missing: dict[str, dict] = {}
         for k, q in questions.items():
@@ -348,7 +370,10 @@ class SurfaceJudge:
         try:
             answers = self._ask(phase, prompt, state, questions,
                                 fingerprints, ctx)
-        except SurfaceBlocked:
+        except SurfaceBlocked as exc:
+            if (exc.code == "SURFACE_TIMEOUT"
+                    or exc.details.get("detail") == "transport_unavailable"):
+                raise
             # 单候选超判断字节预算：无法完整判断 → unknown，不截正文
             return CandidateAssessment(
                 event_id=event_id, candidate_ref=cand["resource_ref"],
@@ -363,7 +388,8 @@ class SurfaceJudge:
 
         so = answers.get(f"{fp}_same_occurrence")
         semantic = contract.semantic_outcome(
-            so, self.same_occurrence_threshold, self.risk)
+            so, self.delivery_threshold if phase == "delivery"
+            else self.same_occurrence_threshold, self.risk)
         rank = float(so) if _valid_noul(so) else None
         relevant_now: bool | None = None
         if phase == "delivery":
@@ -434,7 +460,18 @@ def _noul_question(kind: str) -> dict:
 
 def _state(source_input, recent_dialogue, hypotheses, target_input,
            candidates: list[dict] | None = None) -> dict:
-    state = {"source_input": source_input,
+    # TypeSafe questions explicitly reference `request`; always supply it.
+    # A same-turn snapshot stores only source identity/hash. Reconstruct its
+    # text solely from the exactly bound target, never from another revision.
+    source = source_input
+    if (target_input is not None and not source_input.get("text")
+            and source_input.get("message_id") == target_input.get("message_id")
+            and source_input.get("revision") == target_input.get("revision")
+            and source_input.get("body_hash")
+            and source_input.get("body_hash") == target_input.get("body_hash")):
+        source = {**source_input, "text": target_input.get("text", "")}
+    state = {"request": target_input if target_input is not None else source,
+             "source_input": source,
              "recent_dialogue": recent_dialogue,
              "event_hypotheses": hypotheses}
     if target_input is not None:
