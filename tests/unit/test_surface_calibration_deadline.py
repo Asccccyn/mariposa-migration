@@ -76,18 +76,12 @@ def test_http_timeout_and_429_backoff_obey_remaining_budget(monkeypatch):
     assert 0 < calls[0] <= 0.001
 
 
-def test_delivery_request_projection_rehydrates_only_exact_same_revision():
+def test_semantic_projection_omits_internal_identity_even_on_revision_change():
     source = {'message_id': 'm', 'revision': 1, 'body_hash': 'hash'}
     target = {**source, 'text': 'current synthetic message'}
-    state = judge._state(source, [], [], target)
-    assert state['request'] == target
-    assert state['source_input']['text'] == target['text']
+    assert judge._state(source, [], [], target) == {'target': target['text']}
     assert 'text' not in source
-    for bad in ({**target, 'revision': 2}, {**target, 'message_id': 'other'},
-                {**target, 'body_hash': 'other'}):
-        state = judge._state(source, [], [], bad)
-        assert 'text' not in state['source_input']
-        assert state['request'] == bad
+    assert judge._state(source, [], [], {**target, 'revision': 2}) == {'target': target['text']}
 
 
 def test_provider_failure_is_blocked_not_empty_and_does_not_continue_pool(monkeypatch):
@@ -108,7 +102,8 @@ _REPLAY = json.loads((Path(__file__).parents[1] / 'fixtures' /
 
 @pytest.mark.parametrize('case', _REPLAY, ids=lambda c: c['id'])
 def test_real_response_replay_preserves_positive_and_negative_contract(case):
-    judge.set_transport_for_tests(lambda _: case['response'])
+    response = {**case['response'], 'answers': {'c0_' + k.split('@',1)[1].split('_',1)[1]: v for k,v in case['response']['answers'].items()}}
+    judge.set_transport_for_tests(lambda _: response)
     j = judge.SurfaceJudge('typesafe_jev', surface_policy_snapshot())
     source = {'message_id': case['id'], 'revision': 1, 'text': case['input'],
               'body_hash': case['id']}

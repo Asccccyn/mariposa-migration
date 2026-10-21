@@ -201,10 +201,10 @@ SURFACE_ENABLED = _flag("MARIPOSA_SURFACE_ENABLED", "")
 # 一份准入合同。revision 升 2 使 v1 下 prepare 的 run 在 validate 处按
 # SURFACE_POLICY_CHANGED 失效；v1 判断缓存因 schema 版本换键自然不可达，
 # 不删不截。
-SURFACE_POLICY_REVISION = 3
-SURFACE_POLICY_VERSION = "surface-v3-calibrated"
-SURFACE_PROMPT_PREPARE = "surface_prepare_v3"
-SURFACE_PROMPT_DELIVERY = "surface_delivery_v3"
+SURFACE_POLICY_REVISION = 4
+SURFACE_POLICY_VERSION = "surface-v4-semantic-only"
+SURFACE_PROMPT_PREPARE = "surface_prepare_v4"
+SURFACE_PROMPT_DELIVERY = "surface_delivery_v4"
 # 判断 schema 版本（judge-decision.schema.json 的 schema_version const）
 SURFACE_JUDGE_SCHEMA_VERSION = "surface-judge-v2"
 # 确定性硬校验规则版本（facts.py）；进合同指纹与 policy 快照

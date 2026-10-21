@@ -1,5 +1,7 @@
 # mariposa
 
+- 2026-10-21（代码验证，待部署）：JEV v4语义输入去重，注入仅date/text，后台引用支持同桶全量；OR通道准入限制保留。[实现、验证与状态纠正](docs/reports/JEV_SEMANTIC_PROJECTION_20261021.md)。
+
 - 2026-10-21（已开启并核验）：JEV自动浮现，代码 `af2dbbe`；窗口/轨迹与JEV缓存哈希保持不变，零OR验证请求。[生产入口与回滚](docs/reports/JEV_SURFACING_ACTIVATION_20261021.md)。
 
 - 2026-10-21（工作树，未部署）：JEV 缺 chunk 结束块的完整响应严格恢复，零补发、缓存规则不变。[原因与验证](docs/reports/JEV_INCOMPLETE_READ_20261021.md)。

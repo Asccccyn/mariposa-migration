@@ -231,7 +231,8 @@ class TestAdmit:
 # ----------------------------------------------------- 她加的三个回归场景
 
 class _Transport:
-    def __init__(self, per_ref: dict, default=0.5, model="jev-fake"):
+    def __init__(self, per_ref: dict, pool, default=0.5, model="jev-fake"):
+        self.pool = pool
         self.per_ref, self.default, self.model = per_ref, default, model
         self.calls = []
 
@@ -239,13 +240,14 @@ class _Transport:
         self.calls.append(payload)
         out = {}
         for k in payload["questions"]:
-            ref = k.split("@")[0]
+            view = payload["state"]["candidates"][0]
+            ref = next((c["resource_ref"] for c in self.pool if c["event_text"] == view["text"] and (c.get("original_title") or "") == view["title"]), "")
             out[k] = {"noul": self.per_ref.get(ref, self.default)}
         return {"answers": out, "model": self.model}
 
 
 def _run(source_text, hyps, pool, per_ref, thr=0.45):
-    surface_judge.set_transport_for_tests(_Transport(per_ref))
+    surface_judge.set_transport_for_tests(_Transport(per_ref, pool))
     sj = surface_judge.SurfaceJudge(
         "typesafe_jev", _policy(same_occurrence_threshold=thr))
     src = {"message_id": "m", "revision": 1, "text": source_text,
@@ -357,16 +359,16 @@ class TestContractIdentity:
         assert p["positive_threshold"] == 0.80
         assert p["facts_rules_version"] == "facts-v2"
         assert p["judge_schema_version"] == "surface-judge-v2"
-        assert p["prompt_prepare"] == "surface_prepare_v3"
-        assert p["policy_revision"] == 3
+        assert p["prompt_prepare"] == "surface_prepare_v4"
+        assert p["policy_revision"] == 4
 
     def test_fingerprint_sensitive_to_every_contract_field(self):
         base = C.contract_fingerprint(_policy(), "surface:typesafe_jev:jev-latest")
         for k, v in (("same_occurrence_threshold", 0.45),
                      ("delivery_same_occurrence_threshold", 0.95),
                      ("facts_rules_version", "facts-v3"),
-                     ("prompt_prepare", "surface_prepare_v4"),
-                     ("risk_threshold", 0.05), ("policy_revision", 4),
+                     ("prompt_prepare", "surface_prepare_v5"),
+                     ("risk_threshold", 0.05), ("policy_revision", 5),
                      ("judge_schema_version", "surface-judge-v3")):
             assert C.contract_fingerprint(_policy(**{k: v}),
                                           "surface:typesafe_jev:jev-latest") != base, k

@@ -208,13 +208,13 @@ class TestSurfaceJudge:
         assert decision.resolved_model == "jev-fake-1"
         # v2 有限问句：prepare 只问 same_occurrence 一问，无自由生成
         q = transport.calls[0]["questions"]
-        assert list(q) == ["memory:m1@1_same_occurrence"]
+        assert list(q) == ["c0_same_occurrence"]
         assert all(v["type"] == "noul" for v in q.values())
         # 请求显式携带 requested 模型别名（与 recall 路径一致）
         assert transport.calls[0]["model"] == sj.model_id
         # 出站候选带完整正文（judge 必须读全文）
         state = transport.calls[0]["state"]
-        assert state["candidates"][0]["event_text"] == "事件正文"
+        assert state["candidates"][0]["text"] == "事件正文"
         assert "mood" not in state["candidates"][0]
         assert "our_words" not in state["candidates"][0]
         # 事实由代码给出：7.9 ↔ memory_date 2026-07-09 PASS，证据 PASS
@@ -316,7 +316,7 @@ class TestSurfaceJudge:
         assert not a.strictly_confirmed()
         # delivery 两问：same_occurrence + relevant_now
         assert sorted(calls[0]["questions"]) == sorted([
-            "memory:m1@1_same_occurrence", "memory:m1@1_relevant_now"])
+            "c0_same_occurrence", "c0_relevant_now"])
 
     def test_request_byte_gate(self):
         transport = FakeTransport(0.99)

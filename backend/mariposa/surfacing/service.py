@@ -185,7 +185,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
 
     src_dict = {"message_id": source["message_id"],
                 "revision": source["revision"], "text": source["text"],
-                "body_hash": source["body_hash"]}
+                "body_hash": source["body_hash"], "occurred_at": source.get("occurred_at")}
     groups = judge_mod.partition_hypotheses(src_dict, hypotheses)
     now_year = _source_year(source)
     text = source["text"]
