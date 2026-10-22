@@ -1,5 +1,7 @@
 # mariposa
 
+- 2026-10-21（代码 `a014216` 已验证，未部署）：模型结果字段白名单；保留操作引用、并发版本与业务正文，修复发生日期被置信度置空。[输出合同与边界](docs/contracts/model-output-whitelist.md)。
+
 - 2026-10-21（代码 `5981508` 已验证，待部署）：新窗按需工具定义，旧窗持久冻结；记忆模型视图去除内部元数据。[实现与验证](docs/reports/DEFERRED_TOOLS_MODEL_VIEW_20261021.md)。
 
 - 2026-10-21（代码 `6267df3` 已验证，待部署）：JEV v4语义输入去重，注入仅date/text，后台引用支持同桶全量；OR通道准入限制保留。[实现、验证与状态纠正](docs/reports/JEV_SEMANTIC_PROJECTION_20261021.md)。
