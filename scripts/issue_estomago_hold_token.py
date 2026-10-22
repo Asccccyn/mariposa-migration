@@ -47,13 +47,26 @@ from mariposa import db, identity, schema  # noqa: E402
 # MANUAL_HANDOFF_JUDGE_SWITCH_V1（2026-10-08 WP2）：+memory.recall.page
 # （关闭模式冻结结果集续页——memory_recall_next 工具的消费面）；
 # maintenance.recall_policy.* 不进本清单（模型无政策读写权）。
-ALLOWLIST = ["memory.hold", "memory.hold.status", "memory.mood.vocab",
-             "bootstrap.get", "bootstrap.next",
-             "memory.recall.start", "memory.recall.refine",
-             "memory.recall.page",
-             "memory.recall.status", "memory.recall.accept",
-             "memory.recall.reject",
-             "episode.apply", "episode.get", "episode.list"]
+# 2026-10-22 同步（她报障 I_FORBIDDEN 后清点）：est jiaming 主体全部调用面。
+# 白名单更新走 scripts/update_estomago_builtin_allowlist.py（热更新已发绑定，
+# 不必重发币）；本清单保持与该脚本一致，供下次发币用。
+ALLOWLIST = [
+    "memory.hold", "memory.hold.status", "memory.mood.vocab",
+    "bootstrap.get", "bootstrap.next",
+    "memory.recall.start", "memory.recall.refine", "memory.recall.page",
+    "memory.recall.status", "memory.recall.accept", "memory.recall.reject",
+    "episode.apply", "episode.get", "episode.list",
+    "i.get", "i.versions.read", "i.items.list", "i.item.get",
+    "i.item.create", "i.item.revise", "i.item.restore", "i.item.history",
+    "plan.create", "plan.update", "plan.list", "plan.get",
+    "memory.relations.correct", "memory.relations.link", "memory.relations.list",
+    "relations.corrections.list", "source.binding.correct",
+    "memory.our_words.source.correct",
+    "memory.recollections.append", "memory.recollections.list", "memory.recollections.revise",
+    "memory.open", "memory.get", "memory.update", "memory.view.confirm",
+    "memory.keep.revoke", "memory.keeps.list",
+    "memory.deletion.decide", "memory.deletion.get", "memory.deletion.list",
+]
 ENTRY_SOURCE = "estomago_builtin"
 
 
