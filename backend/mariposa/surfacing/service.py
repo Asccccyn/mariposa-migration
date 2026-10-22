@@ -623,5 +623,11 @@ def detail_read(principal, a: dict) -> dict:
     page = memory_detail.read_page(principal, a)
     if a.get("view") == "model":
         from ..memory.model_projection import detail_view
-        return detail_view(page)
+        # Resolve history labels from the complete private snapshot, not just
+        # this page. Never expose bare supersedes IDs or mislabel an old version.
+        snap = store.load_detail_snapshot_by_ref(str(a["detail_ref"])) or {}
+        historical = {r.get("supersedes") for p in snap.get("pages", [])
+                      for r in (p.get("sections", {}).get("recollections") or [])
+                      if isinstance(r, dict) and r.get("supersedes")}
+        return detail_view(page, historical)
     return page

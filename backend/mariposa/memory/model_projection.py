@@ -1,63 +1,103 @@
-"""Model-facing views only. Formal records, receipts and full owner views stay intact."""
+"""Minimal reading JSON; full records and operational receipts stay server-side."""
 from copy import deepcopy
+from ..errors import Forbidden
+
+
+def present(value):
+    return value is not None and value != '' and value != [] and value != {}
+
 
 def pick(value, keys):
-    return {k: deepcopy(value[k]) for k in keys if k in value}
+    return {k: deepcopy(value[k]) for k in keys if k in value and present(value[k])}
 
-FRAGMENT = ('partial_item', 'item_index', 'text_range')
+
+def mood_view(value):
+    if not isinstance(value, dict) or not (value.get('text') or value.get('tags')):
+        return None
+    return pick(value, ('text', 'tags', 'author'))
+
 
 def memory_view(value):
-    out = pick(value, ('memory_id', 'original_title', 'text', 'categories',
-                       'view_receipt', 'content_gap', 'text_range'))
-    out['date'] = value.get('memory_date') if value.get('date_confidence') == 'exact' else None
-    if value.get('occurred_start') or value.get('occurred_end'):
-        out['date_range'] = [value.get('occurred_start'), value.get('occurred_end')]
-    if value.get('mood'):
-        out['mood'] = pick(value['mood'], ('text', 'tags', 'author', 'mood_written_at'))
+    date = value.get('memory_date')
+    if not isinstance(date, str) or not date.strip():
+        raise Forbidden('记忆缺少发生日期；不使用写入时间代替', code='MEMORY_DATE_MISSING')
+    out = pick(value, ('memory_id',))
+    out['date'] = date
+    if value.get('original_title'): out['title'] = value['original_title']
+    out.update(pick(value, ('text', 'categories', 'view_receipt', 'content_gap')))
+    mood = mood_view(value.get('mood'))
+    if mood: out['mood'] = mood
     return out
+
 
 def hold_view(receipt):
     if not receipt.get('memory_id'):
         raise ValueError('hold receipt has no memory identity')
     return {'saved': True, 'memory_id': receipt['memory_id']}
 
-def section_view(name, value):
+
+def fragment(value, out):
+    if value.get('partial_item'):
+        out.update(pick(value, ('partial_item', 'item_index', 'text_range')))
+    return out
+
+
+def section_view(name, value, historical_ids=()):
     if value is None: return None
-    if name == 'memory': return memory_view(value)
     if name == 'categories': return deepcopy(value)
     if name == 'mood':
-        if isinstance(value, list): return [pick(v, ('text','tags','author','mood_written_at')+FRAGMENT) for v in value]
-        return pick(value, ('text','tags','author','mood_written_at')+FRAGMENT)
+        if isinstance(value, list):
+            return [fragment(v, mood_view(v) or {}) for v in value if v.get('text') or v.get('tags')]
+        return mood_view(value)
     if name == 'our_words':
-        return [pick(v, ('word_id','speaker','text','source_ref')+FRAGMENT) for v in value]
+        return [fragment(v, pick(v, ('speaker', 'text'))) for v in value
+                if isinstance(v.get('text'), str) and v['text'].strip()]
+    if name == 'source': return None  # explicit source reads remain available; no duplicate quotes
     if name == 'recollections':
-        # These identify edits/history; do not make superseded text look current.
-        return [pick(v, ('recollection_id','author','text','supersedes','written_at')+FRAGMENT) for v in value]
+        result = []
+        for v in value:
+            if not isinstance(v.get('text'), str) or not v['text'].strip(): continue
+            item = fragment(v, pick(v, ('author', 'text')))
+            if v.get('recollection_id') in historical_ids: item['historical'] = True
+            result.append(item)
+        return result
     if name == 'keeps':
         def one(v):
-            result = pick(v, ('active_keepers',)+FRAGMENT)
-            if 'marks' in v:
-                result['marks'] = [pick(mark, ('mark_id','owner','scope','revoked_at')) for mark in v['marks']]
-            return result
-        return [one(v) for v in value] if isinstance(value,list) else one(value)
-    if name == 'source':
-        out=[]
-        for v in value:
-            item=pick(v, ('binding_id','state')+FRAGMENT)
-            if 'messages' in v:
-                item['messages'] = None if v['messages'] is None else [pick(m, ('message_id','speaker','occurred_date','text','attachments')) for m in v['messages']]
-            out.append(item)
-        return out
+            owners = v.get('active_keepers') or [m['owner'] for m in v.get('marks', [])
+                      if m.get('owner') and not m.get('revoked_at')]
+            return {'by': list(dict.fromkeys(owners))} if owners else None
+        return [one(v) for v in value if one(v)] if isinstance(value, list) else one(value)
     if name == 'relations':
-        out=[]
+        result = []
         for v in value:
-            item=pick(v, ('relation_id','domain','direction','confidence')+FRAGMENT)
-            if 'other' in v: item['other']=deepcopy(v['other']) # target identity needed for navigation/correction
-            out.append(item)
-        return out
-    raise ValueError('unknown memory section')
+            if v.get('domain') in ('source_binding', 'word_source'): continue
+            item = pick(v, ('domain', 'direction', 'confidence'))
+            other = v.get('other')
+            if isinstance(other, dict):
+                target = pick(other, ('type', 'memory_id', 'plan_id', 'id', 'title', 'original_title', 'name'))
+                if target: item['target'] = target
+            if item: result.append(fragment(v, item))
+        return result
+    return None
 
-def detail_view(page):
-    out=pick(page, ('memory_id','complete','next_cursor','section_status','changed_since_surface'))
-    out['sections']={name:section_view(name,value) for name,value in page.get('sections',{}).items()}
+
+def detail_view(page, historical_ids=()):
+    sections = page.get('sections', {})
+    out = pick(page, ('memory_id',))
+    statuses = page.get('section_status', {})
+    if 'memory' in sections and sections['memory'] is not None:
+        memory = sections['memory']
+        out.update(memory_view(memory))
+        span = memory.get('text_range')
+        if span and (span[0] > 0 or statuses.get('memory') == 'partial'):
+            out['text_range'] = deepcopy(span)
+    for name, value in sections.items():
+        if name == 'memory': continue
+        projected = section_view(name, value, historical_ids)
+        if present(projected): out[name] = projected
+    issues = {k:v for k,v in statuses.items() if k != 'source' and v in ('partial','unavailable')}
+    if issues: out['incomplete_sections'] = issues
+    if page.get('complete') is False: out['complete'] = False
+    if page.get('next_cursor'): out['next_cursor'] = page['next_cursor']
+    if page.get('changed_since_surface') is True: out['changed_since_surface'] = True
     return out
