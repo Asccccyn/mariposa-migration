@@ -1,5 +1,7 @@
 # mariposa
 
+- 2026-10-21（已部署）：三级记忆读取，首层保留一个 memory_ref，普通详情不带来源纠错元数据；关系/原文可直接读取，沿用同桶原文链路。代码 E `9a81173` / M `5c8a816`，数据与缓存指纹不变。[验收、兼容与回滚](docs/reports/THREE_TIER_MEMORY_PRODUCTION_20261021.md)。
+
 - 2026-10-21（已部署并核验）：模型输出白名单、MCP 默认单份 JSON、按需工具和发生日期修复；固定版本在 Projects 发布目录运行。历史/缓存指纹一致，零 OR 验证请求。[部署、路径故障恢复与回滚](docs/reports/MODEL_OUTPUT_PRODUCTION_20261021.md)。
 
 - 2026-10-21（代码 `7dca70b`，82 项专项测试通过，未部署）：MCP 默认只返回一份完整 JSON；结构化 single / 旧 dual 显式协商，保留召回引用与状态操作链。[合同与兼容说明](docs/contracts/model-output-whitelist.md)。
