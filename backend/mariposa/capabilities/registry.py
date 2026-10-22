@@ -510,7 +510,8 @@ def _hold_full(principal: Principal, a: dict) -> dict:
     # 旧手工 hold（两者皆无）行为不变；只带 selections 不带 op 拒绝
     op = a.get("operation_id")
     sels = a.get("source_selections")
-    if op is None and sels is None:
+    events = a.get("event_source_ranges")
+    if op is None and sels is None and events is None:
         return memory.hold(
             principal,
             text=str(a.get("text", "")),
@@ -564,6 +565,13 @@ def _hold_full(principal: Principal, a: dict) -> dict:
                 start_char_offset=frag.get("start_char_offset"),
                 end_char_offset=frag.get("end_char_offset"),
                 conn=conn, members=members)
+            binding_ids.append(b["binding_id"])
+        for span in (events or []):
+            span = source_binding.resolve_event_selection(conn, span)
+            members = span["members"]
+            b = source_binding.bind(principal.principal_id, out["memory_id"],
+                span["conversation_id"], members[0]["source_message_id"], members[-1]["source_message_id"],
+                conn=conn, members=members, event_scope=True)
             binding_ids.append(b["binding_id"])
         return {"operation_id": op, "memory_id": out["memory_id"],
                 "version": out["version"], "binding_ids": binding_ids,
@@ -1044,7 +1052,7 @@ def _source_range_open(principal: Principal, a: dict) -> dict:
         str(a.get("end_message_id", "")),
         start_char_offset=a.get("start_char_offset"),
         end_char_offset=a.get("end_char_offset"),
-        include_content=bool(a.get("include_content")))
+        include_content=bool(a.get("include_content")), for_binding=bool(a.get("for_binding")))
 
 
 def _source_conversation_get(principal: Principal, a: dict) -> dict:
@@ -1067,14 +1075,21 @@ def _source_conversations_list(principal: Principal, a: dict) -> dict:
 
 
 def _source_bind(principal: Principal, a: dict) -> dict:
-    return source_binding.bind(
-        principal.principal_id, str(a.get("memory_id", "")),
-        str(a.get("conversation_id", "")),
-        str(a.get("start_message_id", "")),
-        str(a.get("end_message_id", "")),
-        start_char_offset=a.get("start_char_offset"),
-        end_char_offset=a.get("end_char_offset"),
-        confidence=str(a.get("confidence", "exact")))
+    def apply(conn):
+        selection = source_binding.resolve_event_selection(conn, a) if a.get('event_scope') else a
+        return source_binding.bind(
+            principal.principal_id, str(a.get("memory_id", "")),
+            str(a.get("conversation_id", "")),
+            str(a.get("start_message_id", "")), str(a.get("end_message_id", "")),
+            start_char_offset=a.get("start_char_offset"), end_char_offset=a.get("end_char_offset"),
+            confidence=str(a.get("confidence", "exact")), conn=conn,
+            members=selection.get('members'), event_scope=a.get('event_scope', False))
+    with db.formal() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            result = apply(conn); conn.execute('COMMIT'); return result
+        except Exception:
+            conn.execute('ROLLBACK'); raise
 
 
 def _source_bindings(principal: Principal, a: dict) -> dict:
@@ -1085,8 +1100,8 @@ def _source_bindings(principal: Principal, a: dict) -> dict:
 
 
 def _source_memory_open(principal: Principal, a: dict) -> dict:
-    return source_binding.open_for_memory(
-        str(a.get("memory_id", "")),
+    return source_binding.open_page(
+        str(a.get("memory_id", "")), cursor=a.get("cursor"),
         include_content=bool(a.get("include_content")))
 
 

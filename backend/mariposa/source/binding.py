@@ -25,7 +25,7 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
          start_char_offset: int | None = None,
          end_char_offset: int | None = None,
          confidence: str = "exact", conn=None,
-         members: list[dict] | None = None) -> dict:
+         members: list[dict] | None = None, event_scope: bool = False) -> dict:
     """把 memory 绑定到一个连续消息区间（可重复调用叠加多个 range）。
 
     conn 由纠错改绑传入：插入与纠错同事务（§5.4 原子操作）。
@@ -57,6 +57,24 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
             resolved = source_scope.validate_range(
                 conversation_id, start_id, end_id,
                 start_char_offset, end_char_offset, conn=conn)
+        if event_scope:
+            if members is None or start_char_offset is not None or end_char_offset is not None:
+                raise Forbidden("事件原文必须提供完整消息 manifest，不接受引语偏移", code="EVENT_SOURCE_MANIFEST_REQUIRED")
+            for requested, row in ((start_message_id, resolved["start"]), (end_message_id, resolved["end"])):
+                if requested not in (row["id"], row["provider_message_id"]):
+                    raise Forbidden("起止消息与 manifest 不一致", code="EVENT_SOURCE_BOUNDARY_MISMATCH")
+            if [m["source_message_id"] for m in members] != resolved["path_order"]:
+                raise Forbidden("事件原文 manifest 必须覆盖整个已核实路径", code="EVENT_SOURCE_INCOMPLETE")
+            occupied = {r[0] for r in conn.execute(
+                "SELECT bm.source_message_id FROM memory_source_binding_members bm "
+                "JOIN memory_source_spans es ON es.binding_id=bm.binding_id "
+                "JOIN memory_source_bindings b ON b.binding_id=es.binding_id WHERE b.memory_id=?", (memory_id,))}
+            if occupied.intersection(m['source_message_id'] for m in members):
+                raise Forbidden("Event ranges overlap within this memory", code="EVENT_SOURCE_OVERLAP")
+            for m in members:
+                row = conn.execute("SELECT live_superseded FROM source_messages WHERE id=?", (m["source_message_id"],)).fetchone()
+                if row["live_superseded"]:
+                    raise Forbidden("事件原文包含旧修订", code="EVENT_SOURCE_CHANGED")
         binding_id = f"msb_{_uuid.uuid4().hex[:12]}"
         conn.execute(
             "INSERT INTO memory_source_bindings(binding_id, memory_id,"
@@ -82,6 +100,8 @@ def bind(principal_id: str, memory_id: str, conversation_id: str,
                      start_char_offset if ordinal == 0 else None,
                      end_char_offset if ordinal == len(members) - 1
                      else None))
+        if event_scope:
+            conn.execute("INSERT INTO memory_source_spans(binding_id) VALUES(?)", (binding_id,))
         audit.record(conn, "source.bound", principal_id,
                      resource_id=memory_id,
                      payload={"binding_id": binding_id,
@@ -375,37 +395,48 @@ def correct(principal_id: str, binding_id: str,
                         "——缺新绑定的替换即撤销", code="INVALID_ARGUMENT")
 
     def _do(conn):
+        replacement_args = replacement
         row = conn.execute(
             "SELECT * FROM memory_source_bindings WHERE binding_id=?",
             (binding_id,)).fetchone()
         if row is None:
             raise NotFound("source binding not found",
                            binding_id=binding_id)
+        event = conn.execute("SELECT binding_version FROM memory_source_spans WHERE binding_id=?", (binding_id,)).fetchone()
+        manifest = [dict(m) for m in conn.execute("SELECT * FROM memory_source_binding_members WHERE binding_id=? ORDER BY ordinal", (binding_id,))]
+        conn.execute("DELETE FROM memory_source_binding_members WHERE binding_id=?", (binding_id,))
         # CB-006：先删旧实例再建新实例——bind 命中同键旧绑定时复用再
         # 删除会把替换变成撤销，回执指向不存在的 replacement
         conn.execute(
             "DELETE FROM memory_source_bindings WHERE binding_id=?",
             (binding_id,))
         replacement_id = None
-        if replacement:
+        if replacement_args:
+            if event and replacement_args.get('members') is None:
+                selected = resolve_event_selection(conn, replacement_args)
+                replacement_args = {**replacement_args, 'members': selected['members']}
             rep = bind(principal_id,
-                       replacement.get("memory_id", row["memory_id"]),
-                       replacement.get("conversation_id", ""),
-                       replacement.get("start_message_id", ""),
-                       replacement.get("end_message_id", ""),
-                       start_char_offset=replacement.get(
+                       replacement_args.get("memory_id", row["memory_id"]),
+                       replacement_args.get("conversation_id", ""),
+                       replacement_args.get("start_message_id", ""),
+                       replacement_args.get("end_message_id", ""),
+                       start_char_offset=replacement_args.get(
                            "start_char_offset"),
-                       end_char_offset=replacement.get(
+                       end_char_offset=replacement_args.get(
                            "end_char_offset"),
-                       confidence=replacement.get("confidence", "exact"),
-                       conn=conn)
+                       confidence=replacement_args.get("confidence", "exact"),
+                       conn=conn, members=replacement_args.get("members"), event_scope=event is not None)
             replacement_id = rep.get("binding_id", binding_id)
+            if event:
+                conn.execute("UPDATE memory_source_spans SET binding_version=? WHERE binding_id=?", (event["binding_version"] + 1, replacement_id))
         cid = record_correction(
             conn, domain="source_binding",
             original_instance_id=binding_id,
             endpoint_a=row["memory_id"],
             endpoint_b=row["conversation_id"],
             original_meta={
+                "members": manifest,
+                "event_binding_version": event["binding_version"] if event else None,
                 "start_message_id": row["start_message_id"],
                 "end_message_id": row["end_message_id"],
                 "start_char_offset": row["start_char_offset"],
@@ -435,7 +466,7 @@ def correct(principal_id: str, binding_id: str,
             raise
 
 
-def open_for_memory(memory_id: str, include_content: bool = False) -> dict:
+def open_legacy_for_memory(memory_id: str, include_content: bool = False) -> dict:
     """按绑定动态读取原文区间（裁切片段；版本漂移显式标注不静默）。"""
     ranges = ranges_of(memory_id)
     if not ranges:
@@ -536,3 +567,106 @@ def reindex_search_docs(batch: int = 500) -> dict:
             conn.execute("ROLLBACK")
             raise
     return {"rebuilt_docs": n, "batch_size": batch}
+
+
+def open_for_memory(memory_id: str, include_content: bool = False) -> dict:
+    """Only explicitly selected event evidence counts as the bucket original.
+
+    Legacy quote bindings remain stored for provenance/correction. They cannot
+    establish event boundaries. Every event member is revision-pinned.
+    """
+    with db.formal() as conn:
+        ranges = conn.execute(
+            "SELECT b.* FROM memory_source_bindings b JOIN memory_source_spans s "
+            "ON s.binding_id=b.binding_id WHERE b.memory_id=? ORDER BY b.created_at,b.binding_id",
+            (memory_id,)).fetchall()
+        selections = [(dict(r), [dict(m) for m in conn.execute(
+            "SELECT source_message_id,content_hash FROM memory_source_binding_members "
+            "WHERE binding_id=? ORDER BY ordinal", (r["binding_id"],))]) for r in ranges]
+    opened = []
+    for r, members in selections:
+        try:
+            selection = {"conversation_id": r["conversation_id"], "members": members}
+            payload = open_selection(selection, include_content=include_content)
+            # Check all pinned revisions, including middle messages, before delivery.
+            if payload["drifted_members"]:
+                raise Forbidden("事件证据已修订，需要重新核实选区", code="EVENT_SOURCE_CHANGED")
+            with db.formal() as conn:
+                path = _validate_members(conn, r["conversation_id"], members, None, None)
+                if path["path_order"] != [m["source_message_id"] for m in members]:
+                    raise Forbidden("事件路径已变化", code="EVENT_SOURCE_CHANGED")
+            opened.append({"binding_id": r["binding_id"], "conversation": payload["conversation"],
+                           "messages": payload["members"]})
+        except (Forbidden, NotFound) as exc:
+            opened.append({"binding_id": r["binding_id"], "status": "unresolvable", "reason": exc.code})
+    return {"memory_id": memory_id, "ranges": opened, "source": "source_layer",
+            **({"event_source_status": "unbound"} if not selections else {})}
+
+
+def open_page(memory_id: str, cursor: str | None = None, include_content: bool = False) -> dict:
+    """Bounded direct-source reading, using the same exact-text paginator as detail.
+
+    Cursor pins the complete source snapshot; edits cannot mix two pages.
+    No provider call or persistent cache mutation is involved.
+    """
+    import hashlib
+    import json
+    from ..memory.detail import _paginate
+    opened = open_for_memory(memory_id, include_content=include_content)
+    digest = hashlib.sha256(json.dumps(opened, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    index = 0
+    if cursor is not None:
+        try:
+            version, pinned, raw_index = cursor.split(':')
+            index = int(raw_index)
+        except (ValueError, AttributeError):
+            raise Forbidden('无效原文续页引用', code='EVENT_SOURCE_CURSOR_INVALID')
+        if version != 'es1' or pinned != digest:
+            raise Forbidden('原文选区或修订已变化，请从头读取', code='EVENT_SOURCE_SNAPSHOT_STALE')
+    items = []
+    metadata = []
+    for ri, rng in enumerate(opened['ranges']):
+        meta = {k:v for k,v in rng.items() if k != 'messages'}
+        metadata.append(meta)
+        if not rng.get('messages'):
+            items.append({'range_index': ri})
+        for msg in rng.get('messages', []):
+            items.append({**msg, 'range_index': ri})
+    pages = _paginate({'source': items}, {'source': 'complete'}, max(2048, config.SURFACE_DETAIL_PAGE_BYTES - 1024))
+    if index < 0 or index >= len(pages):
+        raise Forbidden('无效原文页', code='EVENT_SOURCE_CURSOR_INVALID')
+    ranges = []
+    for item in pages[index]['sections'].get('source', []):
+        ri = item['range_index']
+        if not ranges or ranges[-1]['binding_id'] != metadata[ri]['binding_id']:
+            ranges.append({**metadata[ri], 'messages': []})
+        if 'message_id' in item:
+            ranges[-1]['messages'].append({k:v for k,v in item.items() if k != 'range_index'})
+    return {**{k:v for k,v in opened.items() if k != 'ranges'}, 'ranges': ranges,
+            **({'next_cursor': f'es1:{digest}:{index + 1}'} if index + 1 < len(pages) else {})}
+
+
+def event_revision(conversation_id, members):
+    import hashlib, json
+    return hashlib.sha256(json.dumps([conversation_id, members], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def resolve_event_selection(conn, selection):
+    """Resolve a historical reader's endpoints only against its observed revision.
+
+    Live hosts already hold immutable source receipts and supply a full manifest.
+    Neither path guesses semantic boundaries or substitutes a newer revision.
+    """
+    if selection.get('members') is not None:
+        return selection
+    revision = selection.get('source_revision')
+    if not isinstance(revision, str) or not revision:
+        raise Forbidden('事件绑定需要刚才读取的原文版本', code='EVENT_SOURCE_REVISION_REQUIRED')
+    resolved = source_scope.validate_range(selection['conversation_id'], selection['start_message_id'], selection['end_message_id'], conn=conn)
+    members = []
+    for sid in resolved['path_order']:
+        row = conn.execute('SELECT content_hash FROM source_messages WHERE id=?', (sid,)).fetchone()
+        members.append({'source_message_id': sid, 'content_hash': row['content_hash']})
+    if event_revision(resolved['conversation']['id'], members) != revision:
+        raise Forbidden('原文已变化，需要重新阅读并选区', code='EVENT_SOURCE_CHANGED')
+    return {'conversation_id': resolved['conversation']['id'], 'members': members}

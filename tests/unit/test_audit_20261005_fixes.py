@@ -332,7 +332,7 @@ class TestOpenForMemoryToleratesDrift:
         sb.bind("jiaming", h["memory_id"], "ok-c2", "ok-c2-m1", "ok-c2-m2")
         # 把条数上限压到 2：三消息区间 → SOURCE_RANGE_TOO_LARGE
         monkeypatch.setattr(config, "SOURCE_RANGE_MAX_MESSAGES", 2)
-        out = sb.open_for_memory(h["memory_id"], include_content=False)
+        out = sb.open_legacy_for_memory(h["memory_id"], include_content=False)
         statuses = [r.get("status") for r in out["ranges"]]
         assert "unresolvable" in statuses, "漂移绑定降级为 unresolvable"
         # 另一条绑定照常打开（不被连坐）：成功条目展开 payload 字段

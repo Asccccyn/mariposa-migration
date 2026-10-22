@@ -109,32 +109,13 @@ def build_sections(memory_id: str, conn) -> tuple[dict, dict, dict]:
         lambda: our_words.list_for(memory_id), "our_words")
     sections["our_words"] = words
 
+    # Legacy full-detail calls use the same event evidence semantics as layer 3.
+    from .detail_sections import build as build_selected
     def _source():
-        out = []
-        for r in src_binding.ranges_of(memory_id):
-            entry = {k: r.get(k) for k in (
-                "binding_id", "conversation_id", "start_message_id",
-                "end_message_id", "start_char_offset", "end_char_offset",
-                "version", "created_at") if k in r}
-            try:
-                opened = src_query.open_range(
-                    r["conversation_id"], r["start_message_id"],
-                    r["end_message_id"],
-                    r.get("start_char_offset"), r.get("end_char_offset"),
-                    include_content=True)
-                entry["messages"] = opened.get("messages")
-                entry["state"] = "complete"
-            except Exception:
-                # 未绑定原文与读取失败是不同状态：失败标 unavailable
-                entry["messages"] = None
-                entry["state"] = "unavailable"
-            out.append(entry)
-        return out
-
+        return build_selected(memory_id, 'source', conn)[0]['source']
     src, status["source"] = _safe(_source, "source")
     sections["source"] = src
-    if src is not None and any(e.get("state") == "unavailable"
-                               for e in src):
+    if src is not None and any(e.get("unavailable") for e in src):
         status["source"] = "partial"
 
     recl, status["recollections"] = _safe(

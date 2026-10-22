@@ -375,7 +375,7 @@ class TestOffsetSemantics:
     def test_half_open_slice(self, ten):
         binding.bind("jiaming", "mem-fx", "c-off", "off-1", "off-1",
                      start_char_offset=2, end_char_offset=4)
-        opened = binding.open_for_memory("mem-fx")
+        opened = binding.open_legacy_for_memory("mem-fx")
         m = opened["ranges"][0]["messages"][0]
         assert m["text"] == "23"
         assert m.get("excerpt", "23") == "23"
@@ -409,7 +409,7 @@ class TestOffsetSemantics:
                       " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
         binding.bind("jiaming", "mem-emoji", "c-emoji", "e-1", "e-1",
                      start_char_offset=1, end_char_offset=3)
-        opened = binding.open_for_memory("mem-emoji")
+        opened = binding.open_legacy_for_memory("mem-emoji")
         # Python code point 口径：😀=1 个 code point → [1,3) = "ab"
         assert opened["ranges"][0]["messages"][0]["text"] == "ab"
 
@@ -676,5 +676,5 @@ class TestBindingVersionPinned:
         # 后续导入新版本不改变绑定读取（当前版本行不更新）
         imp(write(tmp_path, "bp2.json",
                   [conv("c-bp", [msg("bp-1", text="改后的版本正文")])]))
-        opened = binding.open_for_memory("mem-bp")
+        opened = binding.open_legacy_for_memory("mem-bp")
         assert opened["ranges"][0]["messages"][0]["text"] == "版本正文"

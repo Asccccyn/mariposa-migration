@@ -1241,6 +1241,14 @@ CREATE INDEX idx_categories_category ON memory_categories(category);
 -- 删列无损。
 ALTER TABLE memory_our_words DROP COLUMN expression_kind;
 """),
+    (40, """
+-- Event evidence is an explicit semantic selection, never inferred from quotes.
+-- Reuse bindings and member manifests; do not duplicate raw messages.
+CREATE TABLE memory_source_spans (
+  binding_id TEXT PRIMARY KEY REFERENCES memory_source_bindings(binding_id) ON DELETE CASCADE,
+  binding_version INTEGER NOT NULL DEFAULT 1 CHECK(binding_version > 0)
+);
+"""),
 ]
 
 

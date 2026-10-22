@@ -229,7 +229,7 @@ def open_range(conversation_id: str, start_message_id: str,
                end_message_id: str, start_char_offset: int | None = None,
                end_char_offset: int | None = None,
                include_content: bool = False,
-               include_unpublished: bool = False) -> dict:
+               include_unpublished: bool = False, for_binding: bool = False) -> dict:
     """打开语义绑定指向的连续消息区间（parent 路径验证 + 半开区间裁切）。"""
     resolved = validate_range(conversation_id, start_message_id,
                               end_message_id, start_char_offset,
@@ -321,7 +321,15 @@ def open_range(conversation_id: str, start_message_id: str,
             item = _item(r)
             item["sibling_branch"] = True  # 区间内但不在 parent 路径（SL-06）
             off_path.append(item)
+    source_revision = {}
+    if for_binding:
+        if start_char_offset is not None or end_char_offset is not None:
+            raise Forbidden('事件选区必须是完整消息', code='EVENT_SOURCE_MANIFEST_REQUIRED')
+        from .binding import event_revision
+        members = [{'source_message_id': sid, 'content_hash': by_id[sid]['content_hash']} for sid in path_row_ids]
+        source_revision = {'source_revision': event_revision(resolved['conversation']['id'], members)}
     return {
+        **source_revision,
         # RA-009：sqlite Row 统一转 dict（MCP json.dumps 不再 500）
         "conversation": dict(resolved["conversation"])
         if not isinstance(resolved["conversation"], dict)

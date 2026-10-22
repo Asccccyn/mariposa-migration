@@ -1512,3 +1512,26 @@ def validate(capability: str, arguments: dict) -> None:
             raise Forbidden(f"field {k} does not match schema",
                             code="SCHEMA_VIOLATION", capability=capability,
                             field=k)
+
+
+# Event ranges share the existing source member contract, but never quote offsets.
+from copy import deepcopy as _copy_schema
+_event_range = _copy_schema(V2_INPUT_SCHEMAS["memory.hold"]["properties"]["source_selections"])
+for _key in ("start_char_offset", "end_char_offset"):
+    _event_range["items"]["properties"].pop(_key, None)
+V2_INPUT_SCHEMAS["memory.hold"]["properties"]["event_source_ranges"] = _event_range
+V2_INPUT_SCHEMAS["source.binding.bind"]["properties"].update({
+    "event_scope": {"type": "boolean"},
+    "members": _copy_schema(_event_range["items"]["properties"]["members"]),
+})
+
+V2_INPUT_SCHEMAS["source.memory.open"]["properties"]["cursor"] = {"type": "string", "minLength": 1}
+
+V2_INPUT_SCHEMAS['source.range.open']['properties']['for_binding'] = {'type': 'boolean'}
+V2_INPUT_SCHEMAS['source.binding.bind']['properties']['source_revision'] = {'type': 'string', 'minLength': 64, 'maxLength': 64}
+_event_endpoints = {'type': 'object', 'additionalProperties': False,
+    'required': ['conversation_id', 'start_message_id', 'end_message_id', 'source_revision'],
+    'properties': {key: {'type': 'string', 'minLength': 1} for key in
+                   ['conversation_id', 'start_message_id', 'end_message_id', 'source_revision']}}
+V2_INPUT_SCHEMAS['memory.hold']['properties']['event_source_ranges']['items'] = {
+    'anyOf': [_copy_schema(_event_range['items']), _event_endpoints]}

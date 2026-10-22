@@ -15,6 +15,8 @@ def build(memory_id, section, conn):
         # The exact service used by the existing bucket's “view original” button.
         opened = source_binding.open_for_memory(memory_id)
         values = {'source': []}
+        if opened.get('event_source_status') == 'unbound':
+            values['source'].append({'unavailable': True, 'reason': 'EVENT_SOURCE_UNBOUND'})
         for index, rng in enumerate(opened['ranges']):
             common = {'range_index': index}
             conversation = rng.get('conversation') or {}
@@ -75,6 +77,7 @@ def fingerprint(conn, memory_id, section):
     queries = []
     if section == 'source':
         queries = [
+            ('SELECT s.* FROM memory_source_spans s JOIN memory_source_bindings b ON b.binding_id=s.binding_id WHERE b.memory_id=? ORDER BY s.binding_id', (memory_id,)),
             ('SELECT * FROM memory_source_bindings WHERE memory_id=? ORDER BY binding_id', (memory_id,)),
             ('SELECT id, content_hash, text, published, live_superseded FROM source_messages WHERE conversation_id IN (SELECT conversation_id FROM memory_source_bindings WHERE memory_id=?) ORDER BY id', (memory_id,)),
         ]

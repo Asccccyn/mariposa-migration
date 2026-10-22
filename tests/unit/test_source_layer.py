@@ -530,7 +530,7 @@ class TestBinding:
     def test_bind_and_open(self, bound):
         b = binding.bind("jiaming", "mem-t1", "conv-std-001", "std-m1", "std-m2")
         assert b["binding_id"].startswith("msb_")
-        opened = binding.open_for_memory("mem-t1")
+        opened = binding.open_legacy_for_memory("mem-t1")
         assert len(opened["ranges"]) == 1
         msgs = opened["ranges"][0]["messages"]
         assert [m["text"] for m in msgs] == \
@@ -541,13 +541,13 @@ class TestBinding:
         binding.bind("jiaming", "mem-t1", "conv-edge-001", "edge-m1", "edge-m2")
         ranges = binding.ranges_of("mem-t1")
         assert len(ranges) == 2
-        opened = binding.open_for_memory("mem-t1")
+        opened = binding.open_legacy_for_memory("mem-t1")
         assert len(opened["ranges"]) == 2
 
     def test_char_offsets(self, bound):
         b = binding.bind("jiaming", "mem-t1", "conv-std-001", "std-m1",
                          "std-m1", start_char_offset=0, end_char_offset=5)
-        opened = binding.open_for_memory("mem-t1")
+        opened = binding.open_legacy_for_memory("mem-t1")
         m = opened["ranges"][0]["messages"][0]
         assert m["char_offset_start"] == 0 and m["char_offset_end"] == 5
         assert m["text"] == "这周末想去"  # 半开区间 [0,5) 裁切（5 个码点）

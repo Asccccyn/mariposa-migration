@@ -248,6 +248,7 @@ def hold_domain_payload(a: dict) -> dict:
         "occurred_start": a.get("occurred_start"),
         "occurred_end": a.get("occurred_end"),
         "source_selections": a.get("source_selections"),
+        **({"event_source_ranges": a["event_source_ranges"]} if "event_source_ranges" in a else {}),
     }
 
 

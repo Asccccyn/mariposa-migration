@@ -76,9 +76,11 @@ def _seed(tmp_path, actors):
         [{"uuid": "dconv", "name": "Detail source", "chat_messages": msgs}]),
         encoding="utf-8")
     assert importer.import_file("jiaming", str(path))["status"] == "completed"
+    with db.formal() as conn:
+        members = [dict(r) for r in conn.execute("SELECT id AS source_message_id,content_hash FROM source_messages WHERE provider_message_id IN ('dm0','dm1','dm2','dm3') ORDER BY provider_message_id")]
     registry.invoke(jm, "source.binding.bind", {
         "memory_id": mem_id, "conversation_id": "dconv",
-        "start_message_id": "dm0", "end_message_id": "dm3"}, None)
+        "start_message_id": "dm0", "end_message_id": "dm3", "event_scope": True, "members": members}, None)
     return mem_id, other
 
 

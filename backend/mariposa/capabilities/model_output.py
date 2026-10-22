@@ -235,7 +235,9 @@ def project(capability, v, arguments):
 def source_message(v):
     # Native message/conversation IDs address source.message.get/source.range.open.
     out = pick(v, ('message_id', 'conversation_id', 'provider', 'speaker', 'occurred_date', 'text',
-                   'attachments', 'thinking_text', 'thinking_summaries', 'memories_referencing', 'char_offset_start', 'char_offset_end'))
+                   'partial_item', 'item_index', 'text_range', 'attachments', 'thinking_text', 'thinking_summaries', 'memories_referencing', 'char_offset_start', 'char_offset_end'))
+    if v.get('created_at'):
+        out['occurred_at'] = v['created_at']; out.pop('occurred_date', None)
     if not v.get('speaker'):
         out.update(pick(v, ('normalized_sender',)))
     if v.get('excerpt') and v['excerpt'] not in (v.get('text') or ''):
@@ -255,7 +257,7 @@ def source_message(v):
 
 
 def source_result(v, arguments):
-    out = {}
+    out = pick(v, ('event_source_status', 'next_cursor', 'source_revision'))
     if 'message' in v:
         out['message'] = source_message(v['message'])
     for key in ('hits', 'messages', 'members', 'context_before', 'context_after', 'off_path_messages'):

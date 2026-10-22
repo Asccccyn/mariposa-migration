@@ -92,8 +92,10 @@ def test_full_http_flow(c):
         "start_message_id": "std-m1", "end_message_id": "std-m2"})
     assert r.status_code == 200
     r = call(c, "jiaming", "source.memory.open", {"memory_id": mem_id})
-    ranges = r.json()["data"]["ranges"]
-    assert len(ranges) == 1 and len(ranges[0]["messages"]) == 2
+    assert r.json()["data"]["ranges"] == []
+    assert r.json()["data"]["event_source_status"] == 'unbound'
+    # Existing bindings are provenance, not proof that the event scope was selected.
+
 
 
 def test_worker_forbidden_on_source_search(c):
