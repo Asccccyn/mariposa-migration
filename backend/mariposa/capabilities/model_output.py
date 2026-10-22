@@ -193,7 +193,7 @@ def project(capability, v, arguments):
                 x['memory'] = memory_card(card['memory'])
                 x['memory'].pop('memory_id', None)
             for name, fields in (
-                ('words', ('word_id', 'speaker', 'text', 'source_gap')),
+                ('words', ('speaker', 'text', 'source_gap')),
                 ('recollections', ('recollection_id', 'author', 'text', 'supersedes')),
                 ('relations', ('relation_id', 'direction', 'other_memory', 'relation_type', 'custom_label', 'reverse_label'))):
                 if card.get(name):

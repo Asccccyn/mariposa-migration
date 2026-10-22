@@ -50,11 +50,12 @@ def test_plain_bucket_only_has_second_layer_and_native_id_still_opens_source(act
         args['cursor']=page['next_cursor']
     else:pytest.fail('pagination did not terminate')
     assert text==LONG_TEXT and words
-    assert all(set(w)=={'word_id','speaker','text'} for w in words)
+    assert all(set(w)=={'speaker','text'} for w in words)
     original=registry.invoke(actors['jiaming'],'source.memory.open',{'memory_id':page['memory_id']},None)['data']
     assert [m['text'] for r in original['ranges'] for m in r['messages']]==[f'原文消息{i}' for i in range(4)]
     # Correction state is fetched through the existing explicit word lookup.
-    word=registry.invoke(actors['jiaming'],'memory.words.get',{'word_id':words[0]['word_id']},None)['data']
+    listed=registry.invoke(actors['jiaming'],'memory.our_words.list',{'memory_id':mid},None)['data']['words']
+    word=registry.invoke(actors['jiaming'],'memory.words.get',{'word_id':listed[0]['word_id']},None)['data']
     assert word['source_binding_version']==0
 
 

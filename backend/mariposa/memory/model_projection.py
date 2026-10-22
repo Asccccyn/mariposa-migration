@@ -50,7 +50,7 @@ def section_view(name, value, historical_ids=()):
             return [fragment(v, mood_view(v) or {}) for v in value if v.get('text') or v.get('tags')]
         return mood_view(value)
     if name == 'our_words':
-        return [fragment(v, pick(v, ('word_id', 'speaker', 'text', 'source_gap'))) for v in value
+        return [fragment(v, pick(v, ('speaker', 'text', 'source_gap'))) for v in value
                 if isinstance(v.get('text'), str) and v['text'].strip()]
     if name == 'source':
         # Explicit third-layer results are flat messages, not internal binding rows.

@@ -6,7 +6,7 @@ an explicit section and view=model. Each section has its own runtime snapshot ke
 cursor prefix, without changing storage schema or the public detail_ref.
 
 - memory: complete event text, occurrence date, title, categories, mood and our_words.
-  Ordinary words contain word_id/speaker/text and a source_gap only when meaningful.
+  Ordinary words contain speaker/text and a source_gap only when meaningful. Editing first enumerates memory.our_words.list(memory_id) to obtain word_id on demand.
   Source refs and correction versions are not repeated here or in model-facing word
   lists/cards. HTTP canonical records and database columns are unchanged.
 - relations: genuine relationship type/direction and directly related content, with

@@ -58,7 +58,7 @@ def test_normal_read_omits_envelope_empty_fields_and_duplicate_source_relations(
              'recollections':[],'keeps':{'active_keepers':[],'marks':[]},
              'relations':[{'domain':'source_binding','relation_id':'b'},{'domain':'word_source','relation_id':'w1'}]}}
     before=copy.deepcopy(source)
-    assert detail_view(source)=={'memory_id':'00453','title':'标题','date':'2026-10-19','text':'完整正文','our_words':[{'word_id':'w1','speaker':'jiaming','text':'！！ '}]}
+    assert detail_view(source)=={'memory_id':'00453','title':'标题','date':'2026-10-19','text':'完整正文','our_words':[{'speaker':'jiaming','text':'！！ '}]}
     assert source==before
 
 

@@ -29,7 +29,7 @@ def test_full_business_relation_survives_detail_projection():
 def test_operable_marks_and_quotes_are_not_lost():
     result=detail_view({'sections':{'our_words':[{'word_id':'w','speaker':'jiaming','text':'！！','source_ref':'s','source_binding_version':0}],
         'keeps':{'marks':[{'mark_id':'k','owner':'jiaming','created_at':'now'}]}}})
-    assert result['our_words'][0]=={'word_id':'w','speaker':'jiaming','text':'！！'}
+    assert result['our_words'][0]=={'speaker':'jiaming','text':'！！'}
     assert result['keeps']['marks']==[{'mark_id':'k','owner':'jiaming'}]
 
 
