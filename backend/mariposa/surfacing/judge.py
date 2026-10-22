@@ -90,7 +90,7 @@ def _candidate_view(c: dict) -> dict:
     结构化元数据（structured_metadata 许可）。"""
     return {
         "id": 0,
-        "date": c.get("memory_date") if c.get("date_confidence") == "exact" else None,
+        "date": c.get("memory_date"),
         "title": c.get("original_title") or "",
         "text": c.get("event_text") or "",
     }
@@ -336,9 +336,13 @@ class SurfaceJudge:
                     else contract.PREPARE_QUESTIONS)
         questions = {f"c0_{sfx}": _noul_question(sfx)
                      for sfx in suffixes}
-        fingerprints = {k: fp for k in questions}
         state = _state(source_input, recent_dialogue, hypotheses,
                        target_input, candidates=[cand])
+        # Cache the actual semantic evidence, including the occurrence date. Old
+        # entries remain stored but cannot answer a different projected request.
+        semantic_hash = hashlib.sha256(json.dumps(state, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        fingerprints = {k: f"{fp}:{semantic_hash}" for k in questions}
         # P2：事实先行——硬冲突候选不花一次付费问句（她 1020：冲突候选不送 JEV）
         f = facts.hard_checks(cand, constraints or {})
         pre = contract.admit(contract.SEM_UNKNOWN, f)

@@ -22,7 +22,7 @@ def test_model_detail_keeps_full_text_pagination_and_relations_without_internal_
         sections.update(page)
         if 'text' in page:
             m=page;all_text+=m['text'];assert 'text_range' in m
-            assert not {'version','held_at','creation_mode','visibility','instruction_authority'} & set(m)
+            assert not {'held_at','creation_mode','visibility','instruction_authority'} & set(m)
         if not page.get('next_cursor'):break
         args['cursor']=page['next_cursor']
     else:raise AssertionError('pagination did not finish')
@@ -36,7 +36,7 @@ def test_open_retains_receipt_needed_for_explicit_confirmation(actors):
     args={'original_title':'合成记忆','categories':['daily'],'text':'正文','creation_mode':'contemporaneous'}
     held=registry.invoke(actors['jiaming'],'memory.hold',args,None)['data']
     opened=registry.invoke(actors['jiaming'],'memory.open',{'memory_id':held['memory_id'],'view':'model'},None)['data']
-    assert opened['view_receipt'];assert not {'version','held_at','receipt_content_version','representation_version'} & set(opened)
+    assert opened['version']==1;assert opened['view_receipt'];assert not {'held_at','receipt_content_version','representation_version'} & set(opened)
     registry.invoke(actors['jiaming'],'memory.view.confirm',{'memory_id':held['memory_id'],'receipt_id':opened['view_receipt']},None)
 
 def test_projection_does_not_mutate_records_or_hide_missing_content():
@@ -58,15 +58,13 @@ def test_normal_read_omits_envelope_empty_fields_and_duplicate_source_relations(
              'recollections':[],'keeps':{'active_keepers':[],'marks':[]},
              'relations':[{'domain':'source_binding','relation_id':'b'},{'domain':'word_source','relation_id':'w1'}]}}
     before=copy.deepcopy(source)
-    assert detail_view(source)=={'memory_id':'00453','title':'标题','date':'2026-10-19','text':'完整正文','our_words':[{'speaker':'jiaming','text':'！！ '}]}
+    assert detail_view(source)=={'memory_id':'00453','title':'标题','date':'2026-10-19','text':'完整正文','our_words':[{'word_id':'w1','source_ref':'s1','speaker':'jiaming','text':'！！ '}]}
     assert source==before
 
 
-def test_missing_event_date_is_an_error_not_replaced_by_written_time():
-    import pytest
-    from mariposa.errors import Forbidden
-    with pytest.raises(Forbidden) as e:memory_view({'memory_id':'m','text':'正文','held_at':'2026-10-19'})
-    assert e.value.code=='MEMORY_DATE_MISSING'
+def test_missing_event_date_retains_body_and_never_uses_written_time():
+    out=memory_view({'memory_id':'m','text':'正文','held_at':'2026-10-19'})
+    assert out=={'memory_id':'m','date_unknown':True,'text':'正文'}
 
 
 def test_meaningful_relations_and_incomplete_state_are_not_hidden():
@@ -75,6 +73,6 @@ def test_meaningful_relations_and_incomplete_state_are_not_hidden():
           'sections':{'relations':[{'relation_id':'private','domain':'memory_relation','direction':'out','confidence':'exact','other':{'type':'memory','memory_id':'m2','original_title':'另一个事件'}}]}}
     result=detail_view(page)
     assert result['relations'][0]['target']['memory_id']=='m2'
-    assert 'relation_id' not in result['relations'][0]
+    assert result['relations'][0]['relation_id'] == 'private'  # correction target
     assert result['incomplete_sections']=={'mood':'unavailable'}
     assert result['next_cursor']=='p2' and result['complete'] is False

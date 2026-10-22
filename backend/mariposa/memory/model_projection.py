@@ -1,6 +1,5 @@
 """Minimal reading JSON; full records and operational receipts stay server-side."""
 from copy import deepcopy
-from ..errors import Forbidden
 
 
 def present(value):
@@ -19,10 +18,11 @@ def mood_view(value):
 
 def memory_view(value):
     date = value.get('memory_date')
-    if not isinstance(date, str) or not date.strip():
-        raise Forbidden('记忆缺少发生日期；不使用写入时间代替', code='MEMORY_DATE_MISSING')
-    out = pick(value, ('memory_id',))
-    out['date'] = date
+    out = pick(value, ('memory_id', 'version'))
+    if isinstance(date, str) and date.strip():
+        out['date'] = date
+    else:
+        out['date_unknown'] = True
     if value.get('original_title'): out['title'] = value['original_title']
     out.update(pick(value, ('text', 'categories', 'view_receipt', 'content_gap')))
     mood = mood_view(value.get('mood'))
@@ -50,14 +50,14 @@ def section_view(name, value, historical_ids=()):
             return [fragment(v, mood_view(v) or {}) for v in value if v.get('text') or v.get('tags')]
         return mood_view(value)
     if name == 'our_words':
-        return [fragment(v, pick(v, ('speaker', 'text'))) for v in value
+        return [fragment(v, pick(v, ('word_id', 'speaker', 'text', 'source_ref', 'source_binding_version'))) for v in value
                 if isinstance(v.get('text'), str) and v['text'].strip()]
     if name == 'source': return None  # explicit source reads remain available; no duplicate quotes
     if name == 'recollections':
         result = []
         for v in value:
             if not isinstance(v.get('text'), str) or not v['text'].strip(): continue
-            item = fragment(v, pick(v, ('author', 'text')))
+            item = fragment(v, pick(v, ('recollection_id', 'author', 'text')))
             if v.get('recollection_id') in historical_ids: item['historical'] = True
             result.append(item)
         return result
@@ -65,16 +65,29 @@ def section_view(name, value, historical_ids=()):
         def one(v):
             owners = v.get('active_keepers') or [m['owner'] for m in v.get('marks', [])
                       if m.get('owner') and not m.get('revoked_at')]
-            return {'by': list(dict.fromkeys(owners))} if owners else None
+            marks = [pick(m, ('mark_id', 'owner', 'recollection_id')) for m in v.get('marks', []) if not m.get('revoked_at')]
+            return {'marks': marks} if marks else ({'by': list(dict.fromkeys(owners))} if owners else None)
         return [one(v) for v in value if one(v)] if isinstance(value, list) else one(value)
     if name == 'relations':
         result = []
         for v in value:
             if v.get('domain') in ('source_binding', 'word_source'): continue
-            item = pick(v, ('domain', 'direction', 'confidence'))
+            item = pick(v, ('relation_id', 'domain', 'direction', 'relation_type', 'custom_label', 'reverse_label'))
+            if v.get('confidence') not in (None, 'exact', 'human', 'confirmed'):
+                item['uncertain'] = True
             other = v.get('other')
             if isinstance(other, dict):
-                target = pick(other, ('type', 'memory_id', 'plan_id', 'id', 'title', 'original_title', 'name'))
+                target = {}
+                for key in ('memory_id', 'plan_id', 'item_id', 'word_id', 'id'):
+                    if other.get(key):
+                        target[key] = other[key]
+                        break
+                if other.get('item_id') and 'revision' in other:
+                    target['revision'] = other['revision']
+                for key in ('title', 'original_title', 'name'):
+                    if other.get(key):
+                        target['title'] = other[key]
+                        break
                 if target: item['target'] = target
             if item: result.append(fragment(v, item))
         return result

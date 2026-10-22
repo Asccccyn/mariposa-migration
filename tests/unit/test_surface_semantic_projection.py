@@ -45,3 +45,20 @@ def test_short_question_ids_still_bind_cache_to_real_candidate():
     assert all(set(c['questions'])=={'c0_same_occurrence'} for c in calls)
     assert j.judge_prepare(src,[],_HYP,[_pool_entry('memory:a')]).assessments[0].strictly_confirmed()
     assert len(calls)==2
+
+
+def test_changed_semantic_date_does_not_reuse_previous_judgement():
+    calls=[]
+    def transport(payload):
+        calls.append(payload)
+        return {'model':'jev-test','answers':{k:{'type':'noul','noul':0.95} for k in payload['questions']}}
+    judge.set_transport_for_tests(transport)
+    j=judge.SurfaceJudge('typesafe_jev',surface_policy_snapshot())
+    src={'text':'那件事呢','body_hash':'h'}
+    c=_pool_entry('memory:date-test')
+    c['memory_date']='2026-07-09'; c['date_confidence']='unknown'
+    j.judge_prepare(src,[],_HYP,[c])
+    c['memory_date']='2026-07-10'
+    j.judge_prepare(src,[],_HYP,[c])
+    assert len(calls)==2
+    assert [x['state']['candidates'][0]['date'] for x in calls]==['2026-07-09','2026-07-10']

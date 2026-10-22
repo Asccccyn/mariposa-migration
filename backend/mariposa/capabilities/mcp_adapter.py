@@ -331,6 +331,8 @@ async def handle(request: Request, profile: str) -> JSONResponse:
             # 默认瘦身投影——白名单外能力在 invoke 内静默回退 legacy，
             # 显式 output_profile=legacy 永远可退回全量
             import asyncio as _asyncio
+            if canonical == "memory.detail.read":
+                arguments = {**arguments, "view": "model"}
             out = await _asyncio.to_thread(
                 registry.invoke, principal, canonical, arguments,
                 params.get("_client_idempotency_key"),
@@ -346,6 +348,10 @@ async def handle(request: Request, profile: str) -> JSONResponse:
                                  separators=(",", ":"))}],
                 "isError": True,
             })
+        # After execution/idempotency: stored receipts and HTTP responses stay canonical.
+        from .model_output import project as model_output
+        if isinstance(out, dict) and isinstance(out.get("data"), dict):
+            out = {"ok": out["ok"], "data": model_output(canonical, out["data"], arguments)}
         # 出站信封协商（1005B）+WP-06 6C（D-4 选 A，2026-10-09）：
         # 分页类响应（结果集含 pagination 字段——off 模式全集分页）
         # **默认 content_envelope="single"**（content 仅摘要行，正文走
