@@ -257,6 +257,10 @@ def _paginate(sections: dict, status: dict, page_bytes: int) -> list[dict]:
     def put(section: str, payload, st: str):
         nonlocal used
         cost = _json_bytes({section: payload}) + len(section) + 8
+        # A final short fragment must not be overwritten by the next batch of
+        # the same section, even when both fit in the remaining byte budget.
+        if section in cur["sections"]:
+            flush()
         if used + cost > budget and cur["sections"]:
             flush()
         cur["sections"][section] = payload
@@ -264,6 +268,8 @@ def _paginate(sections: dict, status: dict, page_bytes: int) -> list[dict]:
         used += cost
 
     for name in SECTION_ORDER:
+        if name not in sections:
+            continue
         payload = sections.get(name)
         st = status.get(name, "unavailable")
         if st == "unavailable":
@@ -296,9 +302,29 @@ def _paginate(sections: dict, status: dict, page_bytes: int) -> list[dict]:
 
 # --------------------------------------------------------------- 读页
 
+def snapshot_key(detail_ref, section=None):
+    return f"{detail_ref}/{section}" if section else detail_ref
+
+
 def read_page(principal, a: dict) -> dict:
     detail_ref = str(a["detail_ref"])
     cursor = a.get("cursor")
+    section = a.get("section")
+    key = snapshot_key(detail_ref, section)
+
+    def read_version(conn, memory_id):
+        if section:
+            row = conn.execute("SELECT current_version_no FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
+            if row is None: raise NotFound("memory not found", memory_id=memory_id)
+            return str(row["current_version_no"])
+        return str(mem_service.get(conn, memory_id).get("version") or "")
+
+    def read_vector(conn, memory_id):
+        vector = domain_version_vector(conn, memory_id)
+        if section in ("source", "relations"):
+            from .detail_sections import fingerprint
+            vector["_detail_section"] = fingerprint(conn, memory_id, section)
+        return vector
 
     item = _find_surfaced_item(detail_ref)
     if item is None:
@@ -307,14 +333,13 @@ def read_page(principal, a: dict) -> dict:
 
     with db.formal() as conn:
         try:
-            current = mem_service.get(conn, memory_id)
+            current_version = read_version(conn, memory_id)
         except NotFound:
             raise SurfaceBlocked("DETAIL_NOT_FOUND", memory_id=memory_id)
-        current_version = str(current.get("version") or "")
-        current_vector = domain_version_vector(conn, memory_id)
+        current_vector = read_vector(conn, memory_id)
 
     if cursor:
-        snap = surface_store.load_detail_snapshot_by_ref(detail_ref)
+        snap = surface_store.load_detail_snapshot_by_ref(key)
         if snap is None:
             raise SurfaceBlocked("DETAIL_REF_NOT_SEEN")
         if (snap["memory_version"] != current_version
@@ -322,11 +347,17 @@ def read_page(principal, a: dict) -> dict:
             # 分页中途桶变更：不把新旧数据拼成一份全量（docs/05）
             raise SurfaceBlocked("DETAIL_SNAPSHOT_STALE")
         try:
-            index = int(str(cursor).lstrip("p"))
+            if section:
+                prefix = f"{section}:p"
+                if not str(cursor).startswith(prefix): raise ValueError("wrong section cursor")
+                index = int(str(cursor)[len(prefix):])
+            else:
+                index = int(str(cursor).lstrip("p"))
         except ValueError:
             raise SurfaceBlocked("DETAIL_REF_NOT_SEEN", detail="bad_cursor")
         if not 0 <= index < len(snap["pages"]):
             raise SurfaceBlocked("DETAIL_REF_NOT_SEEN", detail="bad_cursor")
+        snap["_section"] = section
         return _page_view(snap, index)
 
     # 首读=当前最新 + 明示与浮现版本差异（不偷偷给旧正文冒充当前）。
@@ -334,29 +365,34 @@ def read_page(principal, a: dict) -> dict:
     attempts = 0
     while True:
         with db.formal() as conn:
-            sections, status, vector = build_sections(memory_id, conn)
+            if section:
+                from .detail_sections import build
+                sections, status = build(memory_id, section, conn)
+                vector = read_vector(conn, memory_id)
+            else:
+                sections, status, vector = build_sections(memory_id, conn)
         if vector == current_vector:
             break
         attempts += 1
         if attempts > int(config.SURFACE_MAX_SNAPSHOT_RETRIES):
             raise SurfaceBlocked("DETAIL_SNAPSHOT_UNSTABLE")
         with db.formal() as conn:
-            current_version = str(mem_service.get(
-                conn, memory_id).get("version") or "")
-            current_vector = domain_version_vector(conn, memory_id)
+            current_version = read_version(conn, memory_id)
+            current_vector = read_vector(conn, memory_id)
 
     memory_version = str((sections.get("memory") or {}).get("version")
                          or current_version)
     changed = (memory_version != str(item.get("memory_version") or "")
-               or vector != (item.get("domain_versions") or {}))
+               or {k: v for k, v in vector.items() if k != "_detail_section"} != (item.get("domain_versions") or {}))
     pages = _paginate(sections, status, config.SURFACE_DETAIL_PAGE_BYTES)
     snapshot_id = surface_store.save_detail_snapshot(
-        detail_ref, memory_id, memory_version, vector,
+        key, memory_id, memory_version, vector,
         item.get("conversation_scope") or "", principal.principal_id,
         str(item.get("memory_version") or ""), changed, pages,
         status, len(pages) == 1)
-    snap = surface_store.load_detail_snapshot_by_ref(detail_ref) or {}
+    snap = surface_store.load_detail_snapshot_by_ref(key) or {}
     snap["snapshot_id"] = snapshot_id
+    snap["_section"] = section
     return _page_view(snap, 0)
 
 
@@ -380,7 +416,7 @@ def _page_view(snap: dict, index: int):
         "page_index": index,
         "sections": sections,
         "complete": bool(last),
-        "next_cursor": None if last else f"p{index + 1}",
+        "next_cursor": None if last else (f"{snap['_section']}:p{index + 1}" if snap.get("_section") else f"p{index + 1}"),
         "section_status": page_status,
         "changed_since_surface": bool(snap.get("changed_since_surface")),
     }

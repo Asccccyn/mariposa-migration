@@ -50,9 +50,14 @@ def section_view(name, value, historical_ids=()):
             return [fragment(v, mood_view(v) or {}) for v in value if v.get('text') or v.get('tags')]
         return mood_view(value)
     if name == 'our_words':
-        return [fragment(v, pick(v, ('word_id', 'speaker', 'text', 'source_ref', 'source_binding_version'))) for v in value
+        return [fragment(v, pick(v, ('word_id', 'speaker', 'text', 'source_gap'))) for v in value
                 if isinstance(v.get('text'), str) and v['text'].strip()]
-    if name == 'source': return None  # explicit source reads remain available; no duplicate quotes
+    if name == 'source':
+        # Explicit third-layer results are flat messages, not internal binding rows.
+        return [fragment(v, pick(v, ('range_index', 'conversation_id', 'conversation_title',
+            'message_id', 'speaker', 'normalized_sender', 'occurred_date', 'occurred_at', 'text', 'attachments',
+            'char_offset_start', 'char_offset_end', 'changed', 'unavailable', 'reason')))
+            for v in value if 'message_id' in v or v.get('unavailable')]
     if name == 'recollections':
         result = []
         for v in value:
@@ -72,7 +77,7 @@ def section_view(name, value, historical_ids=()):
         result = []
         for v in value:
             if v.get('domain') in ('source_binding', 'word_source'): continue
-            item = pick(v, ('relation_id', 'domain', 'direction', 'relation_type', 'custom_label', 'reverse_label'))
+            item = pick(v, ('relation_id', 'domain', 'direction', 'relation_type', 'custom_label', 'reverse_label', 'text', 'unavailable'))
             if v.get('confidence') not in (None, 'exact', 'human', 'confirmed'):
                 item['uncertain'] = True
             other = v.get('other')
@@ -88,6 +93,7 @@ def section_view(name, value, historical_ids=()):
                     if other.get(key):
                         target['title'] = other[key]
                         break
+                if other.get('date'): target['date'] = other['date']
                 if target: item['target'] = target
             if item: result.append(fragment(v, item))
         return result
@@ -108,7 +114,7 @@ def detail_view(page, historical_ids=()):
         if name == 'memory': continue
         projected = section_view(name, value, historical_ids)
         if present(projected): out[name] = projected
-    issues = {k:v for k,v in statuses.items() if k != 'source' and v in ('partial','unavailable')}
+    issues = {k:v for k,v in statuses.items() if (k != 'source' or any('message_id' in x or x.get('unavailable') for x in sections.get('source') or [])) and v in ('partial','unavailable')}
     if issues: out['incomplete_sections'] = issues
     if page.get('complete') is False: out['complete'] = False
     if page.get('next_cursor'): out['next_cursor'] = page['next_cursor']

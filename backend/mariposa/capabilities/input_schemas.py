@@ -1453,6 +1453,7 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "additionalProperties": False,
         "properties": {
             "view": {"enum": ["full", "model"]},
+            "section": {"enum": ["memory", "relations", "source"]},
             "detail_ref": {"type": "string", "minLength": 1},
             "cursor": {"type": "string", "minLength": 1}},
     },

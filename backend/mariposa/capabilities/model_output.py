@@ -77,8 +77,17 @@ def _project_core(capability, v, arguments):
         return pick(v, ('word_id', 'removed_source_ref', 'new_source_ref', 'source_binding_version', 'action'))
     if capability == 'memory.recollections.list':
         return {'recollections': [pick(x, ('recollection_id', 'author', 'text', 'supersedes')) for x in v.get('recollections', [])]}
+    if capability == 'memory.words.get':
+        # Explicit per-word lookup supplies correction CAS state on demand.
+        out = pick(v, ('word_id', 'memory_id', 'speaker', 'text', 'source_binding_version', 'expression_kind'))
+        out['source_ref'] = v.get('source_ref')
+        for evidence in v.get('evidence', []):
+            if evidence.get('evidence_kind') == 'word_unverified': out['source_state'] = 'unverified'
+            state = (evidence.get('structured_value') or {}).get('source_ref_state')
+            if state: out['source_state'] = state
+        return out
     if capability == 'memory.our_words.list':
-        return {'words': [pick(x, ('word_id', 'speaker', 'text', 'source_ref', 'source_binding_version')) for x in v.get('words', [])]}
+        return {'words': [pick(x, ('word_id', 'speaker', 'text', 'source_gap')) for x in v.get('words', [])]}
     if capability == 'memory.view.confirm':
         return {'confirmed': True, **pick(v, ('memory_id', 'receipt_id'))}
     if capability == 'memory.keep.revoke':
@@ -184,9 +193,8 @@ def project(capability, v, arguments):
                 x['memory'] = memory_card(card['memory'])
                 x['memory'].pop('memory_id', None)
             for name, fields in (
-                ('words', ('word_id', 'speaker', 'text', 'source_ref', 'source_binding_version')),
+                ('words', ('word_id', 'speaker', 'text', 'source_gap')),
                 ('recollections', ('recollection_id', 'author', 'text', 'supersedes')),
-                ('bindings', ('binding_id', 'conversation_id', 'start_message_id', 'end_message_id')),
                 ('relations', ('relation_id', 'direction', 'other_memory', 'relation_type', 'custom_label', 'reverse_label'))):
                 if card.get(name):
                     x[name] = [pick(y, fields) for y in card[name]]
@@ -258,7 +266,7 @@ def source_result(v, arguments):
         out['ranges'] = []
         for r in v['ranges']:
             value = source_result(r, arguments)
-            value.update(pick(r, ('binding_id', 'status', 'reason')))
+            value.update(pick(r, ('status', 'reason')))
             if r.get('version_drift'):
                 value['changed'] = True
             if r.get('confidence') not in (None, 'exact', 'human', 'confirmed'):
