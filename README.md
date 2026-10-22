@@ -1,5 +1,7 @@
 # mariposa
 
+- 2026-10-21（已部署并核验）：模型输出白名单、MCP 默认单份 JSON、按需工具和发生日期修复；固定版本在 Projects 发布目录运行。历史/缓存指纹一致，零 OR 验证请求。[部署、路径故障恢复与回滚](docs/reports/MODEL_OUTPUT_PRODUCTION_20261021.md)。
+
 - 2026-10-21（代码 `7dca70b`，82 项专项测试通过，未部署）：MCP 默认只返回一份完整 JSON；结构化 single / 旧 dual 显式协商，保留召回引用与状态操作链。[合同与兼容说明](docs/contracts/model-output-whitelist.md)。
 
 - 2026-10-21（代码 `a014216` + 缓存兼容 `4541656` 已验证，未部署）：模型结果字段白名单；保留操作引用、并发版本与业务正文，修复发生日期被置信度置空。[输出合同与边界](docs/contracts/model-output-whitelist.md)。
