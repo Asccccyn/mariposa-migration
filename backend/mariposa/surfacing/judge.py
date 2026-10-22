@@ -338,11 +338,13 @@ class SurfaceJudge:
                      for sfx in suffixes}
         state = _state(source_input, recent_dialogue, hypotheses,
                        target_input, candidates=[cand])
-        # Cache the actual semantic evidence, including the occurrence date. Old
-        # entries remain stored but cannot answer a different projected request.
-        semantic_hash = hashlib.sha256(json.dumps(state, ensure_ascii=False,
-            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-        fingerprints = {k: f"{fp}:{semantic_hash}" for k in questions}
+        # Keep existing cache identities when the wire evidence is unchanged.
+        # Only dates formerly suppressed by the confidence gate change semantics.
+        if cand.get("memory_date") and cand.get("date_confidence") != "exact":
+            semantic_hash = hashlib.sha256(json.dumps(state, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            fp = f"{fp}:occurrence-date:{semantic_hash}"
+        fingerprints = {k: fp for k in questions}
         # P2：事实先行——硬冲突候选不花一次付费问句（她 1020：冲突候选不送 JEV）
         f = facts.hard_checks(cand, constraints or {})
         pre = contract.admit(contract.SEM_UNKNOWN, f)

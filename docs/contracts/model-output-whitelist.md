@@ -37,5 +37,6 @@ payload smaller; consuming both channels remains the responsibility of an extern
 estomago uses HTTP, unwraps once, then projects at its final model boundary.
 
 JEV retains the questions/type/instructions/noul protocol. Candidate occurrence dates no longer
-require exact confidence. Cache keys bind the actual semantic state so a newly supplied date
-cannot reuse a previous no-date judgment. Existing cache data is not deleted.
+require exact confidence. Only evidence whose date was previously suppressed uses a semantic-state cache suffix,
+so it cannot reuse a previous no-date judgment. Unchanged evidence retains its existing
+cache identity. Existing cache data is not deleted.

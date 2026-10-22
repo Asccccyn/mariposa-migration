@@ -62,3 +62,16 @@ def test_changed_semantic_date_does_not_reuse_previous_judgement():
     j.judge_prepare(src,[],_HYP,[c])
     assert len(calls)==2
     assert [x['state']['candidates'][0]['date'] for x in calls]==['2026-07-09','2026-07-10']
+
+
+def test_unchanged_exact_date_preserves_existing_cache_identity():
+    j=judge.SurfaceJudge('typesafe_jev',surface_policy_snapshot())
+    captured=[]
+    def ask(phase, task_prompt, state, questions, fingerprints, context_hash):
+        captured.extend(fingerprints.values())
+        return {key:0.95 for key in questions}
+    j._ask=ask
+    c=_pool_entry('memory:exact-date-cache')
+    c['memory_date']='2026-07-09';c['date_confidence']='exact'
+    j.judge_prepare({'text':'那件事呢','body_hash':'h'},[],_HYP,[c])
+    assert captured and set(captured)=={f"{c['resource_ref']}@{c.get('content_version') or ''}"}
