@@ -32,9 +32,24 @@ Maintenance/service-only receipts and surfacing prepare/validate/check retain th
 contracts. They are not injected as recollection prose. Unsupported capability families retain
 separate contracts; this is not a claim that every registered administrative endpoint was rewritten.
 
-MCP text/structured dual-channel compatibility is unchanged. Projection makes the business
-payload smaller; consuming both channels remains the responsibility of an external MCP client.
-estomago uses HTTP, unwraps once, then projects at its final model boundary.
+MCP defaults to one complete JSON payload in content[0].text, for both ordinary and
+paged results. structuredContent is absent by default. JSON remains JSON; this is
+transport selection, not a conversion to Markdown. Explicit params._meta.content_envelope
+supports text (default), single (structured payload plus a text pointer), and dual
+(legacy two-copy compatibility). Structured-only clients must request single; legacy
+clients requiring both channels can request dual and must choose one model input.
+Initialization advertises this contract. Error results use the negotiated channel too.
+Invalid negotiation is rejected before business execution. HTTP and stored receipts do
+not change. estomago uses HTTP, unwraps once, then projects at its final model boundary.
+
+Protocol reference: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/server/tools.mdx
+Tools declare no outputSchema requiring structuredContent. External-client end-to-end
+interoperability has not been claimed: tests cover text-only, structured-only (opt-in),
+and combined consumers against the actual local JSON-RPC wire.
+
+MCP workflow checks also preserve a canonical candidate_ref when a recall card originally
+supplies only resource_ref. recall.status has its own contract (session ID/state/revision,
+candidate states, exceptional invalidation), rather than being treated as a search page.
 
 JEV retains the questions/type/instructions/noul protocol. Candidate occurrence dates no longer
 require exact confidence. Only evidence whose date was previously suppressed uses a semantic-state cache suffix,

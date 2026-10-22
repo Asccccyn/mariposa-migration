@@ -226,7 +226,7 @@ def test_mcp_discovery_and_call_use_runtime_page_schema(conversation):
         assert response.status_code == 200, response.text
         result = response.json()['result']
         assert result['isError'] is False
-        data = result['structuredContent']['data']
-        assert (data['page'], data['total'], data['page_size'],
-                data['total_pages']) == (3, 8, 2, 4)
-        assert _ids(data) == expected[4:6]
+        data = json.loads(result['content'][0]['text'])['data']
+        assert [m['text'] for m in data['messages']] == ['Message ' + ident for ident in expected[4:6]]
+        assert data['next_after_cursor']
+        assert all(m['message_id'] for m in data['messages'])

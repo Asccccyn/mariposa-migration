@@ -4,6 +4,7 @@ Chat 与 CC 同一套 MCP / HTTP 领域契约；相同主体相同请求得到�
 """
 from __future__ import annotations
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -25,15 +26,14 @@ def rpc(c, method, pid, params=None, msg_id=1):
 
 
 def tool(c, pid, name, arguments, msg_id=1):
-    # 1005B-R3：MCP 面默认 compact_v1（瘦身投影）。本文件断言的是
-    # "HTTP 与 MCP 同一 handler 同语义"——显式 legacy 对齐出站口径，
-    # 投影默认行为由 test_root_cause_20261006 专门锁定
+    # HTTP stays canonical; MCP projects business data. Envelope defaults to text,
+    # while semantic parity is compared after applying the same model projection.
     arguments = {**arguments, "output_profile": "legacy"}
     r = rpc(c, "tools/call", pid, {"name": name, "arguments": arguments},
             msg_id)
     result = r.json()["result"]
     assert result["isError"] is False, result
-    return result["structuredContent"]["data"]
+    return json.loads(result["content"][0]["text"])["data"]
 
 
 @pytest.fixture()
@@ -75,7 +75,7 @@ def test_session01_mcp_full_loop(c, seeded):
                  or "")
     tool(c, "jiaming", "mariposa_memory_recall_reject", {
         "session_id": sid, "operation_id": "op-par-s1-reject",
-        "resource_ref": newest["resource_ref"],
+        "resource_ref": newest["candidate_ref"],
         "reject_target": "event"})
     p2 = tool(c, "jiaming", "mariposa_memory_recall_refine", {
         "session_id": sid, "operation_id": "op-par-s1-refine",
@@ -84,7 +84,7 @@ def test_session01_mcp_full_loop(c, seeded):
                        "explicit_constraints": {
                            "event_date": {"from": "2026-08-01",
                                           "to": "2026-08-31"}}}})
-    assert newest["resource_ref"] not in [x["resource_ref"]
+    assert newest["candidate_ref"] not in [x["candidate_ref"]
                                           for x in p2["candidates"]]
     nav = tool(c, "jiaming", "mariposa_memory_recall_navigate", {
         "session_id": sid, "direction": "earlier",
@@ -95,7 +95,14 @@ def test_session01_mcp_full_loop(c, seeded):
         "earlier 不得越过 refine 的八月 scope 返回七月桶"
     st = tool(c, "jiaming", "mariposa_memory_recall_status",
               {"session_id": sid})
-    assert st["receipts_revalidated"]["checked"] >= 1
+    assert st['session']['session_id'] == sid and 'candidates' in st
+    # Internal receipt verification is not repeated in model-facing JSON.
+    status = c.post('/api/capability/memory.recall.status',
+                    json={'arguments':{'session_id':sid}},
+                    headers={'Authorization':'Bearer '+TOKENS['jiaming']}).json()['data']
+    assert status['receipts_revalidated']['checked'] >= 1
+    assert st['candidates'] == [{k: x[k] for k in ('candidate_ref', 'state')} for x in status['candidates']]
+    assert st['session']['status'] == status['session']['status']
     closed = tool(c, "jiaming", "mariposa_memory_recall_close", {
         "session_id": sid, "outcome": "resolved",
         "operation_id": "op-par-s1-close"})
@@ -116,7 +123,9 @@ def test_session02_http_mcp_same_semantics(c, seeded):
         return [{k: v for k, v in c.items()
                  if k not in ("version_receipt", "judge")}
                 for c in cands]
-    assert norm(http["candidates"]) == norm(mcp["candidates"])
+    from mariposa.capabilities.model_output import project
+    model_http = project('memory.words.recall', http, args)
+    assert norm(model_http["candidates"]) == norm(mcp["candidates"])
     assert http["instruction_authority"] == "none"
     # v1.7：WIDE 阶段 event 通道含 our_words 字段 → 两入口一致命中
     ev = tool(c, "jiaming", "mariposa_memory_recall_start", {

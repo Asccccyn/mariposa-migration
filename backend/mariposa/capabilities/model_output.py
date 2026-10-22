@@ -116,6 +116,8 @@ def recall(v):
         item = pick(c, ('candidate_ref', 'memory_id', 'word_id', 'plan_id', 'memory_date',
                         'original_title', 'text', 'speaker', 'excerpt', 'source_ref',
                         'source_binding_version', 'version_receipt'))
+        if 'candidate_ref' not in item and c.get('resource_ref'):
+            item['candidate_ref'] = c['resource_ref']  # accept/reject/navigate use this reference
         evidence = []
         for e in c.get('evidence', []):
             ev = pick(e, ('field', 'snippet', 'source_ref'))
@@ -204,7 +206,13 @@ def project(capability, v, arguments):
         return {**pick(v, ('item_id', 'current_revision')), 'revisions': [i_record(x, True) for x in v.get('revisions', [])]}
     if capability == 'i.versions.read':
         return {'versions': [i_record(x, True) for x in v.get('versions', [])]}
-    if capability in ('memory.recall.start', 'memory.recall.refine', 'memory.recall.status',
+    if capability == 'memory.recall.status':
+        out = {'session': pick(v.get('session') or {}, ('session_id', 'status', 'current_revision')),
+               'candidates': [pick(x, ('candidate_ref', 'state')) for x in v.get('candidates', [])]}
+        if (v.get('receipts_revalidated') or {}).get('invalid_refs'):
+            out['invalidated'] = True
+        return out
+    if capability in ('memory.recall.start', 'memory.recall.refine',
                        'memory.recall.navigate', 'memory.recall.round2', 'memory.recall.page',
                        'memory.words.recall', 'memory.find_words'):
         return recall(v)

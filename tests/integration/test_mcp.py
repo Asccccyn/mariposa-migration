@@ -1,6 +1,7 @@
 """MCP JSON-RPC 适配层：与 HTTP 同一 Registry、同权限、传输名映射。"""
 from __future__ import annotations
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -59,13 +60,13 @@ def test_tools_call_same_handler_as_http(c):
     })
     out = r.json()["result"]
     assert out["isError"] is False
-    mem_id = out["structuredContent"]["data"]["memory_id"]
+    mem_id = json.loads(out["content"][0]["text"])["data"]["memory_id"]
 
     r = rpc(c, "/mcp", "tools/call", "jiaming", {
         "name": "mariposa_memory_search",
         "arguments": {"query": "共用 handler"},
     })
-    hits = r.json()["result"]["structuredContent"]["data"]["hits"]
+    hits = json.loads(r.json()["result"]["content"][0]["text"])["data"]["hits"]
     assert any(h["memory_id"] == mem_id for h in hits)
 
 
@@ -89,21 +90,11 @@ def test_notification_returns_202(c):
     assert r.status_code == 202
 
 
-def test_paged_response_single_envelope_cable_budget(c):
-    """WP-06 6C（D-4 选 A）：分页类响应默认 content_envelope=single——
-    content 仅摘要行（完整包走 structuredContent），MCP 线缆字节
-    ≤24576；显式 dual 覆盖仍可。"""
-    import json as _json
-    # off 政策下 recall.start 产分页响应（政策切换需 qiaosheng——直接
-    # 服务层预置 off；走隔离夹具不现实，这里以单测形态直调适配层）
-    from mariposa.capabilities import mcp_adapter as _ad
-    out_paged = {"ok": True, "data": {
-        "recall_session_id": "rs_1", "candidates": [{"x": "很长的正文" * 100}],
-        "judge_mode": "off",
-        "pagination": {"result_set_id": "rps_1", "returned_count": 1,
-                       "candidate_total": 1, "has_more": False}}}
-    # 分页响应默认 single：content 文本=摘要行（不含完整 JSON）
-    assert _ad._paged_default_single(out_paged) is True
-    # 线缆形态：完整包只在 structuredContent 一份
-    non_paged = {"ok": True, "data": {"hits": [1, 2, 3]}}
-    assert _ad._paged_default_single(non_paged) is False
+def test_paged_response_uses_same_portable_single_copy_as_other_results():
+    from mariposa.capabilities.mcp_adapter import _tool_result
+    payload = {"ok": True, "data": {"candidates": [{"text": "完整正文\n！！" * 100}],
+               "pagination": {"result_set_id": "rps", "next_cursor": "p2"}}}
+    result = _tool_result(payload)
+    assert "structuredContent" not in result
+    assert json.loads(result["content"][0]["text"]) == payload
+    assert len(json.dumps(result, ensure_ascii=False).encode()) < 24576

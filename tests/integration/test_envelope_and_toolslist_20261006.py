@@ -1,7 +1,6 @@
 """1005B 第二批修复回归（信封协商 / tools/list 占位隐藏 / 迁移 8）。
 
-- 信封：content+structuredContent 双份默认保留（MCP 兼容通道），
-  显式 params._meta.content_envelope="single" 才省略完整 JSON 副本；
+- 信封：默认 text 单份；single 为显式结构化单份，dual 为显式旧兼容；
   序列化统一紧凑分隔符；
 - tools/list：[blocked]/[reserved] 占位不再出现在 MCP 发现面
   （能力仍注册，HTTP capabilities.list 照旧）；
@@ -34,11 +33,12 @@ def _call(c, params):
 
 
 class TestEnvelopeNegotiation:
-    def test_default_both_copies_compact(self, c):
-        """默认双份（兼容）；文本副本与结构化副本同数据、紧凑分隔。"""
+    def test_default_one_text_copy_compact(self, c):
+        """默认 text 单份，文本客户端可读，合并两通道的客户端也不会重复。"""
         r = _call(c, {"name": "mariposa_time_now", "arguments": {}})
         result = r.json()["result"]
-        sc = result["structuredContent"]
+        assert "structuredContent" not in result
+        sc = json.loads(result["content"][0]["text"])
         text = result["content"][0]["text"]
         assert sc["ok"] is True
         assert json.loads(text) == sc, "文本副本=同一负载"

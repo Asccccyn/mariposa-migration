@@ -98,4 +98,6 @@ def test_mcp_schema_and_call_allow_filter_only_search(client):
     assert response.status_code == 200, response.text
     result = response.json()['result']
     assert result['isError'] is False
-    assert _ids(result['structuredContent']['data']) == ['filter-assistant']
+    data = json.loads(result['content'][0]['text'])['data']
+    assert [hit['text'] for hit in data['hits']] == ['beta']
+    assert all(hit['message_id'] for hit in data['hits'])
