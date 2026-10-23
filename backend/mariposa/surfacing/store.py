@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from .. import config, db
 from ..errors import IdempotencyConflict
@@ -21,7 +23,14 @@ def _now() -> str:
 
 
 def _day() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+
+
+def _day_bounds() -> tuple[str, str]:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (start.astimezone(timezone.utc).isoformat(),
+            (start + timedelta(days=1)).astimezone(timezone.utc).isoformat())
 
 
 def _expires(seconds: int) -> str:
@@ -224,12 +233,100 @@ def load_detail_snapshot_by_ref(detail_ref: str) -> dict | None:
 
 # --------------------------------------------------------------- 判断台账
 
+def reserve_judge_request(operation_key: str, phase: str, provider: str,
+                          requested_model: str, policy: dict) -> int:
+    """Atomic admission immediately before each HTTP attempt; never send first.
+
+    A full default-context reservation bounds cost without guessing tokenization.
+    Unknown outcomes retain it. Legacy unknown-cost rows block further spending
+    for their business day until reconciled; history itself is not rewritten.
+    """
+    from .models import SurfaceBlocked
+    price = config.SURFACE_JEV_PRICE_SNAPSHOT
+    model = price["aliases"].get(requested_model, requested_model)
+    rate = price["models"].get(model)
+    if provider != "typesafe_jev" or rate is None:
+        raise SurfaceBlocked("SURFACE_PRICE_UNAVAILABLE")
+    cap = policy.get("daily_judge_cost_cap_usd")
+    if cap is None or not math.isfinite(float(cap)) or float(cap) <= 0:
+        raise SurfaceBlocked("SURFACE_BUDGET_UNCONFIGURED")
+    reserve = int(price["max_input_tokens"]) * float(rate) / 1_000_000
+    with db.recall_runtime() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            day_start, day_end = _day_bounds()
+            row = conn.execute(
+                "SELECT COALESCE(SUM(request_count),0) n, COALESCE(SUM(est_cost_usd),0) cost,"
+                " SUM(CASE WHEN request_count>0 AND est_cost_usd IS NULL THEN 1 ELSE 0 END) unknown"
+                " FROM surface_judge_ledger WHERE created_at>=? AND created_at<?",
+                (day_start, day_end)).fetchone()
+            if row["unknown"]:
+                raise SurfaceBlocked("SURFACE_COST_UNKNOWN")
+            if (int(row["n"]) >= int(policy["daily_judge_request_cap"])
+                    or float(row["cost"]) + reserve > float(cap) + 1e-12):
+                raise SurfaceBlocked("SURFACE_BUDGET_EXHAUSTED")
+            # An alias resolving outside the priced set is not silently allowed
+            # to continue spending. Updating the public snapshot can clear this.
+            drifted = conn.execute("SELECT resolved_model FROM surface_judge_ledger"
+                " WHERE requested_model=? AND cost_basis='unknown_model'", (requested_model,)).fetchall()
+            if any(r["resolved_model"] not in price["models"] for r in drifted):
+                raise SurfaceBlocked("SURFACE_PRICE_UNAVAILABLE")
+            cur = conn.execute("INSERT INTO surface_judge_ledger(operation_key,phase,provider,request_count,"
+                "est_cost_usd,status,day,created_at,requested_model,reserved_cost_usd,cost_basis)"
+                " VALUES(?,?,?,1,?,'reserved',?,?,?,?,?)",
+                (operation_key,phase,provider,reserve,_day(),_now(),requested_model,reserve,
+                 price["revision"] + ":context_ceiling_reservation"))
+            conn.execute("COMMIT")
+            return int(cur.lastrowid)
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def settle_judge_request(ledger_id: int, response: dict | None, *, offline=False) -> bool:
+    """Use official price × returned input usage as an estimate, never a bill.
+
+    False means unknown model/invalid usage; the original reservation survives.
+    Output is free for the explicitly priced models. Fake calls are marked as
+    offline and retain a simulated bound rather than fabricate supplier usage.
+    """
+    price = config.SURFACE_JEV_PRICE_SNAPSHOT
+    body = response if isinstance(response, dict) else {}
+    model = body.get("model")
+    usage = body.get("usage")
+    tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+    rate = price["models"].get(model) if isinstance(model, str) else None
+    valid = rate is not None and type(tokens) is int and 0 <= tokens <= price["max_input_tokens"]
+    with db.recall_runtime() as conn:
+        row = conn.execute("SELECT status FROM surface_judge_ledger WHERE ledger_id=?", (ledger_id,)).fetchone()
+        if row is None or row["status"] != "reserved":
+            return valid
+        if valid and not offline:
+            conn.execute("UPDATE surface_judge_ledger SET est_cost_usd=?,status='completed',"
+                         "resolved_model=?,input_tokens=?,cost_basis=? WHERE ledger_id=? AND status='reserved'",
+                         (tokens * rate / 1_000_000,model,tokens,price["revision"] + ":usage_estimate",ledger_id))
+        else:
+            basis = "offline_transport" if offline else "unknown_model" if model and rate is None else "unknown_outcome_or_usage"
+            conn.execute("UPDATE surface_judge_ledger SET status='unknown',resolved_model=?,cost_basis=?"
+                         " WHERE ledger_id=? AND status='reserved'", (model,basis,ledger_id))
+    return valid
+
 def record_judge_requests(operation_key: str, phase: str, provider: str,
                           request_count: int, est_cost_usd: float | None,
                           status: str) -> None:
-    """每次真实付费出站/缓存命中分别记账（R32 分账：COUNT、judge、主模型
-    阅读三本账——这里只记 judge）。"""
+    """阶段收口；已有逐 HTTP 预占时只收未知状态，绝不再加请求计数。
+
+    零请求或旧调用路径仍写阶段摘要；这里只记 Judge，不混主模型阅读。
+    """
     with db.recall_runtime() as conn:
+        reserved = conn.execute("SELECT COUNT(*) n FROM surface_judge_ledger WHERE operation_key=?"
+                                " AND phase=? AND reserved_cost_usd IS NOT NULL", (operation_key,phase)).fetchone()["n"]
+        if reserved:
+            # Per-attempt reservations already account for requests. A stage
+            # summary must not add them again or release an unknown outcome.
+            conn.execute("UPDATE surface_judge_ledger SET status='unknown',cost_basis='unknown_outcome_or_usage'"
+                         " WHERE operation_key=? AND phase=? AND status='reserved'", (operation_key,phase))
+            return
         conn.execute(
             "INSERT INTO surface_judge_ledger(operation_key, phase,"
             " provider, request_count, est_cost_usd, status, day,"
@@ -241,12 +338,14 @@ def record_judge_requests(operation_key: str, phase: str, provider: str,
 def judge_usage_today() -> dict:
     """当日累计（请求计数对账用；费用估算缺失时如实施报 None）。"""
     with db.recall_runtime() as conn:
+        day_start, day_end = _day_bounds()
         row = conn.execute(
             "SELECT COALESCE(SUM(request_count),0) AS n,"
-            " SUM(est_cost_usd) AS cost FROM surface_judge_ledger"
-            " WHERE day=?", (_day(),)).fetchone()
+            " SUM(est_cost_usd) AS cost,"
+            " SUM(CASE WHEN request_count>0 AND est_cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown"
+            " FROM surface_judge_ledger WHERE created_at>=? AND created_at<?", (day_start,day_end)).fetchone()
     return {"requests": int(row["n"]),
-            "est_cost_usd": (row["cost"] if row["cost"] is not None
+            "est_cost_usd": (row["cost"] if row["cost"] is not None and not row["unknown"]
                              else None)}
 
 

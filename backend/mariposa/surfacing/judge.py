@@ -29,7 +29,7 @@ import re
 
 from .. import config
 from ..retrieval.judges import cache as judge_cache
-from . import contract, facts
+from . import contract, facts, store
 from .models import (CandidateAssessment, EventGroup, JudgeDecision,
                      SurfaceBlocked)
 
@@ -112,12 +112,25 @@ def partition_hypotheses(source_input: dict, hypotheses: list[dict]) -> list[Eve
     groups = []
     text = source_input.get("text") or ""
     for idx, h in enumerate(hypotheses):
-        span = text[h.get("start_cp", 0):h.get("end_cp", 0)] or text
+        start, end = h.get("start_cp", 0), h.get("end_cp", 0)
+        if not (0 <= start < end <= len(text)):
+            raise SurfaceBlocked("SURFACE_EVENT_AMBIGUOUS", detail="invalid_hypothesis_span")
+        span = text[start:end]
+        constraints = facts.extract_constraints(span)
+        inherited = h.get("inherited_date_span")
+        if inherited is not None:
+            ds, de = inherited.get("start_cp", -1), inherited.get("end_cp", -1)
+            if not (0 <= ds < de <= start):
+                raise SurfaceBlocked("SURFACE_EVENT_AMBIGUOUS", detail="invalid_inherited_date_span")
+            # The preceding date is an explicit source span, not an inferred
+            # year/date. A clause with its own date always owns its constraint.
+            if not constraints["dates"]:
+                constraints["dates"] = [d.as_dict() for d in facts.extract_dates(text[ds:de])]
         groups.append(EventGroup(
             event_id=f"ev_{idx + 1}",
             hypothesis_ids=[h["hypothesis_id"]],
             grouping_confirmed=True,
-            constraints=facts.extract_constraints(span)))
+            constraints=constraints))
     return groups
 
 
@@ -127,8 +140,12 @@ class SurfaceJudge:
     连接错误不自动重发，付费请求是否已被远端执行不可判断）。"""
 
     def __init__(self, provider_name: str, policy: dict, *,
-                 deadline_monotonic: float | None = None):
+                 deadline_monotonic: float | None = None,
+                 operation_key: str | None = None, phase: str | None = None):
         self.deadline_monotonic = deadline_monotonic
+        self.operation_key = operation_key
+        self.phase = phase
+        self._request_reservations: list[int] = []
         if provider_name != "typesafe_jev":
             # 结构化 surface-judge provider 尚不存在；如实阻断，
             # 不静默回退其他供应商（R38/docs/03）。
@@ -161,23 +178,29 @@ class SurfaceJudge:
 
     def _post(self, payload: dict) -> dict:
         self._check_deadline()
-        self.request_count += 1
         body = None
         if _TRANSPORT_OVERRIDE is not None:
+            self._before_request()
             body = _TRANSPORT_OVERRIDE(payload)
         else:
             from ..retrieval.judges import typesafe_jev
             ts = typesafe_jev.TypeSafeJevJudge()
             try:
                 if self.deadline_monotonic is None:
-                    body = ts._post_with_limited_retry(payload)
+                    body = ts._post_with_limited_retry(payload, before_request=self._before_request)
                 else:
                     body = ts._post_with_limited_retry(
-                        payload, deadline_monotonic=self.deadline_monotonic)
+                        payload, deadline_monotonic=self.deadline_monotonic,
+                        before_request=self._before_request)
             except typesafe_jev.JudgeUnavailable:
                 self._check_deadline()
                 raise SurfaceBlocked("SURFACE_UNKNOWN_OUTCOME",
                                      detail="transport_unavailable") from None
+        if self._request_reservations:
+            valid_cost = store.settle_judge_request(self._request_reservations[-1], body,
+                                                   offline=_TRANSPORT_OVERRIDE is not None)
+            if _TRANSPORT_OVERRIDE is None and not valid_cost:
+                raise SurfaceBlocked("SURFACE_UNKNOWN_OUTCOME", detail="unverifiable_model_or_usage")
         self._check_deadline()
         if not isinstance(body, dict) or not isinstance(
                 body.get("answers"), dict):
@@ -193,6 +216,15 @@ class SurfaceJudge:
                     detail="resolved_model_drift_within_session",
                     previous=self.resolved_model, current=rm)
         return body
+
+    def _before_request(self) -> None:
+        self._check_deadline()
+        if self.operation_key is not None:
+            self._request_reservations.append(store.reserve_judge_request(
+                self.operation_key, self.phase or "unknown", self.provider_name,
+                self.model_id, self.policy))
+        self._check_deadline()
+        self.request_count += 1
 
     # ------------------------------------------------------------- 缓存
 
@@ -365,8 +397,7 @@ class SurfaceJudge:
             answers = self._ask(phase, prompt, state, questions,
                                 fingerprints, ctx)
         except SurfaceBlocked as exc:
-            if (exc.code == "SURFACE_TIMEOUT"
-                    or exc.details.get("detail") == "transport_unavailable"):
+            if exc.code != "SURFACE_BODY_TOO_LARGE":
                 raise
             # 单候选超判断字节预算：无法完整判断 → unknown，不截正文
             return CandidateAssessment(

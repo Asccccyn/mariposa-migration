@@ -86,6 +86,7 @@ def test_semantic_projection_omits_internal_identity_even_on_revision_change():
 
 def test_provider_failure_is_blocked_not_empty_and_does_not_continue_pool(monkeypatch):
     def fail(self, payload, **kw):
+        kw["before_request"]()
         raise typesafe_jev.JudgeUnavailable('transport_or_json')
     monkeypatch.setattr(typesafe_jev.TypeSafeJevJudge, '_post_with_limited_retry', fail)
     j = judge.SurfaceJudge('typesafe_jev', surface_policy_snapshot())

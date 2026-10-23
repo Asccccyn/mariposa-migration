@@ -2,8 +2,10 @@ import json
 import pytest
 from mariposa.surfacing import judge, contract
 from mariposa.surfacing.models import surface_policy_snapshot
-from tests.unit.test_surface_selection_judge import _pool_entry,_HYP
+from tests.unit.test_surface_selection_judge import _pool_entry
 from tests.conftest import reset_all
+
+_HYP = [{'hypothesis_id':'h1','start_cp':0,'end_cp':len('那件事呢'),'inherited_date_span':None}]
 
 @pytest.fixture(autouse=True)
 def isolated():

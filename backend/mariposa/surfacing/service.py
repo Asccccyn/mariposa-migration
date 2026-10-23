@@ -12,11 +12,13 @@ detail.read。全部走既有 /api/capability/{name} HTTP 面 + identity 鉴权
 from __future__ import annotations
 
 import json
+import math
 import secrets
+import sqlite3
 import time
 
 from .. import config, db
-from ..errors import Forbidden, NotFound
+from ..errors import Busy, Forbidden, NotFound, OutcomeUnknown
 from ..memory import detail as memory_detail
 from ..recall import judge_policy
 from . import candidates as cand_mod
@@ -50,11 +52,9 @@ def _blocked_result(reason: str, **extra) -> dict:
     return out
 
 
-def _surface_gates(policy: dict) -> tuple[dict | None, str | None]:
-    """共同门：flag / judge 开关 / profile / 外发许可 / 预算。
+def _surface_access_gates() -> tuple[dict | None, str | None]:
+    """Current feature/provider/data permission; final checks incur no charge."""
 
-    返回 (judge_policy_snapshot, None) 或 (None, reason_code)。
-    """
     if not config.SURFACE_ENABLED:
         return None, "SURFACE_DISABLED"
     jp = judge_policy.effective()
@@ -69,6 +69,14 @@ def _surface_gates(policy: dict) -> tuple[dict | None, str | None]:
     missing = sorted(g for g in REQUIRED_GRANTS if not grants.get(g))
     if missing:
         return None, "SURFACE_OUTBOUND_NOT_GRANTED"
+    return jp, None
+
+
+def _surface_gates(policy: dict) -> tuple[dict | None, str | None]:
+    """Early budget check; atomic reservation happens at each HTTP boundary."""
+    jp, reason = _surface_access_gates()
+    if reason:
+        return jp, reason
     usage = store.judge_usage_today()
     if int(usage["requests"]) >= int(policy["daily_judge_request_cap"]):
         return None, "SURFACE_BUDGET_EXHAUSTED"
@@ -78,10 +86,33 @@ def _surface_gates(policy: dict) -> tuple[dict | None, str | None]:
         return None, "SURFACE_BUDGET_UNCONFIGURED"
     if (usage["est_cost_usd"] is not None
             and float(usage["est_cost_usd"]) >= float(cap_usd)):
-        # 金额硬上限（需价格核验后台账才有 est_cost；未核验=恒 None，
-        # 由次数上限兜底——如实不伪造金额）
+        # 已用金额的早期拒绝；每次真实 HTTP 的保守金额预占仍由
+        # reserve_judge_request 原子完成，未知历史金额在那里拒绝。
         return None, "SURFACE_BUDGET_EXHAUSTED"
     return jp, None
+
+
+def _deadline(raw, started: float, cap_ms: int) -> float:
+    """Translate one absolute upstream deadline to a monotonic local bound."""
+    limit = started + cap_ms / 1000
+    if raw is None:
+        return limit
+    from datetime import datetime
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("absolute deadline requires timezone")
+        wall = parsed.timestamp()
+        if not math.isfinite(wall):
+            raise ValueError("non-finite deadline")
+    except (ValueError, TypeError, OverflowError):
+        raise SurfaceBlocked("SURFACE_TIMEOUT", detail="invalid_deadline") from None
+    return min(limit, started + wall - time.time())
+
+
+def _before_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise SurfaceBlocked("SURFACE_TIMEOUT")
 
 
 def _hypotheses_from_args(a: dict) -> list[dict]:
@@ -129,20 +160,24 @@ def prepare(principal, a: dict) -> dict:
 
     started = time.monotonic()
     try:
-        result = _prepare_inner(principal, a, policy, op_key, started)
-    except SurfaceBlocked as sb:
+        deadline = _deadline(a.get("deadline_at"), started, config.SURFACE_PREPARE_DEADLINE_MS)
+        _before_deadline(deadline)
+        result = _prepare_inner(principal, a, policy, op_key, deadline)
+    except (SurfaceBlocked, sqlite3.OperationalError) as sb:
+        if isinstance(sb, sqlite3.OperationalError) and time.monotonic() < deadline:
+            raise
         result = {"operation_id": operation_id, "surface_run_id": "",
                   "status": "blocked", "candidate_snapshot_ref": None,
                   "selected_count": 0, "coverage": {},
                   "policy_revision": policy["policy_revision"],
                   "prompt_revision": policy["prompt_prepare"],
-                  "expires_at": None, "reason_code": sb.code}
+                  "expires_at": None, "reason_code": getattr(sb, "code", "SURFACE_TIMEOUT")}
     store.complete_operation(principal.principal_id, op_key, result)
     return result
 
 
 def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
-                   started: float) -> dict:
+                   deadline: float) -> dict:
     operation_id = str(a["operation_id"])
     base = {"operation_id": operation_id,
             "policy_revision": policy["policy_revision"],
@@ -197,10 +232,13 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
     retrieval: dict[str, dict] = {}
     deterministic: dict[str, contract.DeterministicAdmission] = {}
     with db.formal() as conn:
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         for g in groups:
+            _before_deadline(deadline)
             r = cand_mod.tiered_partition_retrieval(
                 conn, span_of[g.event_id], g.hypothesis_ids[0],
                 g.constraints, now_year)
+            _before_deadline(deadline)
             for e in r["candidates"]:
                 e["facts"] = facts.hard_checks(e, g.constraints)
                 e["evidence_ref"] = _evidence_ref(e)
@@ -209,6 +247,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
             retrieval[g.event_id] = r
         dense_budget = int(policy["dense_queries_per_job"])
         for g in groups:
+            _before_deadline(deadline)
             if deterministic[g.event_id].outcome in contract.CONFIRMED_OUTCOMES:
                 continue
             r = retrieval[g.event_id]
@@ -216,6 +255,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
             added, status = cand_mod.dense_supplement(
                 conn, span_of[g.event_id], g.hypothesis_ids[0], existing,
                 dense_budget)
+            _before_deadline(deadline)
             r["tiers"]["dense"] = status
             if status["status"] in ("complete_within_scope",
                                     "partial_vectors_pending"):
@@ -271,15 +311,9 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
                 "coverage": coverage, "expires_at": _run_expiry(run_id),
                 "reason_code": None}
 
-    elapsed_ms = (time.monotonic() - started) * 1000
-    if elapsed_ms > float(config.SURFACE_PREPARE_DEADLINE_MS):
-        return {**base, "surface_run_id": "", "status": "rejected",
-                "candidate_snapshot_ref": None, "selected_count": 0,
-                "coverage": coverage, "expires_at": None,
-                "reason_code": "SURFACE_TIMEOUT"}
-
-    judge = SurfaceJudge(jp["provider"], policy, deadline_monotonic=(
-        started + config.SURFACE_PREPARE_DEADLINE_MS / 1000))
+    _before_deadline(deadline)
+    judge = SurfaceJudge(jp["provider"], policy, deadline_monotonic=deadline,
+                         operation_key=op_key, phase="prepare")
     try:
         if judge_pool:
             decision = judge.judge_prepare(
@@ -328,6 +362,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
         "source_input": {"message_id": source["message_id"],
                          "revision": source["revision"],
                          "body_hash": source["body_hash"]},
+        "deadline_at": a.get("deadline_at"),
         # 每分区的用户原话事实约束：交付时按当前记忆状态重跑 facts
         "constraints": {g.event_id: g.constraints for g in groups},
         "deterministic": coverage["deterministic"],
@@ -375,8 +410,12 @@ def validate(principal, a: dict) -> dict:
     op_key = f"surface:validate:{operation_id}"
     phash = store.payload_hash(a)
     replay = store.claim_operation(principal.principal_id, op_key, phash)
-    if replay is not None and replay.get("result"):
-        return replay["result"]
+    if replay is not None:
+        if replay.get("result"):
+            return replay["result"]
+        if replay.get("status") == "unknown":
+            raise OutcomeUnknown("validation already dispatched; reconcile before retry")
+        raise Busy()
 
     base = {"policy_revision": policy["policy_revision"]}
     deadline_at = str(a.get("deadline_at") or "")
@@ -439,6 +478,21 @@ def validate(principal, a: dict) -> dict:
         store.complete_operation(principal.principal_id, op_key, result)
         return result
 
+    source_input = run["snapshot"].get("source_input") or {}
+    source_ref = a["source_input_ref"]
+    target = a["target_input"]
+    if (source_ref.get("message_id") != source_input.get("message_id")
+            or source_ref.get("revision") != source_input.get("revision")
+            or target.get("message_id") != source_input.get("message_id")
+            or target.get("revision") != source_input.get("revision")
+            or target.get("body_hash") != source_input.get("body_hash")):
+        result = {**base, "status": "rejected", "validation_receipt": None,
+                  "as_of": now.isoformat(), "expires_at": None,
+                  "items": [], "rejected_count": 0,
+                  "reason_code": "SURFACE_TARGET_MISMATCH"}
+        store.complete_operation(principal.principal_id, op_key, result)
+        return result
+
     jp, reason = _surface_gates(policy)
     if reason:
         result = {**base, "status": "blocked", "validation_receipt": None,
@@ -448,12 +502,19 @@ def validate(principal, a: dict) -> dict:
         store.complete_operation(principal.principal_id, op_key, result)
         return result
 
-    remaining = config.SURFACE_DELIVERY_VALIDATION_DEADLINE_MS / 1000
-    if deadline_ts:
-        remaining = min(remaining, max(0.0, deadline_ts - time.time()))
+    started = time.monotonic()
+    try:
+        deadline = min(_deadline(a.get("deadline_at"), started, config.SURFACE_DELIVERY_VALIDATION_DEADLINE_MS),
+                       _deadline(run["snapshot"].get("deadline_at"), started, config.SURFACE_DELIVERY_VALIDATION_DEADLINE_MS))
+        _before_deadline(deadline)
+    except SurfaceBlocked:
+        result = {**base, "status": "timed_out", "validation_receipt": None,
+                  "as_of": now.isoformat(), "expires_at": None, "items": [],
+                  "rejected_count": 0, "reason_code": "SURFACE_TIMEOUT"}
+        store.complete_operation(principal.principal_id, op_key, result)
+        return result
     judge = SurfaceJudge(jp["provider"], policy,
-                         deadline_monotonic=time.monotonic() + remaining)
-    source_input = run["snapshot"]["source_input"]
+                         deadline_monotonic=deadline, operation_key=op_key, phase="delivery")
     constraints_by_event = run["snapshot"].get("constraints") or {}
     try:
         decision = judge.judge_delivery(
@@ -581,6 +642,9 @@ def check(principal, a: dict) -> dict:
     invalid = lambda code: {          # noqa: E731
         "valid": False, "as_of": now.isoformat(), "expires_at": None,
         "accepted_detail_refs": [], "reason_code": code}
+    _, reason = _surface_access_gates()
+    if reason:
+        return invalid(reason)
     if receipt is None or receipt["status"] != "issued":
         return invalid("DETAIL_REF_NOT_SEEN"
                        if receipt is None else "SURFACE_TARGET_CHANGED")

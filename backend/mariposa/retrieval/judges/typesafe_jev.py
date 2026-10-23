@@ -649,7 +649,8 @@ class TypeSafeJevJudge(base.JudgeProvider):
         return items
 
     def _post_with_limited_retry(self, payload: dict, *,
-                                 deadline_monotonic: float | None = None) -> dict:
+                                 deadline_monotonic: float | None = None,
+                                 before_request=None) -> dict:
         """单次 HTTP POST + 有限重试。
 
         重试边界（幂等与崩溃恢复整改 §8）：429/529 是远端明确拒绝、
@@ -675,6 +676,10 @@ class TypeSafeJevJudge(base.JudgeProvider):
                     raise JudgeUnavailable("deadline_exceeded")
                 timeout_s = min(timeout_s, remaining)
             try:
+                # Optional caller-owned admission for every real HTTP attempt,
+                # including explicit 429/529 retries. No network under DB locks.
+                if before_request is not None:
+                    before_request()
                 with urllib.request.urlopen(
                         req,
                         timeout=timeout_s

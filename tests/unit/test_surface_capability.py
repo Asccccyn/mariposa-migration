@@ -148,15 +148,15 @@ class TestPrepareValidateCheck:
         assert out["data"]["selected_count"] == 1
         run_id = out["data"]["candidate_snapshot_ref"]
 
-        # validate：目标消息延续话题 → ready + 完整正文 item
+        # validate：同一已接受消息、同修订 → ready + 完整正文 item
         vargs = {
             "operation_id": "surf-val-1",
             "conversation_scope": "room-1",
             "candidate_snapshot_ref": run_id,
             "source_input_ref": {"message_id": "m1", "revision": 1},
-            "target_input": {"message_id": "m2", "revision": 1,
-                              "sequence": 11, "text": "7.9那天怎么样",
-                              "body_hash": "b" * 64, "occurred_at": None},
+            "target_input": {"message_id": "m1", "revision": 1,
+                              "sequence": 10, "text": "7.9记忆库做成了",
+                              "body_hash": "a" * 64, "occurred_at": None},
             "recent_dialogue": [],
             "window_id": "w1",
             "deadline_at": "2999-01-01T00:00:00+00:00",
@@ -173,7 +173,7 @@ class TestPrepareValidateCheck:
         cout = _invoke(actors, "memory.surfacing.check", {
             "validation_receipt": vout["data"]["validation_receipt"],
             "conversation_scope": "room-1",
-            "target_message_id": "m2", "target_revision": 1,
+            "target_message_id": "m1", "target_revision": 1,
             "window_id": "w1"})
         assert cout["data"]["valid"] is True
         assert cout["data"]["accepted_detail_refs"] == [item["detail_ref"]]
@@ -189,15 +189,15 @@ class TestPrepareValidateCheck:
             "operation_id": "v2", "conversation_scope": "room-1",
             "candidate_snapshot_ref": run_id,
             "source_input_ref": {"message_id": "m1", "revision": 1},
-            "target_input": {"message_id": "m2", "revision": 1,
-                              "sequence": 11, "text": "7.9呢",
-                              "body_hash": "b" * 64, "occurred_at": None},
+            "target_input": {"message_id": "m1", "revision": 1,
+                              "sequence": 10, "text": "7.9记忆库做成了",
+                              "body_hash": "a" * 64, "occurred_at": None},
             "recent_dialogue": [], "window_id": "w1",
             "deadline_at": "2999-01-01T00:00:00+00:00"})
         receipt = vout["data"]["validation_receipt"]
         cout = _invoke(actors, "memory.surfacing.check", {
             "validation_receipt": receipt, "conversation_scope": "room-1",
-            "target_message_id": "m2", "target_revision": 2,  # 修订变了
+            "target_message_id": "m1", "target_revision": 2,  # 修订变了
             "window_id": "w1"})
         assert cout["data"]["valid"] is False
         assert cout["data"]["reason_code"] == "SURFACE_TARGET_MISMATCH"
@@ -246,9 +246,9 @@ class TestPrepareValidateCheck:
             "operation_id": "v3", "conversation_scope": "room-1",
             "candidate_snapshot_ref": run_id,
             "source_input_ref": {"message_id": "m1", "revision": 1},
-            "target_input": {"message_id": "m2", "revision": 1,
-                              "sequence": 11, "text": "7.9呢",
-                              "body_hash": "b" * 64, "occurred_at": None},
+            "target_input": {"message_id": "m1", "revision": 1,
+                              "sequence": 10, "text": "7.9记忆库做成了",
+                              "body_hash": "a" * 64, "occurred_at": None},
             "recent_dialogue": [], "window_id": "w1",
             "deadline_at": "2999-01-01T00:00:00+00:00"})
         assert vout["data"]["items"] == []
@@ -260,9 +260,9 @@ class TestPrepareValidateCheck:
             "operation_id": "v-late", "conversation_scope": "room-1",
             "candidate_snapshot_ref": "sfr_missing",
             "source_input_ref": {"message_id": "m1", "revision": 1},
-            "target_input": {"message_id": "m2", "revision": 1,
+            "target_input": {"message_id": "m1", "revision": 1,
                               "sequence": 11, "text": "x",
-                              "body_hash": "b" * 64, "occurred_at": None},
+                              "body_hash": "a" * 64, "occurred_at": None},
             "recent_dialogue": [], "window_id": "w1",
             "deadline_at": "2000-01-01T00:00:00+00:00"}
         out = _invoke(actors, "memory.surfacing.validate", args)

@@ -246,8 +246,8 @@ def test_07_deterministic_prepare_zero_jev_delivery_accounted_separately(actors,
     vargs = {"operation_id": "val-1", "conversation_scope": "room-1",
              "candidate_snapshot_ref": data["candidate_snapshot_ref"],
              "source_input_ref": {"message_id": "m1", "revision": 1},
-             "target_input": {"message_id": "m2", "revision": 1, "sequence": 11,
-                              "text": "那天怎么样", "body_hash": "b" * 64, "occurred_at": None},
+             "target_input": {"message_id": "m1", "revision": 1, "sequence": 10,
+                              "text": "还记得7.9记忆库建成的事吗", "body_hash": "a" * 64, "occurred_at": None},
              "recent_dialogue": [], "window_id": "w1",
              "deadline_at": "2999-01-01T00:00:00+00:00"}
     vout = registry.invoke(actors["jiaming"], "memory.surfacing.validate", vargs, None)["data"]

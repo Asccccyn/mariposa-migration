@@ -1788,6 +1788,15 @@ CREATE TABLE IF NOT EXISTS surface_judge_ledger(
 CREATE INDEX IF NOT EXISTS idx_surface_ledger_day
   ON surface_judge_ledger(day);
 """),
+    (17, """
+ALTER TABLE surface_judge_ledger ADD COLUMN requested_model TEXT;
+ALTER TABLE surface_judge_ledger ADD COLUMN resolved_model TEXT;
+ALTER TABLE surface_judge_ledger ADD COLUMN reserved_cost_usd REAL;
+ALTER TABLE surface_judge_ledger ADD COLUMN input_tokens INTEGER;
+ALTER TABLE surface_judge_ledger ADD COLUMN cost_basis TEXT;
+CREATE INDEX IF NOT EXISTS idx_surface_ledger_created_at
+  ON surface_judge_ledger(created_at);
+"""),
 ]
 
 

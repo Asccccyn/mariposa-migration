@@ -10,8 +10,8 @@
 - NOT_SAME                JEV 明确否定（same_occurrence ≤ risk 门）
 - UNKNOWN                 语义未确认 / 必需事实无法核验 / 证据不足
 - CONFIRMED_SEMANTIC      JEV 确认 + 无冲突 + 必需事实 PASS + 证据 PASS
-- CONFIRMED_DETERMINISTIC 预留给 P2 免 JEV 路径；本批**没有**任何代码能
-                          产生它，不得据此宣称免 JEV 浮现已实现
+- CONFIRMED_DETERMINISTIC P2 免 JEV 准备路径：显式日期、强事件身份、
+                          事实证据与完整竞争集通过后才成立；交付仍复核语义
 
 语义三段（沿 main 原三段结构，确认门换 same_occurrence_threshold）：
 ≥ thr → confirmed；≤ risk → not_same；中间 → unknown。低于确认门只是

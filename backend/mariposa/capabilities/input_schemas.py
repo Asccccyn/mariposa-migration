@@ -1321,6 +1321,9 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
         "properties": {
             "operation_id": {"type": "string", "minLength": 1},
             "conversation_scope": {"type": "string", "minLength": 1},
+            # Absolute deadline from EST acceptance; older direct callers retain
+            # the bounded local fallback, never a second budget in the host.
+            "deadline_at": {"type": "string", "minLength": 1},
             "source_input": {
                 "type": "object",
                 # occurred_at 允许 null（包合同 nullable）——本方言

@@ -101,6 +101,12 @@ def test_surface_full_chain_over_http(c, policy_on):
         "categories": ["sweet"], "creation_mode": "contemporaneous"})
     assert r.status_code == 200, r.text
     memory_id = r.json()["data"]["memory_id"]
+    # The actual HTTP credential carries only the four surfacing capabilities;
+    # neither a global owner fixture nor the chat writer credential substitutes.
+    with db.formal() as conn:
+        conn.execute("UPDATE client_bindings SET capabilities_allowlist=? WHERE binding_id='binding_jiaming'",
+                     (json.dumps(["memory.surfacing.prepare", "memory.surfacing.validate",
+                                  "memory.surfacing.check", "memory.detail.read"]),))
 
     # prepare（E 信封原样）
     p = call(c, "jiaming", "memory.surfacing.prepare", _prepare_args())
@@ -124,15 +130,15 @@ def test_surface_full_chain_over_http(c, policy_on):
     assert p2.json()["data"]["surface_run_id"] == pdata["surface_run_id"]
     assert policy_on.calls == judge_calls_after_prepare
 
-    # validate：目标延续话题 → ready，item=日期+完整正文+detail_ref
+    # validate：同步同轮同修订 → ready，item=日期+完整正文+detail_ref
     v = call(c, "jiaming", "memory.surfacing.validate", {
         "operation_id": "it-validate-1",
         "conversation_scope": "room-it",
         "candidate_snapshot_ref": pdata["candidate_snapshot_ref"],
         "source_input_ref": {"message_id": "m1", "revision": 1},
-        "target_input": {"message_id": "m2", "revision": 1,
-                          "sequence": 11, "text": "7.9那天怎么样",
-                          "body_hash": "b" * 64, "occurred_at": None},
+        "target_input": {"message_id": "m1", "revision": 1,
+                          "sequence": 10, "text": "7.9记忆库做成了",
+                          "body_hash": "a" * 64, "occurred_at": None},
         "recent_dialogue": [], "window_id": "w-it",
         "deadline_at": "2999-01-01T00:00:00+00:00"})
     assert v.status_code == 200, v.text
@@ -150,7 +156,7 @@ def test_surface_full_chain_over_http(c, policy_on):
     ck = call(c, "jiaming", "memory.surfacing.check", {
         "validation_receipt": vdata["validation_receipt"],
         "conversation_scope": "room-it",
-        "target_message_id": "m2", "target_revision": 1,
+        "target_message_id": "m1", "target_revision": 1,
         "window_id": "w-it"})
     assert ck.json()["data"]["valid"] is True
     assert ck.json()["data"]["accepted_detail_refs"] == [item["detail_ref"]]
@@ -178,6 +184,8 @@ def test_surface_full_chain_over_http(c, policy_on):
         n = conn.execute(
             "SELECT COUNT(*) n FROM memory_view_receipts").fetchone()["n"]
     assert n == 0
+    forbidden = call(c, "jiaming", "memory.hold", {"text": "must not write"})
+    assert forbidden.status_code == 403
 
 
 def test_worker_principal_forbidden(c, policy_on):

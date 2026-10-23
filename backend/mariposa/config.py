@@ -258,6 +258,17 @@ SURFACE_DAILY_JUDGE_COST_CAP_USD = (
     else _env_float("MARIPOSA_SURFACE_DAILY_JUDGE_COST_CAP_USD", 0.0))
 SURFACE_DAILY_JUDGE_REQUEST_CAP = _env_int(
     "MARIPOSA_SURFACE_DAILY_JUDGE_REQUEST_CAP", 100)
+# Public price snapshot, not a user spending allowance. No long-context header
+# is sent by the adapter. 65,536 conservatively covers the documented 64k cap.
+# https://docs.typesafe.ai/models (verified 2026-10-23): input $0.042/M,
+# output free; latest=1.13, preview=1.14. Unknown versions fail closed.
+SURFACE_JEV_PRICE_SNAPSHOT = {
+    "revision": "typesafe-public-2026-10-23",
+    "source": "https://docs.typesafe.ai/models",
+    "models": {"jev-1.13.0": 0.042, "jev-1.14.0": 0.042},
+    "aliases": {"jev-latest": "jev-1.13.0", "jev-preview": "jev-1.14.0"},
+    "max_input_tokens": 65536,
+}
 SURFACE_POSITIVE_NOUL_THRESHOLD = _env_float(
     "MARIPOSA_SURFACE_POSITIVE_NOUL_THRESHOLD", 0.80)
 SURFACE_RISK_NOUL_THRESHOLD = _env_float(

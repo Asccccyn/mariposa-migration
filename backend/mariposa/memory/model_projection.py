@@ -114,7 +114,9 @@ def detail_view(page, historical_ids=()):
         if name == 'memory': continue
         projected = section_view(name, value, historical_ids)
         if present(projected): out[name] = projected
-    issues = {k:v for k,v in statuses.items() if (k != 'source' or any('message_id' in x or x.get('unavailable') for x in sections.get('source') or [])) and v in ('partial','unavailable')}
+    # An unavailable source has no readable messages. Keep its failure state;
+    # absence of message rows must not turn a read failure into an empty result.
+    issues = {k:v for k,v in statuses.items() if v in ('partial','unavailable')}
     if issues: out['incomplete_sections'] = issues
     if page.get('complete') is False: out['complete'] = False
     if page.get('next_cursor'): out['next_cursor'] = page['next_cursor']

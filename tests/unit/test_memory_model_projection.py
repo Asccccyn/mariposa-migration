@@ -28,7 +28,7 @@ def test_model_detail_keeps_full_text_pagination_and_relations_without_internal_
     else:raise AssertionError('pagination did not finish')
     assert all_text==LONG_TEXT
     assert {'text','our_words','recollections','keeps','relations'}<=sections
-    assert 'source' not in sections and 'section_status' not in sections
+    assert 'source' in sections and 'section_status' not in sections
     full=registry.invoke(actors['jiaming'],'memory.detail.read',{'detail_ref':'dref_test'},None)['data']
     assert 'domain_version_vector' in full and 'snapshot_id' in full
 
@@ -74,5 +74,5 @@ def test_meaningful_relations_and_incomplete_state_are_not_hidden():
     result=detail_view(page)
     assert result['relations'][0]['target']['memory_id']=='m2'
     assert result['relations'][0]['relation_id'] == 'private'  # correction target
-    assert result['incomplete_sections']=={'mood':'unavailable'}
+    assert result['incomplete_sections']=={'mood':'unavailable','source':'unavailable'}
     assert result['next_cursor']=='p2' and result['complete'] is False

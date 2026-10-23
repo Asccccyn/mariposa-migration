@@ -275,7 +275,7 @@ class TestSurfaceJudge:
                   "text": "7.9结婚纪念日，也是记忆库完成", "body_hash": "b" * 64}
         hyps = [{"hypothesis_id": "h1", "start_cp": 0, "end_cp": 9,
                  "inherited_date_span": None},
-                {"hypothesis_id": "h2", "start_cp": 9, "end_cp": 18,
+                {"hypothesis_id": "h2", "start_cp": 9, "end_cp": len(source["text"]),
                  "inherited_date_span": None}]
         pool = [_pool_entry("memory:m1", hypotheses=["h1", "h2"])]
         decision = sj.judge_prepare(source, [], hyps, pool)
@@ -382,9 +382,11 @@ class TestSurfaceJudge:
         surface_judge.set_transport_for_tests(transport_fn)
         sj = surface_judge.SurfaceJudge("typesafe_jev", _policy())
         sj.judge_prepare(_SOURCE, [], _HYP, [_pool_entry("memory:a")])
-        decision = sj.judge_prepare(_SOURCE, [], _HYP, [_pool_entry("memory:b")])
-        # 漂移 → 该候选 SurfaceBlocked → unknown，不把答案当结果
-        assert decision.assessments[0].outcome == contract.UNKNOWN
+        # Drift is a provider-wide unknown outcome: stop the remaining pool,
+        # rather than pay for later candidates under an unverifiable session.
+        with pytest.raises(SurfaceBlocked, match="SURFACE_UNKNOWN_OUTCOME"):
+            sj.judge_prepare(_SOURCE, [], _HYP, [_pool_entry("memory:b"), _pool_entry("memory:c")])
+        assert sj.request_count == 2
 
     def test_contract_fingerprint_changes_cache_key(self):
         sj = surface_judge.SurfaceJudge("typesafe_jev", _policy())
