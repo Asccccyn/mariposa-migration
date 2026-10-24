@@ -1,18 +1,14 @@
 """公开输入校验（V2_INPUT_SCHEMAS 单一运行时正本）。
 
 WP-05（D11）口径更正：V2_INPUT_SCHEMAS 是公开输入校验的唯一运行时
-正本（schema_for 单源，2026-10-06 她/林石见批准）——历史 v1.1
-contracts/core_input_schemas.json 与 load_schemas() 仅存考古对照，
-不再参与运行时校验。最小校验器：required / 类型 /
-additionalProperties:false / enum；tools/list 与 HTTP/MCP invoke 共用。
+正本（schema_for 单源，2026-10-06 她/林石见批准）。最小校验器：
+required / 类型 / additionalProperties:false / enum；tools/list 与
+HTTP/MCP invoke 共用。R09（2026-10-24）：历史 v1.1 合同读取器退役——
+档案仍在 docs/execution_pack_v1.1/ 供考古，运行时无任何读取路径。
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from ..errors import Forbidden
-from .. import config
 
 _TYPES = {"string": str, "integer": int, "number": (int, float),
           "boolean": bool, "object": dict, "array": list, "null": type(None)}
@@ -22,32 +18,6 @@ _TYPES = {"string": str, "integer": int, "number": (int, float),
 from ..memory.service import (MOOD_CATEGORIES as _MOOD_CATEGORIES,
                               MOOD_TAGS_MAX as _MOOD_TAGS_MAX)
 _MOOD_ENUM = list(_MOOD_CATEGORIES)
-
-_CACHE: dict | None = None
-
-
-def load_legacy_execution_pack_schemas() -> dict:
-    """【纯历史资料读取器】execution_pack v1.1 的 9 月合同（考古/文档用）。
-
-    ⚠️ 裁定（她 2026-10-06，"删门不删档案"）：**禁止参与 runtime
-    validation**——公开校验唯一门卫=V2_INPUT_SCHEMAS，schema_for 不调用
-    本函数、也不得有任何运行时路径调用它。文件保留作历史证据。
-    """
-    global _CACHE
-    if _CACHE is None:
-        candidates = [
-            config.PROJECT_ROOT / "docs" / "execution_pack_v1.1" /
-            "contracts" / "core_input_schemas.json",
-            Path(__file__).resolve().parents[3] / "docs" /
-            "execution_pack_v1.1" / "contracts" / "core_input_schemas.json",
-        ]
-        path = next((p for p in candidates if p.exists()), candidates[0])
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            _CACHE = data.get("schemas", data)
-        else:
-            _CACHE = {}
-    return _CACHE
 
 
 def _resolve(spec: dict, root: dict) -> dict:

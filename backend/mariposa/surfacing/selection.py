@@ -17,11 +17,6 @@ from .. import config
 from . import contract
 
 
-def _valid_rank(v) -> bool:
-    return (isinstance(v, (int, float)) and not isinstance(v, bool)
-            and float(v) == float(v) and 0.0 <= float(v) <= 1.0)
-
-
 def _outcome(a: dict) -> str:
     # 缺 outcome 的旧形状一律按 UNKNOWN——不再信任裸 verdict=confirmed
     return a.get("outcome") or contract.UNKNOWN

@@ -116,7 +116,6 @@ def _replay(thr: float):
                 assessments.append({
                     "event_id": g["event_id"],
                     "candidate_ref": c["resource_ref"],
-                    "verdict": C.verdict_for(adm.outcome),
                     "outcome": adm.outcome, "checks": {},
                     "rank_signal": noul, "reason_code": adm.reason_code})
         winners, abstain = sel.choose_winners(groups, assessments, pool)

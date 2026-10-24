@@ -116,15 +116,6 @@ def admit(semantic: str, facts: dict, *, relevant_now: bool | None = None,
     return finish(UNKNOWN, "UNCLEAR_REFERENCE")
 
 
-def verdict_for(outcome: str) -> str:
-    """兼容旧消费者的三值 verdict。"""
-    if outcome in CONFIRMED_OUTCOMES:
-        return "confirmed"
-    if outcome in NON_COMPETING_OUTCOMES:
-        return "rejected"
-    return "uncertain"
-
-
 def contract_fingerprint(policy: dict, requested_model: str) -> str:
     """实际生效合同的内容指纹——进判断缓存键与 run 快照。
 

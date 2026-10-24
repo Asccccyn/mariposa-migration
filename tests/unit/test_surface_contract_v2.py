@@ -2,11 +2,9 @@
 
 覆盖：facts-v2 探针（旧空真 PASS 全部翻正）/ 条件性必需维度 / admit 五终态
 真值表与判定顺序 / 她加的三个回归场景 / 快照与合同指纹 / 交付按当前状态
-重验 / CONFIRMED_DETERMINISTIC 本批无生产者。全部离线，零 API。
+重验。全部离线，零 API。（R08 2026-10-24：verdict 投影例与 384 组合枚举例退役。）
 """
 from __future__ import annotations
-
-import itertools
 
 import pytest
 
@@ -205,27 +203,6 @@ class TestAdmit:
         yes = C.admit(C.SEM_CONFIRMED, _facts(), relevant_now=True,
                       require_relevance=True)
         assert yes.deliverable
-
-    def test_verdict_projection(self):
-        assert C.verdict_for(C.CONFIRMED_SEMANTIC) == "confirmed"
-        assert C.verdict_for(C.REJECT_FACTS) == "rejected"
-        assert C.verdict_for(C.NOT_SAME) == "rejected"
-        assert C.verdict_for(C.UNKNOWN) == "uncertain"
-
-    def test_no_producer_for_deterministic_outcome(self):
-        """语义路径 admit() 对任何输入都不产生 CONFIRMED_DETERMINISTIC——
-        它的唯一生产者是 P2 的 contract.admit_deterministic（见
-        test_surface_tiered_retrieval）。"""
-        assert callable(C.admit_deterministic)
-        statuses = ("pass", "conflict", "unknown", "not_required")
-        seen = set()
-        for sem, t, p, e, req_t, req_p in itertools.product(
-                (C.SEM_CONFIRMED, C.SEM_NOT_SAME, C.SEM_UNKNOWN),
-                statuses, statuses, ("pass", "unknown"), (True, False),
-                (True, False)):
-            seen.add(C.admit(sem, _facts(t, req_t, p, req_p, e)).outcome)
-        assert C.CONFIRMED_DETERMINISTIC not in seen
-        assert seen == {C.REJECT_FACTS, C.NOT_SAME, C.UNKNOWN, C.CONFIRMED_SEMANTIC}
 
 
 # ----------------------------------------------------- 她加的三个回归场景

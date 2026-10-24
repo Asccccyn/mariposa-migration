@@ -30,20 +30,15 @@ def _registered() -> set[str]:
 
 
 class TestSingleSource:
-    def test_no_capability_served_from_historical_pack(self):
-        """裁定：历史 execution_pack schema 不得参与 runtime 校验。
-
-        键重叠合法（V2 覆盖取胜）；锁的是行为不变量：schema_for 的返回
-        恒等于 V2 条目（同一对象），历史包独有的键一律 None。
-        """
-        hist = set(sc.load_legacy_execution_pack_schemas())
-        for cap in hist | set(sc.V2_INPUT_SCHEMAS):
-            got = sc.schema_for(cap)
-            assert got is sc.V2_INPUT_SCHEMAS.get(cap), \
-                f"{cap} 的 schema 不是 V2 正本（历史包回流）"
-        for cap in hist - set(sc.V2_INPUT_SCHEMAS):
-            assert sc.schema_for(cap) is None, \
-                f"{cap} 仍从历史包获得 schema"
+    def test_schema_served_from_v2_single_source(self):
+        """R09（2026-10-24）后历史包无运行时读取器；锁不变量：
+        schema_for 对每个现行键返回 V2 正本（同一对象）——无 fallback、
+        无第二来源（历史档案留在 docs/，不参与校验）。"""
+        for cap in sc.V2_INPUT_SCHEMAS:
+            assert sc.schema_for(cap) is sc.V2_INPUT_SCHEMAS[cap], \
+                f"{cap} 的 schema 不是 V2 正本"
+        for cap in ("memory.hold", "memory.our_words.append"):
+            assert sc.schema_for(cap) is not None
 
     def test_registered_coverage_no_new_schemaless(self):
         """根因锁：注册能力必须有现行 schema 或在显式收缩的 backlog 里。"""
