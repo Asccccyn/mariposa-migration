@@ -41,7 +41,18 @@ _T_PREFIX = "mariposa_"
 #:（此前 web 令牌流入 MCP 客户端后仍能经 tools/list 发现并实际调用
 #: policy.update，handler 的 entry_source=web 门对 web 令牌恒放行）。
 #: registry handler 内的门保持（REST 面双层）。
-_MCP_FACE_BLOCKED = frozenset({"maintenance.recall_policy.update"})
+#: 她 2026-10-24 裁定②：召回会话管理五动作退出 MCP 模型发现面——生产零
+#: 直连使用（流水 6 会话全单轮、终态零出现、无 MCP 直连配置）；reject 语义
+#: 已接入 est memory_recall（est 走 HTTP /api/capability transport，不经
+#: MCP 面——实现与 HTTP invoke 照旧，随时从此集合移除即恢复发现）。
+_MCP_FACE_BLOCKED = frozenset({
+    "maintenance.recall_policy.update",
+    "memory.recall.reject",
+    "memory.recall.accept",
+    "memory.recall.navigate",
+    "memory.recall.status",
+    "memory.recall.close",
+})
 
 
 def _transport_name(canonical: str) -> str:
