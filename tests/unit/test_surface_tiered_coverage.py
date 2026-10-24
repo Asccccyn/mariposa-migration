@@ -156,16 +156,20 @@ def test_group_b_authored_positives_and_delivery_accounting(monkeypatch):
         assert det["outcome"] == C.CONFIRMED_DETERMINISTIC, (text, det)
         assert det["strong_match"]["kind"] == kind
         assert t.calls == 0 and data["coverage"]["judge_requests_prepare"] == 0
-        # 交付分账：delivery 仍按 P0 合同出站一批（same_occurrence + relevant_now）
+        # 交付分账：delivery 按现行 same-turn 合同（aaf4cfe/她 1024 裁定：浮现绑定
+        # 同一条消息同一修订、当轮使用——target==source，迟到结果不挪到下一条）
+        # 出站一批 JEV（same_occurrence + relevant_now）。
+        # 旧测试按 P0 合同传 m1→m2（下一条消息）必然 SURFACE_TARGET_MISMATCH 零派发。
         vargs = {"operation_id": "cov-val", "conversation_scope": "room-1",
                  "candidate_snapshot_ref": data["candidate_snapshot_ref"],
                  "source_input_ref": {"message_id": "m1", "revision": 1},
-                 "target_input": {"message_id": "m2", "revision": 1, "sequence": 11,
-                                  "text": "那天怎么样", "body_hash": "b" * 64, "occurred_at": None},
+                 "target_input": {"message_id": "m1", "revision": 1, "sequence": 10,
+                                  "text": text, "body_hash": "a" * 64,
+                                  "occurred_at": "2026-10-20T10:00:00+08:00"},
                  "recent_dialogue": [], "window_id": "w1",
                  "deadline_at": "2999-01-01T00:00:00+00:00"}
-        registry.invoke(actors["jiaming"], "memory.surfacing.validate", vargs, None)
-        assert t.calls == 1
+        vres = registry.invoke(actors["jiaming"], "memory.surfacing.validate", vargs, None)
+        assert t.calls == 1, (text, vres)
     print("\n[P2 coverage B/authored] deterministic=%d/%d (prepare JEV 0 each; delivery JEV 1 each)"
           % (len(results), len(AUTHORED_POSITIVES)))
     for r in results:
