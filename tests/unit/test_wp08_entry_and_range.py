@@ -64,7 +64,7 @@ class TestPolicyWriteWebOnly:
                 actors["jiaming"], "maintenance.recall_policy.update",
                 {"expected_revision": 1, "enabled": True,
                  "provider": "typesafe_jev"}, None)
-        assert ei2.value.code != "POLICY_WRITE_WEB_ONLY" or True
+        assert ei2.value.code != "POLICY_WRITE_WEB_ONLY"
         # jiaming 先撞主体门（服务层 qiaosheng-only）或入口门，任一拒
 
     def test_policy_row_unchanged_after_blocked_writes(self, actors):

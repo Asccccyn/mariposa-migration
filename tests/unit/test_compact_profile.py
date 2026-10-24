@@ -87,10 +87,6 @@ class TestBootstrapCompact:
             parts.append(page["content"])
             cursor = page["next_cursor"]
             guard += 1
-        assert "".join(parts) == pkg["i"]["content"] + (
-            pkg["i"].get("content", "")[boot.BOOT_I_SECTION_CHARS:]
-            if False else
-            (pkg["i"]["content"] + "")) or True  # 拼回与 full 同源
         # 严格核对：full 分节链拼回 == compact 分节链拼回
         full_parts = [pkg["i"]["content"]]
         fc = pkg["i"]["next_cursor"]
