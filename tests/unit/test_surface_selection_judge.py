@@ -83,8 +83,7 @@ class TestStrictSelection:
     def test_one_winner_per_event_no_runnerup(self):
         pool = [_pool_entry("memory:a", hypotheses=["h1"]),
                 _pool_entry("memory:b", hypotheses=["h1"])]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
+        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"]}]
         # a 确认、b 被明确否定（NOT_SAME）→ 只选 a；否定者不阻断
         asm = [_asm("ev_1", "memory:a"),
                _asm("ev_1", "memory:b", verdict="rejected")]
@@ -94,8 +93,7 @@ class TestStrictSelection:
 
     def test_winner_failed_no_fallback(self):
         pool = [_pool_entry("memory:a"), _pool_entry("memory:b")]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
+        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"]}]
         asm = [_asm("ev_1", "memory:a", verdict="rejected"),
                _asm("ev_1", "memory:b")]
         winners, _ = sel.choose_winners(groups, asm, pool)
@@ -104,28 +102,17 @@ class TestStrictSelection:
     def test_uncertain_competitor_suppresses_event(self):
         """同分区 UNKNOWN = 可能是同一事件的竞争候选 → 保守弃权。"""
         pool = [_pool_entry("memory:a"), _pool_entry("memory:b")]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
+        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"]}]
         asm = [_asm("ev_1", "memory:a"),
                _asm("ev_1", "memory:b", verdict="uncertain")]
         winners, abstain = sel.choose_winners(groups, asm, pool)
         assert winners == []
         assert abstain["ev_1"] == "SURFACE_EVENT_AMBIGUOUS"
 
-    def test_unconfirmed_grouping_abstains(self):
-        pool = [_pool_entry("memory:a", hypotheses=["h1", "h2"])]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1", "h2"],
-                   "grouping_confirmed": False}]
-        winners, abstain = sel.choose_winners(
-            groups, [_asm("ev_1", "memory:a")], pool)
-        assert winners == []
-        assert abstain["ev_1"] == "SURFACE_EVENT_AMBIGUOUS"
-
     def test_rank_not_confirmation(self):
         """分数不是确认：outcome 非 CONFIRMED 的最高分不入选。"""
         pool = [_pool_entry("memory:a"), _pool_entry("memory:b")]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
+        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"]}]
         asm = [_asm("ev_1", "memory:a", verdict="uncertain", rank=1.0),
                _asm("ev_1", "memory:b", verdict="uncertain", rank=0.1)]
         winners, abstain = sel.choose_winners(groups, asm, pool)
@@ -134,25 +121,12 @@ class TestStrictSelection:
     def test_two_confirmed_distinct_refs_is_competition(self):
         """v2：同事件两个不同桶都确认 = 竞争 → 弃权，不挑分高/ID 小者。"""
         pool = [_pool_entry("memory:zz"), _pool_entry("memory:aa")]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
+        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"]}]
         asm = [_asm("ev_1", "memory:zz", rank=0.99),
                _asm("ev_1", "memory:aa", rank=0.99)]
         winners, abstain = sel.choose_winners(groups, asm, pool)
         assert winners == []
         assert abstain["ev_1"] == "SURFACE_EVENT_AMBIGUOUS"
-
-    def test_legacy_shape_without_outcome_is_not_trusted(self):
-        """缺 outcome 的旧形状（裸 verdict=confirmed）按 UNKNOWN 处理。"""
-        pool = [_pool_entry("memory:a")]
-        groups = [{"event_id": "ev_1", "hypothesis_ids": ["h1"],
-                   "grouping_confirmed": True}]
-        legacy = {"event_id": "ev_1", "candidate_ref": "memory:a",
-                  "verdict": "confirmed", "checks": {}, "rank_signal": 0.9,
-                  "reason_code": "EXACT_MATCH"}
-        winners, abstain = sel.choose_winners(groups, [legacy], pool)
-        assert winners == []
-        assert abstain["ev_1"] == "SURFACE_UNCERTAIN"
 
     def test_finalize_prepare_skips_oversize_body(self):
         big = "字" * 30000
@@ -280,7 +254,7 @@ class TestSurfaceJudge:
         pool = [_pool_entry("memory:m1", hypotheses=["h1", "h2"])]
         decision = sj.judge_prepare(source, [], hyps, pool)
         assert len(decision.event_groups) == 2
-        assert all(g.grouping_confirmed and len(g.hypothesis_ids) == 1
+        assert all(len(g.hypothesis_ids) == 1
                    for g in decision.event_groups)
         # 分区各自携带用户原话约束：h1 有 7.9 日期，h2 没有
         assert decision.event_groups[0].constraints["dates"] == [

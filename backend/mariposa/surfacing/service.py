@@ -345,8 +345,7 @@ def _prepare_inner(principal, a: dict, policy: dict, op_key: str,
          "rank_signal": None, "reason_code": d.reason}
         for ev, d in deterministic.items() if ev in skip]
     winners, abstain = sel_mod.choose_winners(
-        [{"event_id": g.event_id, "hypothesis_ids": g.hypothesis_ids,
-          "grouping_confirmed": g.grouping_confirmed}
+        [{"event_id": g.event_id, "hypothesis_ids": g.hypothesis_ids}
          for g in groups],
         det_assessments + [
             {"event_id": x.event_id, "candidate_ref": x.candidate_ref,

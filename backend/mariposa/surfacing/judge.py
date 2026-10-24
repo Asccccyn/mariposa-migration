@@ -103,11 +103,11 @@ def _map_status(status: str) -> bool | None:
 def partition_hypotheses(source_input: dict, hypotheses: list[dict]) -> list[EventGroup]:
     """分组降级为分区（她 1020 裁定默认选择 1）。
 
-    每个假设一个事件，grouping_confirmed 恒 True——分区只定义竞争域，
-    **不代表已证明是独立事件**；同一往事被拆成多个分区时由 selection 的
-    跨分区同 resource_ref 合并兜底，不会重复浮现。不再发起 distinct_event /
-    pair_same 付费问句。每分区提取用户原话的事实约束（日期/具名人物），
-    供 facts 硬校验、P2 分级检索与 run 快照。
+    每个假设一个事件——分区只定义竞争域，**不代表已证明是独立事件**；
+    同一往事被拆成多个分区时由 selection 的跨分区同 resource_ref 合并兜底，
+    不会重复浮现。不再发起 distinct_event / pair_same 付费问句。每分区提取
+    用户原话的事实约束（日期/具名人物），供 facts 硬校验、P2 分级检索与
+    run 快照。
     """
     groups = []
     text = source_input.get("text") or ""
@@ -129,7 +129,6 @@ def partition_hypotheses(source_input: dict, hypotheses: list[dict]) -> list[Eve
         groups.append(EventGroup(
             event_id=f"ev_{idx + 1}",
             hypothesis_ids=[h["hypothesis_id"]],
-            grouping_confirmed=True,
             constraints=constraints))
     return groups
 

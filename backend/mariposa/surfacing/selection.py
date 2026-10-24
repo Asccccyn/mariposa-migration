@@ -17,27 +17,21 @@ from .. import config
 from . import contract
 
 
-def _outcome(a: dict) -> str:
-    # 缺 outcome 的旧形状一律按 UNKNOWN——不再信任裸 verdict=confirmed
-    return a.get("outcome") or contract.UNKNOWN
-
-
 def choose_winners(groups: list[dict], assessments: list[dict],
                    pool: list[dict]) -> tuple[list[dict], dict]:
     """每个分区选 0/1 个赢家，再跨分区按 resource_ref 合并。
 
     返回 (winners, abstain)。winners 项 = pool 候选 + event_id + 判断
     依据（+merged_event_ids 若有合并）；abstain[event_id] = 原因码。
+    （R07 2026-10-24：恒真 grouping_confirmed 门与缺 outcome 旧形状兼容
+    分支退役——partition_hypotheses 是唯一生产构造方、恒一假设一分区，
+    两类生产 assessment 均显式填 outcome。）
     """
     by_ref = {c["resource_ref"]: c for c in pool}
     abstain: dict[str, str] = {}
     winners: list[dict] = []
     for g in groups:
         ev = g["event_id"]
-        if not g.get("grouping_confirmed", False):
-            # v2 分区恒 True；保留防御以兼容旧快照
-            abstain[ev] = "SURFACE_EVENT_AMBIGUOUS"
-            continue
         assessed = [a for a in assessments if a["event_id"] == ev]
         if not assessed:
             abstain[ev] = "SURFACE_UNCERTAIN"
@@ -45,9 +39,9 @@ def choose_winners(groups: list[dict], assessments: list[dict],
         pool_refs = {c["resource_ref"] for c in _event_pool(pool, g)}
         relevant = [a for a in assessed if a["candidate_ref"] in pool_refs]
         eligible = [a for a in relevant
-                    if _outcome(a) in contract.CONFIRMED_OUTCOMES
+                    if a["outcome"] in contract.CONFIRMED_OUTCOMES
                     and a.get("reason_code") != "TOPIC_CHANGED"]
-        competing = [a for a in relevant if _outcome(a) == contract.UNKNOWN]
+        competing = [a for a in relevant if a["outcome"] == contract.UNKNOWN]
         if not eligible:
             reasons = {a.get("reason_code") for a in relevant}
             abstain[ev] = ("SURFACE_NOT_RELEVANT_NOW"
@@ -73,7 +67,7 @@ def choose_winners(groups: list[dict], assessments: list[dict],
         cand = dict(by_ref[best["candidate_ref"]])
         cand["event_id"] = ev
         cand["judge_reason"] = best.get("reason_code")
-        cand["judge_outcome"] = _outcome(best)
+        cand["judge_outcome"] = best["outcome"]
         cand["rank_signal"] = best.get("rank_signal")
         winners.append(cand)
 

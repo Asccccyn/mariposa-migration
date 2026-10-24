@@ -231,8 +231,7 @@ def _run(source_text, hyps, pool, per_ref, thr=0.45):
            "body_hash": "b" * 64}
     dec = sj.judge_prepare(src, [], hyps, pool)
     winners, abstain = sel.choose_winners(
-        [{"event_id": g.event_id, "hypothesis_ids": g.hypothesis_ids,
-          "grouping_confirmed": g.grouping_confirmed} for g in dec.event_groups],
+        [{"event_id": g.event_id, "hypothesis_ids": g.hypothesis_ids} for g in dec.event_groups],
         [{"event_id": a.event_id, "candidate_ref": a.candidate_ref,
           "verdict": a.verdict, "outcome": a.outcome, "checks": a.checks,
           "rank_signal": a.rank_signal, "reason_code": a.reason_code}

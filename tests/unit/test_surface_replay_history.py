@@ -104,7 +104,6 @@ def _replay(thr: float):
             span = text[h["start_cp"]:h["end_cp"]] or text
             groups.append({"event_id": f"ev_{i + 1}",
                            "hypothesis_ids": [h["hypothesis_id"]],
-                           "grouping_confirmed": True,
                            "constraints": F.extract_constraints(span)})
         for g in groups:
             for c in pool:

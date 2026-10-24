@@ -87,13 +87,14 @@ class CandidateAssessment:
 
 @dataclass
 class EventGroup:
-    """v2：分组降级为**分区**——每个假设一个事件、grouping_confirmed 恒
-    True；它只是竞争域（同分区 UNKNOWN 才互相竞争），不证明是独立事件。
-    跨分区同一 resource_ref 的赢家由 selection 合并为一条。"""
+    """v2：分组降级为**分区**——每个假设一个事件；它只是竞争域（同分区
+    UNKNOWN 才互相竞争），不证明是独立事件。跨分区同一 resource_ref 的
+    赢家由 selection 合并为一条。（R07 2026-10-24：恒真字段 grouping_confirmed
+    退役——partition_hypotheses 是唯一生产构造方，恒 True 无行为消费者；
+    旧快照 JSON 多余键自然忽略。）"""
 
     event_id: str
     hypothesis_ids: list[str]
-    grouping_confirmed: bool
     #: 该分区用户原话里的事实约束（facts.extract_constraints），进 run 快照
     constraints: dict = field(default_factory=dict)
 
