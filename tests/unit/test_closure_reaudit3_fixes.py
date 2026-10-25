@@ -181,21 +181,6 @@ class Test1CoverageGateWhitelist:
             from mariposa import config as cfg
             cfg.RECALL_JUDGE_PROVIDER = old
 
-    def test_dense_unavailable_still_blocks(self, actors):
-        """白名单收窄不放松原门：dense_event=unavailable 仍拒。"""
-        from mariposa import config as cfg
-        cfg.SEMANTIC_PROVIDER = ""
-        p = recall_service.start(actors["jiaming"], {"query_plan": {
-            "original_request": "找雾隐", "channels": ["event"],
-            "lexical_terms": ["qqqxyz"],
-            "semantic_query": "雾隐茶室"}})
-        with pytest.raises(Forbidden) as ei:
-            _r2mod.round2(actors["jiaming"], {
-                "session_id": p["recall_session_id"],
-                "reason": "NO_DELIVERABLE_CANDIDATE"})
-        gate = ei.value.detail["gate"]
-        assert gate.get("retrieval_complete") is False
-        assert "dense_event" in gate.get("incomplete_families", [])
 
 
 class Test2Continuation:

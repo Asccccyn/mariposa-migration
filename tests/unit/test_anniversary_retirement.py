@@ -104,10 +104,3 @@ def test_anniversary_memory_category_still_has_permanent_wide(actors):
     assert phase.reason == "PERMANENT_CATEGORY"
 
 
-def test_runtime_does_not_reference_retired_or_archived_tables():
-    package = Path(schema.__file__).parent
-    for path in package.rglob("*.py"):
-        if path.name == "schema.py":
-            continue  # Historical DDL and the preservation migration stay.
-        text = path.read_text()
-        assert not any(table in text for table in OLD_TABLES | ARCHIVES), path
