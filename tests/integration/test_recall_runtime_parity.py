@@ -61,9 +61,28 @@ def seeded(actors):
                 raw_pending=False)
 
 
+def _http(c, pid, capability, arguments):
+    """HTTP capability 面（est transport 实际走的入口；裁定②后会话管理动作唯一面）。"""
+    r = c.post(f"/api/capability/{capability}", json={"arguments": arguments},
+               headers={"Authorization": f"Bearer {TOKENS[pid]}"})
+    assert r.status_code == 200, r.text
+    return r.json()["data"]
+
+
 def test_session01_mcp_full_loop(c, seeded):
-    """SESSION-01：Chat 通过 MCP 独立完成 start→reject→refine→navigate→
-    evidence→close，不依赖 estómago。"""
+    """SESSION-01（2026-10-24 裁定②修订）：MCP 发现面只含检索动作
+    （start/refine/round2/page/words）；会话管理五动作退出 MCP 面并经
+    HTTP 等权执行（est 的 reject 接入正走此面）。语义不变：reject 结构性
+    排除候选、navigate 尊重 refine 的 scope、close 终态收口。"""
+    listed = rpc(c, "tools/list", "jiaming").json()["result"]["tools"]
+    names = {t["name"] for t in listed}
+    for hidden in ("mariposa_memory_recall_reject", "mariposa_memory_recall_accept",
+                   "mariposa_memory_recall_navigate", "mariposa_memory_recall_status",
+                   "mariposa_memory_recall_close"):
+        assert hidden not in names, f"五动作应退出 MCP 发现面：{hidden}"
+    assert "mariposa_memory_recall_start" in names
+    assert "mariposa_memory_recall_refine" in names
+
     packet = tool(c, "jiaming", "mariposa_memory_recall_start", {
         "operation_id": "op-par-s1-start",
         "query_plan": {"original_request": "找搬家的事",
@@ -73,7 +92,7 @@ def test_session01_mcp_full_loop(c, seeded):
     assert packet["candidates"]
     newest = max(packet["candidates"], key=lambda x: x.get("memory_date")
                  or "")
-    tool(c, "jiaming", "mariposa_memory_recall_reject", {
+    _http(c, "jiaming", "memory.recall.reject", {
         "session_id": sid, "operation_id": "op-par-s1-reject",
         "resource_ref": newest["candidate_ref"],
         "reject_target": "event"})
@@ -85,25 +104,20 @@ def test_session01_mcp_full_loop(c, seeded):
                            "event_date": {"from": "2026-08-01",
                                           "to": "2026-08-31"}}}})
     assert newest["candidate_ref"] not in [x["candidate_ref"]
-                                          for x in p2["candidates"]]
-    nav = tool(c, "jiaming", "mariposa_memory_recall_navigate", {
+                                          for x in p2["candidates"]], \
+        "reject 结构性排除：被否候选不得在后续 refine 结果中出现"
+    nav = _http(c, "jiaming", "memory.recall.navigate", {
         "session_id": sid, "direction": "earlier",
         "operation_id": "op-par-s1-nav"})
     assert nav["candidates"], "scope 内应有更早的八月事件"
     assert all((x.get("memory_date") or "") >= "2026-08-01"
                for x in nav["candidates"]), \
         "earlier 不得越过 refine 的八月 scope 返回七月桶"
-    st = tool(c, "jiaming", "mariposa_memory_recall_status",
-              {"session_id": sid})
-    assert st['session']['session_id'] == sid and 'candidates' in st
-    # Internal receipt verification is not repeated in model-facing JSON.
-    status = c.post('/api/capability/memory.recall.status',
-                    json={'arguments':{'session_id':sid}},
-                    headers={'Authorization':'Bearer '+TOKENS['jiaming']}).json()['data']
-    assert status['receipts_revalidated']['checked'] >= 1
-    assert st['candidates'] == [{k: x[k] for k in ('candidate_ref', 'state')} for x in status['candidates']]
-    assert st['session']['status'] == status['session']['status']
-    closed = tool(c, "jiaming", "mariposa_memory_recall_close", {
+    status = _http(c, "jiaming", "memory.recall.status", {"session_id": sid})
+    assert status['session']['session_id'] == sid
+    assert status['receipts_revalidated']['checked'] >= 1, \
+        "HTTP status 仍做引用重校验（不重放旧正文）"
+    closed = _http(c, "jiaming", "memory.recall.close", {
         "session_id": sid, "outcome": "resolved",
         "operation_id": "op-par-s1-close"})
     assert closed["status"] == "RESOLVED"
