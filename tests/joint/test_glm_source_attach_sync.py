@@ -100,3 +100,36 @@ def test_attachments_sync_idempotent_and_honest(env):
     bad = dict(sync_args, stream_id="estomago-other", operation_id="att-sync:bad")
     with pytest.raises(MariposaError):
         registry.invoke(worker, "source.attachments.sync", bad, None)
+
+    # A05（联合审计 2026-10-27）写后读：从公开精确读取面（source.message.get——
+    # registry/schema/授权/序列化全走真实面）反查附属元数据，不再只 SELECT 新表。
+    # 读取授权同生产：source.message.get 只放行 qiaosheng/jiaming（worker 只写不读）。
+    reader = Principal("qiaosheng", "宿主用户", "human", "web", "bind-test")
+    smid = out1["source_message_id"]
+    got = registry.invoke(reader, "source.message.get",
+                          {"message_id": smid, "context": 0}, None)["data"]
+    meta_out = got["attachments_meta"]
+    assert [m["kind"] for m in meta_out] == ["observation"], "已补同步观察在读取面可见"
+    assert meta_out[0]["payload"]["observation"] == "停顿：1.2 s"
+    # 去重：media 附属引用若已在归档基础 attachments 中 → 读取面不重复列出
+    registry.invoke(worker, "source.attachments.sync", {
+        "operation_id": "att-sync:media_dup", "stream_id": "estomago-primary-live",
+        "origin_message_id": "msg_f03", "revision": 1, "kind": "media",
+        "payload": {"asset_ref": "est:ast_1", "presentation": "voice",
+                    "direction": "assistant", "source": "siren:call"}}, None)
+    got2 = registry.invoke(reader, "source.message.get",
+                           {"message_id": smid, "context": 0}, None)["data"]
+    assert all(m["kind"] != "media" for m in got2["attachments_meta"]), "已归档引用去重"
+    # 晚到的新媒体引用（基础 attachments 没有）→ 附属读取面可见
+    registry.invoke(worker, "source.attachments.sync", {
+        "operation_id": "att-sync:media_new", "stream_id": "estomago-primary-live",
+        "origin_message_id": "msg_f03", "revision": 1, "kind": "media",
+        "payload": {"asset_ref": "est:ast_reply", "presentation": "voice",
+                    "direction": "assistant", "source": "siren:call"}}, None)
+    got3 = registry.invoke(reader, "source.message.get",
+                           {"message_id": smid, "context": 0}, None)["data"]
+    media_rows = [m for m in got3["attachments_meta"] if m["kind"] == "media"]
+    assert len(media_rows) == 1 and media_rows[0]["payload"]["asset_ref"] == "est:ast_reply"
+    # 正文/基础 attachments 不因补同步与读取改变
+    assert got3["message"]["text"] == "这段是她的语音。"
+    assert got3["message"]["attachments"] == ["est:ast_1"]

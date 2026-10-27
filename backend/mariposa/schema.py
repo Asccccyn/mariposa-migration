@@ -1265,6 +1265,12 @@ CREATE TABLE source_message_attachments_meta(
 CREATE INDEX IF NOT EXISTS idx_src_att_meta_msg
   ON source_message_attachments_meta(stream_id, origin_message_id, revision);
 """),
+    (42, """
+-- A05（联合审计 2026-10-27）读取面：精确读按 source_message_id 反查附属元数据
+-- （写入仍走 operation_id 主键与 (stream,origin,revision) 索引；本索引只服务详情读取）。
+CREATE INDEX IF NOT EXISTS idx_src_att_meta_smid
+  ON source_message_attachments_meta(source_message_id);
+"""),
 ]
 
 

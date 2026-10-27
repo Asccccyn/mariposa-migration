@@ -169,11 +169,51 @@ def get_message(message_id: str | None = None,
             " ORDER BY sequence ASC, id ASC LIMIT ?",
             (row["conversation_id"], row["sequence"], row["sequence"],
              row["id"], context)).fetchall()
+        # A05（联合审计 2026-10-27）：附属元数据读取面——精确读按本修订的
+        # source_message 行反查（写入按 (stream, origin, revision) 粒度落到
+        # source_message_id，revision 天然精确，不混入其他修订资料）。
+        # 有界（≤20 行）；与基础 attachments 去重：归档时已带的稳定引用
+        # 不重复出现在附属 media 里。
+        meta_rows = conn.execute(
+            "SELECT operation_id, kind, payload_json, revision, created_at"
+            " FROM source_message_attachments_meta WHERE source_message_id=?"
+            " ORDER BY rowid LIMIT 20",
+            (row["id"],)).fetchall()
+    base_refs = set()
+    try:
+        for _a in json.loads(row["attachments"] or "[]"):
+            if isinstance(_a, str):
+                base_refs.add(_a)
+    except (ValueError, TypeError):
+        base_refs = set()
+    attachments_meta = []
+    for m in meta_rows:
+        try:
+            payload = json.loads(m["payload_json"])
+        except (ValueError, TypeError):
+            payload = None
+        if not isinstance(payload, dict):
+            # 坏载荷如实标注，不静默丢弃（读取面不改正文、不改附属表）
+            attachments_meta.append({"operation_id": m["operation_id"],
+                                     "kind": m["kind"],
+                                     "revision": m["revision"],
+                                     "payload_unreadable": True})
+            continue
+        if m["kind"] == "media" and \
+                str(payload.get("asset_ref") or "") in base_refs:
+            continue  # 与归档时已带引用重复：以基础 attachments 为准（去重）
+        attachments_meta.append({"operation_id": m["operation_id"],
+                                 "kind": m["kind"], "revision": m["revision"],
+                                 "payload": payload,
+                                 "recorded_at": _fmt_min(m["created_at"])})
     return {
         "message": _serialize(row, include_content=include_content),
         "context_before": [_serialize(r) for r in reversed(prev)],
         "context_after": [_serialize(r) for r in nxt],
         "conversation": _conv_summary(conv),
+        # 附属补同步事实（晚到媒体引用/通话/播放/观察）。空列表=本修订无已同步
+        # 附属记录（可能尚未补同步；读取面不做存在性推断）。
+        "attachments_meta": attachments_meta,
         "published": bool(pub),
         "source": "source_layer",
         "content_role": "retrieved_memory",
