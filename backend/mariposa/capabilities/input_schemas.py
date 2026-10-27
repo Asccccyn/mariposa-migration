@@ -1170,6 +1170,20 @@ V2_INPUT_SCHEMAS: dict[str, dict] = {
                                    {"type": "null"}]},
             "idempotency_key": {"type": "string", "minLength": 1}},
     },
+    "source.attachments.sync": {
+        "type": "object",
+        "required": ["stream_id", "origin_message_id", "revision", "kind",
+                      "payload", "operation_id"],
+        "additionalProperties": False,
+        "properties": {
+            "stream_id": {"type": "string", "minLength": 1},
+            "origin_message_id": {"type": "string", "minLength": 1},
+            "revision": {"type": "integer", "minimum": 1},
+            "kind": {"type": "string",
+                      "enum": ["media", "call", "observation"]},
+            "payload": {"type": "object"},
+            "operation_id": {"type": "string", "minLength": 1}},
+    },
     "memory.recall.refine": {
         "type": "object",
         "required": ["session_id", "query_plan"],

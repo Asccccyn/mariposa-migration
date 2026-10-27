@@ -525,6 +525,64 @@ def _refresh_aggregates(conn, conv_id: str) -> None:
 
 # ---------- status（只返回获授权的操作） ----------
 
+def attachments_sync(principal: Principal, a: dict) -> dict:
+    """GLM_VOICE_UNIFICATION（02§4/§5.2）：附属信息补同步——宿主专用，幂等。
+
+    正文/修订谱系不可变（不改正文、不换 hash）；本操作只把**晚到**的
+    媒体引用/通话关联/观察关联追加到 (stream, origin_message, revision)
+    的附属元数据表，供来源详情反查（回听经 est 授权播放器）。
+    同 operation_id 重放无新增副作用；较早补传不得覆盖较新状态=按键幂等。
+    授权：同 source.ingest 的 stream grant（钉 stream_id，fail-closed）。
+    """
+    stream_id = a.get("stream_id")
+    if not isinstance(stream_id, str) or not stream_id:
+        raise Forbidden("stream_id 必填", code="INVALID_ARGUMENT")
+    with db.formal() as conn:
+        g = _active_grant(conn, principal.binding_id, stream_id)
+        omid = a.get("origin_message_id")
+        rev = a.get("revision")
+        if not isinstance(omid, str) or not omid or not isinstance(rev, int):
+            raise Forbidden("origin_message_id 与 revision 必填",
+                            code="INVALID_ARGUMENT")
+        row = conn.execute(
+            "SELECT source_message_id FROM source_live_revisions"
+            " WHERE stream_id=? AND origin_message_id=? AND revision=?",
+            (stream_id, omid, rev)).fetchone()
+        if row is None:
+            raise NotFound("该修订未入库——先完成正文归档",
+                           code="SOURCE_NOT_READY")
+        kind = a.get("kind")
+        if kind not in ("media", "call", "observation"):
+            raise Forbidden("kind 必须 media|call|observation",
+                            code="INVALID_ARGUMENT")
+        payload = a.get("payload")
+        if not isinstance(payload, dict):
+            raise Forbidden("payload 必须是对象", code="INVALID_ARGUMENT")
+        op = a.get("operation_id")
+        if not isinstance(op, str) or not op:
+            raise Forbidden("operation_id 必填（幂等身份）",
+                            code="INVALID_ARGUMENT")
+        import json as _json
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO source_message_attachments_meta"
+                " (operation_id, stream_id, origin_message_id, revision,"
+                "  kind, payload_json, source_message_id, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (op, stream_id, omid, rev, kind,
+                 _json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                 row["source_message_id"],
+                 datetime.now(timezone.utc).isoformat()))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {"operation_id": op, "synced": True,
+                "source_message_id": row["source_message_id"],
+                "origin_message_id": omid, "revision": rev, "kind": kind}
+
+
 def ingest_status(principal: Principal, a: dict) -> dict:
     op = a.get("operation_id")
     if not isinstance(op, str) or not op:

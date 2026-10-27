@@ -1249,6 +1249,22 @@ CREATE TABLE memory_source_spans (
   binding_version INTEGER NOT NULL DEFAULT 1 CHECK(binding_version > 0)
 );
 """),
+    (41, """
+-- GLM_VOICE_UNIFICATION（02§4/§5.2）：Source 附属信息——宿主专用补同步。
+-- 正文/修订谱系不动（不改正文、不换 hash）；媒体引用/通话/观察关联幂等追加。
+CREATE TABLE source_message_attachments_meta(
+  operation_id TEXT PRIMARY KEY,
+  stream_id TEXT NOT NULL,
+  origin_message_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('media','call','observation')),
+  payload_json TEXT NOT NULL,
+  source_message_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_src_att_meta_msg
+  ON source_message_attachments_meta(stream_id, origin_message_id, revision);
+"""),
 ]
 
 

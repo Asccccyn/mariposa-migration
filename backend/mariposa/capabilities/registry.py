@@ -213,6 +213,9 @@ def _register() -> dict[str, Capability]:
     add("source.ingest.status", _source_ingest_status, {"worker"}, False,
         description="按 operation_id 查 ingest 完成回执（无记录=尚无提交"
                     "证据）")
+    add("source.attachments.sync", _source_attachments_sync, {"worker"}, True,
+        description="GLM_VOICE_UNIFICATION：Source 附属信息补同步（晚到媒体/"
+                    "通话/观察关联；正文不可变；同 op 幂等；stream grant 钉定）")
     add("source.import.status", _source_import_status, _owners(), False,
         description="导入批次状态与统计（batch_id；失败含错误信息）")
     add("source.import.batches", _source_import_batches, _owners(), False,
@@ -1004,6 +1007,11 @@ def _source_ingest(principal: Principal, a: dict) -> dict:
     # ingest 服务端按 stream grant 校验，本层只做主体门）
     from ..source import ingest as source_ingest
     return source_ingest.ingest(principal, a)
+
+
+def _source_attachments_sync(principal: Principal, a: dict) -> dict:
+    from ..source import ingest as source_ingest
+    return source_ingest.attachments_sync(principal, a)
 
 
 def _source_ingest_status(principal: Principal, a: dict) -> dict:
