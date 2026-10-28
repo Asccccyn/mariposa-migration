@@ -140,8 +140,10 @@ def test_mcp_tools_expose_source(c):
         "jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     names = {t["name"] for t in r.json()["result"]["tools"]}
     worker_source = {n for n in names if n.startswith("mariposa_source_")}
+    # attachments_sync（GLM_VOICE_UNIFICATION §4）：宿主归档 worker 的附属补同步能力
     assert worker_source == {"mariposa_source_ingest",
-                             "mariposa_source_ingest_status"}
+                             "mariposa_source_ingest_status",
+                             "mariposa_source_attachments_sync"}
 
 
 def test_upload_broken_json_records_failed(c, tmp_path):

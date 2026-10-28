@@ -1354,6 +1354,17 @@
       "description": "在线原文增量入库（live_delta；estómago 归档 worker 专用，stream 授权钉 origin/说话人；同 op 幂等）"
     },
     {
+      "canonical_name": "source.attachments.sync",
+      "transport_name": "mariposa_source_attachments_sync",
+      "allowed_principals": [
+        "worker"
+      ],
+      "write": true,
+      "status": "available",
+      "idempotent": false,
+      "description": "GLM_VOICE_UNIFICATION：Source 附属信息补同步（晚到媒体/通话/观察关联；正文不可变；同 op 幂等；stream grant 钉定）"
+    },
+    {
       "canonical_name": "source.ingest.status",
       "transport_name": "mariposa_source_ingest_status",
       "allowed_principals": [
