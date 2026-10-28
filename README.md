@@ -1,6 +1,6 @@
 # mariposa
 
-- 2026-10-27（四仓语音后端发布候选，代码 `7d0e002`，**待部署切换授权**）：在 `a1f0f14` 的幂等附件补同步上，精确消息读取返回 media/call/observation 附属信息；隔离写后读与四仓联合链通过。`voice-backend-20261027` 发布包及生产库副本迁移检查完成；现役仍是 `surfacing-audit-20261023`。新附件同步需要给原归档 worker 增加且仅增加 `source.attachments.sync`，尚未修改权限。
+- 2026-10-27（**已部署并重启**，代码 `7d0e002`，发布目录 `~/Projects/mariposa-releases/voice-backend-20261027`）：幂等附件补同步及精确消息读取附属信息已上线；正式库迁移到 v42，health 为 200。原归档 worker 保持角色/stream 范围不变，仅在 `source.ingest`、`source.ingest.status` 之外增加 `source.attachments.sync`；沿用原令牌。隔离写后读和四仓联合验证通过，本次上线只核对健康/版本/权限，未触发真实 JEV。回退资料：`~/Backups/pre-voice-backend-20261027-160943`。
 
 - 2026-10-23（隔离审计，代码 `aaf4cfe`，**她批已切生产**：发布目录 `surfacing-audit-20261023`，runtime 迁移 17（surface_judge_ledger 扩展）离线验证后于生产生效、账本零行无损；pytest 221 复跑全绿）：同轮总期限/修订绑定、逐 HTTP JEV 次数与金额预占、上海日界、当前许可复核及原文错误语义；221 项定向测试通过，4 事件真实组件 HTTP 与 2 次真实 JEV 样本另列。[合同、费用依据与边界](docs/reports/SURFACING_AUDIT_20261023.md)。
 
